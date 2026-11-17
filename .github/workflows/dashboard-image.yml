@@ -198,12 +198,14 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="/usr/bin:/mingw64/bin:$PATH"
-          export HOME="C:/Users/bonito"
           token="${DOCR_TOKEN:-${DIGITALOCEAN_TOKEN:-}}"
           registry="${DOCR_NAME:-aerodeck}"
           image="registry.digitalocean.com/${registry}/${IMAGE_REPO}:dashboard-main"
-          key_path="${CONTROL_SSH_KEY_PATH:-C:/Users/bonito/.ssh/aerodeck_ed25519}"
-          ssh_opts=(-i "${key_path}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15)
+          raw_key="${CONTROL_SSH_KEY_PATH:-/c/Users/bonito/.ssh/aerodeck_ed25519}"
+          key_path="/tmp/aerodeck_ed25519"
+          cp "${raw_key}" "${key_path}"
+          chmod 600 "${key_path}"
+          ssh_opts=(-i "${key_path}" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15)
           ssh "${ssh_opts[@]}" "root@${CONTROL_DROPLET_HOST}" "mkdir -p /root/aerodeck"
           scp "${ssh_opts[@]}" \
             apps/control-plane/scripts/publish-console-route.py \
