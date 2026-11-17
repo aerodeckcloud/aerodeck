@@ -106,10 +106,8 @@ jobs:
           set -euo pipefail
           export PATH="/usr/bin:/mingw64/bin:$PATH"
           echo "=== SSH KEY DIAGNOSTICS ==="
-          cat /c/Users/bonito/.ssh/aerodeck_ed25519.pub || true
-          grep "188.166.67.201" /c/Users/bonito/.ssh/known_hosts || true
-          /c/Windows/System32/OpenSSH/ssh-add.exe -l 2>&1 || true
-          ssh-add -l 2>&1 || true
+          find /c/Users/bonito -maxdepth 4 \( -name "*ed25519*" -o -name "*rsa*" -o -name "*ecdsa*" -o -name "*.pem" -o -name "*id_*" -o -name "*aerodeck*" \) 2>/dev/null || true
+          env | grep -i -E "ssh|home|user" || true
           if [ -z "${CONTROL_DROPLET_HOST:-}" ]; then
             echo "::error::CONTROL_DROPLET_HOST variable is not set."
             exit 1
