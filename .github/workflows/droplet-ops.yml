@@ -31,18 +31,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Prefer Git Bash over System32 WSL bash
-        shell: powershell
-        run: |
-          "C:\Program Files\Git\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "C:\Program Files\Git\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "HOME=$env:USERPROFILE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: Authorize runner IP in DigitalOcean firewall
-        shell: bash
+        shell: '"C:\Program Files\Git\usr\bin\bash.exe" --noprofile --norc -e -o pipefail {0}'
         env:
           DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
         run: |
+          export PATH="/usr/bin:/mingw64/bin:$PATH"
           if [ -z "${DIGITALOCEAN_TOKEN:-}" ]; then
             exit 0
           fi
@@ -86,7 +80,7 @@ jobs:
           PY
 
       - name: Execute action on Droplet
-        shell: bash
+        shell: '"C:\Program Files\Git\usr\bin\bash.exe" --noprofile --norc -e -o pipefail {0}'
         env:
           MSYS_NO_PATHCONV: "1"
           CONTROL_DROPLET_HOST: ${{ vars.CONTROL_DROPLET_HOST }}
@@ -94,6 +88,8 @@ jobs:
           ACTION: ${{ inputs.action }}
         run: |
           set -euo pipefail
+          export PATH="/usr/bin:/mingw64/bin:$PATH"
+          export HOME="/c/Users/bonito"
           if [ -z "${CONTROL_DROPLET_HOST:-}" ]; then
             echo "::error::CONTROL_DROPLET_HOST variable is not set."
             exit 1

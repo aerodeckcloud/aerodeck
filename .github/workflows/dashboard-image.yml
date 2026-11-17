@@ -137,18 +137,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Prefer Git Bash over System32 WSL bash
-        shell: powershell
-        run: |
-          "C:\Program Files\Git\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "C:\Program Files\Git\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "HOME=$env:USERPROFILE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: Authorize runner IP in DigitalOcean firewall
-        shell: bash
+        shell: '"C:\Program Files\Git\usr\bin\bash.exe" --noprofile --norc -e -o pipefail {0}'
         env:
           DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
         run: |
+          export PATH="/usr/bin:/mingw64/bin:$PATH"
           if [ -z "${DIGITALOCEAN_TOKEN:-}" ]; then
             exit 0
           fi
@@ -189,7 +183,7 @@ jobs:
           PY
 
       - name: Pull image and restart aerodeck-dashboard on Droplet
-        shell: bash
+        shell: '"C:\Program Files\Git\usr\bin\bash.exe" --noprofile --norc -e -o pipefail {0}'
         env:
           MSYS_NO_PATHCONV: "1"
           DOCR_TOKEN: ${{ secrets.DOCR_TOKEN }}
@@ -198,6 +192,8 @@ jobs:
           CONTROL_SSH_KEY_PATH: ${{ vars.CONTROL_SSH_KEY_PATH }}
         run: |
           set -euo pipefail
+          export PATH="/usr/bin:/mingw64/bin:$PATH"
+          export HOME="/c/Users/bonito"
           token="${DOCR_TOKEN:-${DIGITALOCEAN_TOKEN:-}}"
           registry="${DOCR_NAME:-aerodeck}"
           image="registry.digitalocean.com/${registry}/${IMAGE_REPO}:dashboard-main"
