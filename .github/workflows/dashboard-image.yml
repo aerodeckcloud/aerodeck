@@ -137,8 +137,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Ensure Git is in PATH on Windows runner
+        shell: powershell
+        run: |
+          [System.IO.File]::AppendAllLines($env:GITHUB_PATH, [string[]]@("C:\Program Files\Git\usr\bin", "C:\Program Files\Git\mingw64\bin"))
+
       - name: Authorize runner IP in DigitalOcean firewall
-        shell: '"C:\Program Files\Git\usr\bin\bash.exe" --noprofile --norc -e -o pipefail {0}'
+        shell: bash
         env:
           DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
         run: |
@@ -183,7 +188,7 @@ jobs:
           PY
 
       - name: Pull image and restart aerodeck-dashboard on Droplet
-        shell: '"C:\Program Files\Git\usr\bin\bash.exe" --noprofile --norc -e -o pipefail {0}'
+        shell: bash
         env:
           MSYS_NO_PATHCONV: "1"
           DOCR_TOKEN: ${{ secrets.DOCR_TOKEN }}

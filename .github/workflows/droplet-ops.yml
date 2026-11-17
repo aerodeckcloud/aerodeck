@@ -31,8 +31,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Ensure Git is in PATH on Windows runner
+        shell: powershell
+        run: |
+          [System.IO.File]::AppendAllLines($env:GITHUB_PATH, [string[]]@("C:\Program Files\Git\usr\bin", "C:\Program Files\Git\mingw64\bin"))
+
       - name: Authorize runner IP in DigitalOcean firewall
-        shell: '"C:\Program Files\Git\usr\bin\bash.exe" --noprofile --norc -e -o pipefail {0}'
+        shell: bash
         env:
           DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
         run: |
@@ -80,7 +85,7 @@ jobs:
           PY
 
       - name: Execute action on Droplet
-        shell: '"C:\Program Files\Git\usr\bin\bash.exe" --noprofile --norc -e -o pipefail {0}'
+        shell: bash
         env:
           MSYS_NO_PATHCONV: "1"
           CONTROL_DROPLET_HOST: ${{ vars.CONTROL_DROPLET_HOST }}
@@ -94,7 +99,7 @@ jobs:
             echo "::error::CONTROL_DROPLET_HOST variable is not set."
             exit 1
           fi
-          key_path="${CONTROL_SSH_KEY_PATH:-$HOME/.ssh/aerodeck_ed25519}"
+          key_path="${CONTROL_SSH_KEY_PATH:-/c/Users/bonito/.ssh/aerodeck_ed25519}"
           ssh_opts=(-i "${key_path}" -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15)
 
           if [ "${ACTION}" = "diagnose" ]; then
