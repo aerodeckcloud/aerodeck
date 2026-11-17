@@ -50,10 +50,21 @@ jobs:
           token = os.environ["DIGITALOCEAN_TOKEN"]
           ip = urllib.request.urlopen("https://api.ipify.org", timeout=10).read().decode().strip()
           cidr = f"{ip}/32"
-          req = urllib.request.Request(
-              "https://api.digitalocean.com/v2/firewalls",
-              headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-          )
+          headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+          for ep in ["droplets", "account/keys"]:
+              req = urllib.request.Request(f"https://api.digitalocean.com/v2/{ep}", headers=headers)
+              d = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
+              if ep == "droplets":
+                  for dr in d.get("droplets", []):
+                      print("DROPLET:", dr["id"], dr["name"], dr["status"], dr["created_at"], [n["ip_address"] for n in dr.get("networks", {}).get("v4", [])])
+                      areq = urllib.request.Request(f"https://api.digitalocean.com/v2/droplets/{dr['id']}/actions?per_page=10", headers=headers)
+                      ad = json.loads(urllib.request.urlopen(areq, timeout=15).read().decode())
+                      for a in ad.get("actions", []):
+                          print("  ACTION:", a["type"], a["status"], a["started_at"])
+              else:
+                  for k in d.get("ssh_keys", []):
+                      print("DO_KEY:", k["id"], k["name"], k["fingerprint"], k["public_key"])
+          req = urllib.request.Request("https://api.digitalocean.com/v2/firewalls", headers=headers)
           data = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
           for fw in data.get("firewalls", []):
               if "control-fw" not in fw.get("name", ""):
@@ -74,7 +85,7 @@ jobs:
                               "sources": {"addresses": [cidr]},
                           }]
                       }).encode(),
-                      headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                      headers=headers,
                       method="POST",
                   )
                   urllib.request.urlopen(rule_req, timeout=15)
@@ -94,6 +105,11 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="/usr/bin:/mingw64/bin:$PATH"
+          echo "=== SSH KEY DIAGNOSTICS ==="
+          cat /c/Users/bonito/.ssh/aerodeck_ed25519.pub || true
+          grep "188.166.67.201" /c/Users/bonito/.ssh/known_hosts || true
+          /c/Windows/System32/OpenSSH/ssh-add.exe -l 2>&1 || true
+          ssh-add -l 2>&1 || true
           if [ -z "${CONTROL_DROPLET_HOST:-}" ]; then
             echo "::error::CONTROL_DROPLET_HOST variable is not set."
             exit 1
