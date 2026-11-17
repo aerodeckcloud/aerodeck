@@ -51,23 +51,18 @@ jobs:
           ip = urllib.request.urlopen("https://api.ipify.org", timeout=10).read().decode().strip()
           cidr = f"{ip}/32"
           headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-          for ep in ["droplets", "account/keys"]:
-              req = urllib.request.Request(f"https://api.digitalocean.com/v2/{ep}", headers=headers)
-              d = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
-              if ep == "droplets":
-                  for dr in d.get("droplets", []):
-                      print("DROPLET:", dr["id"], dr["name"], dr["status"], dr["created_at"], [n["ip_address"] for n in dr.get("networks", {}).get("v4", [])])
-                      areq = urllib.request.Request(f"https://api.digitalocean.com/v2/droplets/{dr['id']}/actions?per_page=10", headers=headers)
-                      ad = json.loads(urllib.request.urlopen(areq, timeout=15).read().decode())
-                      for a in ad.get("actions", []):
-                          print("  ACTION:", a["type"], a["status"], a["started_at"])
-              else:
-                  for k in d.get("ssh_keys", []):
-                      print("DO_KEY:", k["id"], k["name"], k["fingerprint"], k["public_key"])
+          req = urllib.request.Request("https://api.digitalocean.com/v2/databases", headers=headers)
+          dbs = json.loads(urllib.request.urlopen(req, timeout=15).read().decode()).get("databases", [])
+          for db in dbs:
+              print("DB:", db["id"], db["name"], db["status"], db["num_nodes"], db["size"])
+              fw_req = urllib.request.Request(f"https://api.digitalocean.com/v2/databases/{db['id']}/firewall", headers=headers)
+              fw_rules = json.loads(urllib.request.urlopen(fw_req, timeout=15).read().decode()).get("rules", [])
+              print("  DB FW RULES:", fw_rules)
           req = urllib.request.Request("https://api.digitalocean.com/v2/firewalls", headers=headers)
           data = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
           for fw in data.get("firewalls", []):
-              if "control-fw" not in fw.get("name", ""):
+              print("FW:", fw["id"], fw["name"], fw.get("droplet_ids"), fw.get("inbound_rules"))
+              if "control-fw" not in fw.get("name", "") and "edge-fw" not in fw.get("name", ""):
                   continue
               addrs = [
                   a
@@ -105,19 +100,13 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="/usr/bin:/mingw64/bin:$PATH"
-          echo "=== SSH KEY DIAGNOSTICS ==="
-          find /c/Users/bonito -maxdepth 4 \( -name "*ed25519*" -o -name "*rsa*" -o -name "*ecdsa*" -o -name "*.pem" -o -name "*id_*" -o -name "*aerodeck*" \) 2>/dev/null || true
-          env | grep -i -E "ssh|home|user" || true
-          if [ -z "${CONTROL_DROPLET_HOST:-}" ]; then
-            echo "::error::CONTROL_DROPLET_HOST variable is not set."
-            exit 1
-          fi
           raw_key="${CONTROL_SSH_KEY_PATH:-/c/Users/bonito/.ssh/aerodeck_ed25519}"
           key_path="/tmp/aerodeck_ed25519"
           cp "${raw_key}" "${key_path}"
           chmod 600 "${key_path}"
           ssh_opts=(-i "${key_path}" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15)
-          /usr/bin/ssh -v "${ssh_opts[@]}" "root@${CONTROL_DROPLET_HOST}" "echo SSH_OK"
+          echo "Testing edge droplet SSH (159.223.228.67)..."
+          /usr/bin/ssh "${ssh_opts[@]}" root@159.223.228.67 "echo EDGE_SSH_OK; hostname" 2>&1 || true
 
           if [ "${ACTION}" = "diagnose" ]; then
             echo "=== RUNNING DIAGNOSTICS ON ${CONTROL_DROPLET_HOST} ==="
