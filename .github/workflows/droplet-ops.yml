@@ -94,13 +94,16 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="/usr/bin:/mingw64/bin:$PATH"
-          export HOME="/c/Users/bonito"
+          export HOME="C:/Users/bonito"
           if [ -z "${CONTROL_DROPLET_HOST:-}" ]; then
             echo "::error::CONTROL_DROPLET_HOST variable is not set."
             exit 1
           fi
-          key_path="${CONTROL_SSH_KEY_PATH:-/c/Users/bonito/.ssh/aerodeck_ed25519}"
-          ssh_opts=(-i "${key_path}" -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15)
+          key_path="${CONTROL_SSH_KEY_PATH:-C:/Users/bonito/.ssh/aerodeck_ed25519}"
+          echo "Using ssh: $(which ssh), key_path: ${key_path}"
+          ls -la C:/Users/bonito/.ssh || true
+          head -n 2 "${key_path}" || true
+          ssh_opts=(-i "${key_path}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15)
 
           if [ "${ACTION}" = "diagnose" ]; then
             echo "=== RUNNING DIAGNOSTICS ON ${CONTROL_DROPLET_HOST} ==="
