@@ -107,7 +107,7 @@ jobs:
               docker logs aerodeck-api 2>&1 | grep -v -E "/api/v1/edge/traefik|/healthz" | tail -n 80 || true
               echo ""
               echo "--- AERODECK-DASHBOARD FILTERED LOGS (LAST 80 LINES) ---"
-              docker logs aerodeck-dashboard 2>&1 | grep -v -E "Received \"x\"|failed-to-find-server-action|chunks/ssr" | tail -n 80 || true
+              docker logs aerodeck-dashboard 2>&1 | grep -v -E "Server Reference ID|failed-to-find-server-action|chunks/ssr" | tail -n 80 || true
               echo ""
               echo "--- AERODECK-WORKER FILTERED LOGS (LAST 80 LINES) ---"
               docker logs aerodeck-worker 2>&1 | grep -v -E "reap-expired-sandboxes|sandbox reap stopped|reap_expired\[" | tail -n 80 || true
@@ -139,6 +139,9 @@ jobs:
               fi
               echo "pulling latest control-plane image..."
               docker pull registry.digitalocean.com/aerodeck/control-plane:main
+              echo "stopping existing api and worker to release DB connections..."
+              docker rm -f aerodeck-worker aerodeck-api >/dev/null 2>&1 || true
+              sleep 2
               echo "restarting control-plane API + worker..."
               bash /root/aerodeck/start-on-droplet.sh
               echo "restarting dashboard..."

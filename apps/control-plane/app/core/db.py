@@ -39,6 +39,10 @@ def create_engine(database_url: str, *, poolclass: type | None = None) -> AsyncE
     kwargs: dict[str, object] = {"pool_pre_ping": True}
     if poolclass is not None:
         kwargs["poolclass"] = poolclass
+    else:
+        kwargs["pool_size"] = 3
+        kwargs["max_overflow"] = 5
+        kwargs["pool_recycle"] = 300
     return create_async_engine(database_url, **kwargs)
 
 

@@ -10,6 +10,7 @@ When ``AERODECK_IAC_WORKER=true``, install the tenant Terraform provisioner
 """
 
 from celery.signals import worker_process_init
+from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 from app.core.db import bind_engine, create_engine
@@ -30,7 +31,7 @@ if settings.iac_worker:
 def _bind_database(**_: object) -> None:
     url = get_settings().database_url
     if url:
-        bind_engine(create_engine(url))
+        bind_engine(create_engine(url, poolclass=NullPool))
 
 
 # `celery -A app.worker` picks up this attribute.

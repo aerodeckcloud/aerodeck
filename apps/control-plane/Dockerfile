@@ -68,6 +68,7 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --chown=aerodeck:aerodeck apps/control-plane /app
 COPY --chown=aerodeck:aerodeck packages/iac-engine/backend.hcl /opt/aerodeck/iac-engine/backend.hcl
 COPY --chown=aerodeck:aerodeck packages/iac-engine/stacks/tenant /opt/aerodeck/iac-engine/stacks/tenant
+RUN chown -R aerodeck:aerodeck /opt/aerodeck
 
 USER aerodeck
 

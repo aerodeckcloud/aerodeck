@@ -137,6 +137,50 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Authorize runner IP in DigitalOcean firewall
+        shell: bash
+        env:
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+        run: |
+          if [ -z "${DIGITALOCEAN_TOKEN:-}" ]; then
+            exit 0
+          fi
+          python - << 'PY'
+          import json, os, time, urllib.request
+          token = os.environ["DIGITALOCEAN_TOKEN"]
+          ip = urllib.request.urlopen("https://api.ipify.org", timeout=10).read().decode().strip()
+          cidr = f"{ip}/32"
+          req = urllib.request.Request(
+              "https://api.digitalocean.com/v2/firewalls",
+              headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+          )
+          data = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
+          for fw in data.get("firewalls", []):
+              if "control-fw" not in fw.get("name", ""):
+                  continue
+              addrs = [
+                  a
+                  for r in fw.get("inbound_rules", [])
+                  if str(r.get("ports")) == "22"
+                  for a in r.get("sources", {}).get("addresses", [])
+              ]
+              if cidr not in addrs:
+                  rule_req = urllib.request.Request(
+                      f"https://api.digitalocean.com/v2/firewalls/{fw['id']}/rules",
+                      data=json.dumps({
+                          "inbound_rules": [{
+                              "protocol": "tcp",
+                              "ports": "22",
+                              "sources": {"addresses": [cidr]},
+                          }]
+                      }).encode(),
+                      headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                      method="POST",
+                  )
+                  urllib.request.urlopen(rule_req, timeout=15)
+                  time.sleep(5)
+          PY
+
       - name: Pull image and restart aerodeck-dashboard on Droplet
         shell: bash
         env:

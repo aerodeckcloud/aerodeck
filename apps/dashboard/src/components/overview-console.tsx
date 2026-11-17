@@ -23,9 +23,14 @@ export function OverviewConsole({ controlPlane = false }: { controlPlane?: boole
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  const isControlPlane = controlPlane || projects?.source === "control-plane";
+
   useEffect(() => {
-    Promise.all([fetchProjectPage(), fetchSandboxPage(), fetchDeployments(controlPlane)])
-      .then(([nextProjects, nextSandboxes, nextDeployments]) => {
+    Promise.all([fetchProjectPage(), fetchSandboxPage()])
+      .then(async ([nextProjects, nextSandboxes]) => {
+        const nextDeployments = await fetchDeployments(
+          controlPlane || nextProjects.source === "control-plane",
+        );
         setProjects(nextProjects);
         setSandboxes(nextSandboxes);
         setDeployments(nextDeployments);
@@ -44,7 +49,7 @@ export function OverviewConsole({ controlPlane = false }: { controlPlane?: boole
         eyebrow="Overview"
         title="AeroDeck console"
         description={
-          controlPlane
+          isControlPlane
             ? "Projects, sandboxes, and deployments are read by this server from the control plane."
             : "Projects and sandboxes are read by this server from the control plane. Deployments on this page stay local."
         }
@@ -83,7 +88,7 @@ export function OverviewConsole({ controlPlane = false }: { controlPlane?: boole
               icon={Activity}
               label="Deployments"
               value={deployments.length}
-              hint={controlPlane ? "Stored by the control plane" : "Created this session"}
+              hint={isControlPlane ? "Stored by the control plane" : "Created this session"}
             />
           </div>
 
@@ -91,7 +96,7 @@ export function OverviewConsole({ controlPlane = false }: { controlPlane?: boole
             <CardHeader className="border-b">
               <CardTitle>Recent deployments</CardTitle>
               <CardDescription>
-                {controlPlane
+                {isControlPlane
                   ? "Rows stored by the control plane."
                   : "Empty until you POST a GitHub URL from Deploy."}
               </CardDescription>

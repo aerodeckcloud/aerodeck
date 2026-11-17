@@ -302,3 +302,26 @@ async def test_provision_without_deployment_id_publishes_nothing(
 
     assert result.successful()
     assert await published_lines(None, deployment_id) is None
+
+
+def test_worker_process_init_binds_null_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlalchemy.pool import NullPool
+
+    import app.worker as worker_module
+
+    recorded: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        worker_module,
+        "get_settings",
+        lambda: make_settings(database_url="postgresql+asyncpg://u:p@localhost:5432/db"),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "create_engine",
+        lambda url, *, poolclass=None: recorded.append((url, poolclass)) or "engine",
+    )
+    monkeypatch.setattr(worker_module, "bind_engine", lambda _engine: None)
+
+    worker_module._bind_database()
+
+    assert recorded == [("postgresql+asyncpg://u:p@localhost:5432/db", NullPool)]
