@@ -84,11 +84,14 @@ jobs:
                   time.sleep(5)
                   import psycopg2
                   conn_info = db["connection"]
+                  users_req = urllib.request.Request(f"https://api.digitalocean.com/v2/databases/{db_id}/users", headers=headers)
+                  users = json.loads(urllib.request.urlopen(users_req, timeout=15).read().decode()).get("users", [])
+                  admin = next(u for u in users if u["name"] == conn_info["user"])
                   conn = psycopg2.connect(
                       host=conn_info["host"],
                       port=conn_info["port"],
-                      user=conn_info["user"],
-                      password=conn_info["password"],
+                      user=admin["name"],
+                      password=admin["password"],
                       dbname=conn_info["database"],
                       sslmode="require",
                       connect_timeout=10,
