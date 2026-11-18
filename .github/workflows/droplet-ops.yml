@@ -86,7 +86,8 @@ jobs:
                   conn_info = db["connection"]
                   users_req = urllib.request.Request(f"https://api.digitalocean.com/v2/databases/{db_id}/users", headers=headers)
                   users = json.loads(urllib.request.urlopen(users_req, timeout=15).read().decode()).get("users", [])
-                  admin = next(u for u in users if u["name"] == conn_info["user"])
+                  print("DB USERS:", [(u.get("name"), u.get("role"), bool(u.get("password"))) for u in users], "conn user:", conn_info.get("user"))
+                  admin = next((u for u in users if u.get("role") == "primary" and u.get("password")), None) or next(u for u in users if u.get("password"))
                   conn = psycopg2.connect(
                       host=conn_info["host"],
                       port=conn_info["port"],
