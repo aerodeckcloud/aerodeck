@@ -19,6 +19,7 @@ import re
 import socket
 import subprocess
 import tempfile
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,14 +28,30 @@ from typing import Protocol
 
 from app.core.config import Settings
 from app.core.github import canonical_github_repo_url, parse_github_repo
+from app.services.docker_routes import upsert_environment_route_sync
 from app.services.provisioning import JobKind, JobOutcome, PermanentJobError, TransientJobError
 
 LogSink = Callable[[str], None]
 PortAllocator = Callable[[str, int, int], int]
+HealthChecker = Callable[[str, int, int], bool]
+
+
+class RouteRegistrar(Protocol):
+    def __call__(
+        self,
+        *,
+        project_id: uuid.UUID,
+        environment_id: uuid.UUID,
+        hostname: str,
+        backend_host: str,
+        backend_port: int,
+    ) -> None: ...
+
 
 _SAFE_SEGMENT_RE = re.compile(r"[^a-z0-9-]+")
 _SAFE_BIN_RE = re.compile(r"^[A-Za-z0-9_./:-]+$")
 _SAFE_RUNTIME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_SAFE_DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
 _MAX_LOG_LINE_LEN = 400
 _MAX_ERROR_TAIL_LEN = 2000
 _TRANSIENT_MARKERS = (
@@ -171,6 +188,36 @@ def image_tag_for(project_slug: str, environment_slug: str, project_id: str, env
     return f"aerodeck/{p_slug}-{e_slug}:latest"
 
 
+def route_hostname_for(
+    project_slug: str,
+    environment_slug: str,
+    project_id: str,
+    environment_id: str,
+    base_domain: str,
+) -> str:
+    domain = base_domain.strip().lower().strip(".")
+    if not _SAFE_DOMAIN_RE.fullmatch(domain):
+        raise PermanentJobError("invalid AERODECK_DOCKER_ROUTE_BASE_DOMAIN")
+    p_uuid = _validate_uuid(project_id, "project_id")
+    e_uuid = _validate_uuid(environment_id, "environment_id")
+    p_slug = _slug_prefix(project_slug, p_uuid.hex[:8])
+    e_slug = _slug_prefix(environment_slug, e_uuid.hex[:8])
+    label = f"{p_slug}-{e_slug}"[:63].strip("-")
+    return f"{label}.{domain}"
+
+
+def wait_for_tcp_health(bind_host: str, port: int, timeout_seconds: int) -> bool:
+    """Poll TCP connectivity on ``bind_host:port`` until open or ``timeout_seconds`` elapses."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((bind_host, port), timeout=1.0):
+                return True
+        except OSError:
+            time.sleep(0.5)
+    return False
+
+
 def _classify_failure(step: str, result: CommandResult) -> PermanentJobError | TransientJobError:
     blob = f"{result.stdout}\n{result.stderr}".strip()
     tail = blob[-_MAX_ERROR_TAIL_LEN:] if len(blob) > _MAX_ERROR_TAIL_LEN else blob
@@ -211,7 +258,11 @@ class DockerProvisioner:
     docker_host: str | None = None
     docker_runtime: str | None = None
     allowed_owners: tuple[str, ...] = ()
+    health_timeout_seconds: int = 30
+    route_base_domain: str | None = None
     port_allocator: PortAllocator = find_available_port
+    health_checker: HealthChecker = wait_for_tcp_health
+    route_registrar: RouteRegistrar | None = upsert_environment_route_sync
 
     @classmethod
     def from_settings(
@@ -219,6 +270,8 @@ class DockerProvisioner:
         settings: Settings,
         runner: CommandRunner | None = None,
         port_allocator: PortAllocator | None = None,
+        health_checker: HealthChecker | None = None,
+        route_registrar: RouteRegistrar | None = upsert_environment_route_sync,
     ) -> DockerProvisioner:
         return cls(
             docker_bin=_validate_binary(settings.docker_bin, "docker_bin"),
@@ -235,7 +288,11 @@ class DockerProvisioner:
             docker_host=settings.docker_host,
             docker_runtime=_validate_runtime(settings.docker_runtime),
             allowed_owners=tuple(o.strip().lower() for o in settings.docker_allowed_owners if o.strip()),
+            health_timeout_seconds=settings.docker_health_timeout_seconds,
+            route_base_domain=settings.docker_route_base_domain,
             port_allocator=port_allocator or find_available_port,
+            health_checker=health_checker or wait_for_tcp_health,
+            route_registrar=route_registrar,
         )
 
     def _docker_env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -310,15 +367,15 @@ class DockerProvisioner:
                 raise _classify_failure("docker build", build_res)
 
         docker_env = self._docker_env()
-        self.runner.run([docker_bin, "rm", "-f", cname], env=docker_env, timeout=30)
         host_port = self.port_allocator(self.bind_host, self.port_range_start, self.port_range_end)
+        candidate = f"{cname}-new-{uuid.uuid4().hex[:6]}"
 
         run_cmd = [
             docker_bin,
             "run",
             "-d",
             "--name",
-            cname,
+            candidate,
             "--restart",
             "unless-stopped",
             "--cap-drop=ALL",
@@ -343,18 +400,55 @@ class DockerProvisioner:
             run_cmd.extend(["--runtime", runtime])
         run_cmd.append(tag)
 
-        emit(f"Starting container {cname} on {self.bind_host}:{host_port}...")
+        emit(f"Starting candidate container {candidate} on {self.bind_host}:{host_port}...")
         run_res = self.runner.run(run_cmd, env=docker_env, timeout=60)
         if run_res.returncode != 0:
             raise _classify_failure("docker run", run_res)
 
-        emit(f"Container {cname} running on {self.bind_host}:{host_port}.")
+        emit(f"Waiting for health check on {self.bind_host}:{host_port} (timeout {self.health_timeout_seconds}s)...")
+        if not self.health_checker(self.bind_host, host_port, self.health_timeout_seconds):
+            self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)
+            raise PermanentJobError(
+                f"container {candidate} failed health check on {self.bind_host}:{host_port}; "
+                "rolled back and kept previous container live"
+            )
+
+        route_hostname: str | None = None
+        if self.route_base_domain and self.route_registrar is not None:
+            route_hostname = route_hostname_for(
+                project_slug, environment_slug, str(p_uuid), str(e_uuid), self.route_base_domain
+            )
+            emit(f"Registering Traefik route https://{route_hostname} -> {self.bind_host}:{host_port}...")
+            try:
+                self.route_registrar(
+                    project_id=p_uuid,
+                    environment_id=e_uuid,
+                    hostname=route_hostname,
+                    backend_host=self.bind_host,
+                    backend_port=host_port,
+                )
+            except Exception:
+                self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)
+                raise
+
+        # Cutover complete: remove previous container and promote candidate to canonical name.
+        self.runner.run([docker_bin, "rm", "-f", cname], env=docker_env, timeout=30)
+        rename_res = self.runner.run([docker_bin, "rename", candidate, cname], env=docker_env, timeout=30)
+        if rename_res.returncode != 0:
+            raise _classify_failure("docker rename", rename_res)
+
+        if route_hostname:
+            emit(f"Container {cname} live at https://{route_hostname} ({self.bind_host}:{host_port}).")
+            detail = f"deployed {tag} as {cname} at https://{route_hostname} ({self.bind_host}:{host_port})"
+        else:
+            emit(f"Container {cname} running on {self.bind_host}:{host_port}.")
+            detail = f"deployed {tag} as {cname} on {self.bind_host}:{host_port}"
         return JobOutcome(
             kind=JobKind.provision,
             project_id=str(p_uuid),
             environment_id=str(e_uuid),
             changed=True,
-            detail=f"deployed {tag} as {cname} on {self.bind_host}:{host_port}",
+            detail=detail,
         )
 
     def reconcile(

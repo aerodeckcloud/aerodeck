@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import pytest
@@ -10,9 +11,12 @@ from app.core.config import Settings
 from app.services.docker_provisioner import (
     CommandResult,
     DockerProvisioner,
+    HealthChecker,
     LogSink,
+    RouteRegistrar,
     container_name_for,
     image_tag_for,
+    route_hostname_for,
 )
 from app.services.provisioning import JobKind, PermanentJobError, TransientJobError
 from app.worker import select_provisioner
@@ -71,6 +75,9 @@ def _make_provisioner(
     docker_host: str | None = None,
     docker_runtime: str | None = None,
     allowed_owners: tuple[str, ...] = (),
+    route_base_domain: str | None = None,
+    health_checker: HealthChecker | None = None,
+    route_registrar: RouteRegistrar | None = None,
 ) -> DockerProvisioner:
     return DockerProvisioner(
         docker_bin="docker",
@@ -87,7 +94,11 @@ def _make_provisioner(
         docker_host=docker_host,
         docker_runtime=docker_runtime,
         allowed_owners=allowed_owners,
+        health_timeout_seconds=10,
+        route_base_domain=route_base_domain,
         port_allocator=lambda _h, _s, _e: port,
+        health_checker=health_checker or (lambda _h, _p, _t: True),
+        route_registrar=route_registrar,
     )
 
 
@@ -110,25 +121,28 @@ def test_provision_clones_builds_runs_and_streams_logs() -> None:
     assert "aerodeck/payments-dev:latest" in outcome.detail
     assert "10.41.0.2:10420" in outcome.detail
 
-    # Verify commands executed in order with security flags.
+    # Verify blue/green swap order: run candidate -> health check -> remove old -> rename candidate.
     assert [c[:2] for c in runner.calls] == [
         ["git", "clone"],
         ["docker", "build"],
-        ["docker", "rm"],
         ["docker", "run"],
+        ["docker", "rm"],
+        ["docker", "rename"],
     ]
     clone_cmd = runner.calls[0]
     assert "--depth=1" in clone_cmd
     assert "https://github.com/mangatohjunior/demo-app.git" in clone_cmd
     assert runner.envs[0] is not None and runner.envs[0]["GIT_TERMINAL_PROMPT"] == "0"
 
-    run_cmd = runner.calls[3]
+    run_cmd = runner.calls[2]
     assert "--cap-drop=ALL" in run_cmd
     assert "--memory" in run_cmd and "512m" in run_cmd
     assert "--cpus" in run_cmd and "0.5" in run_cmd
     assert "--pids-limit" in run_cmd and "256" in run_cmd
     assert "no-new-privileges:true" in run_cmd
     assert "10.41.0.2:10420:8000" in run_cmd
+    assert runner.calls[3] == ["docker", "rm", "-f", "aerodeck-app-f27ee337-bacbb040"]
+    assert runner.calls[4][-1] == "aerodeck-app-f27ee337-bacbb040"
 
     # Verify streamed SSE lines include clone, build, and start steps.
     assert any("Cloning mangatohjunior/demo-app" in line for line in streamed)
@@ -223,8 +237,94 @@ def test_provision_enforces_owner_allowlist_and_passes_runtime_and_docker_host()
         repo_url="https://github.com/mangatohjunior/demo-app",
     )
     assert runner.envs[1] is not None and runner.envs[1]["DOCKER_HOST"] == "unix:///run/user/1000/docker.sock"
-    run_cmd = runner.calls[3]
+    run_cmd = runner.calls[2]
     assert "--runtime" in run_cmd and "runsc" in run_cmd
+
+
+def test_provision_rolls_back_candidate_when_health_check_fails() -> None:
+    runner = FakeCommandRunner(create_dockerfile=True)
+    registered: list[tuple[str, str, int]] = []
+
+    def fake_register(
+        *,
+        project_id: uuid.UUID,
+        environment_id: uuid.UUID,
+        hostname: str,
+        backend_host: str,
+        backend_port: int,
+    ) -> None:
+        _ = (project_id, environment_id)
+        registered.append((hostname, backend_host, backend_port))
+
+    provisioner = _make_provisioner(
+        runner,
+        route_base_domain="dev.app.aero-deck.app",
+        health_checker=lambda _h, _p, _t: False,
+        route_registrar=fake_register,
+    )
+
+    with pytest.raises(PermanentJobError, match="failed health check"):
+        provisioner.provision(
+            project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+            environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+            project_slug="payments",
+            environment_slug="dev",
+            repo_url="https://github.com/mangatohjunior/demo-app",
+        )
+
+    # Candidate was removed, old canonical container was NEVER touched, route was NEVER mutated.
+    assert [c[:2] for c in runner.calls] == [
+        ["git", "clone"],
+        ["docker", "build"],
+        ["docker", "run"],
+        ["docker", "rm"],
+    ]
+    assert runner.calls[3][-1].startswith("aerodeck-app-f27ee337-bacbb040-new-")
+    assert registered == []
+
+
+def test_provision_registers_traefik_route_after_health_check() -> None:
+    runner = FakeCommandRunner(create_dockerfile=True)
+    registered: list[tuple[str, str, int]] = []
+
+    def fake_register(
+        *,
+        project_id: uuid.UUID,
+        environment_id: uuid.UUID,
+        hostname: str,
+        backend_host: str,
+        backend_port: int,
+    ) -> None:
+        _ = (project_id, environment_id)
+        registered.append((hostname, backend_host, backend_port))
+
+    provisioner = _make_provisioner(
+        runner,
+        port=10555,
+        route_base_domain="dev.app.aero-deck.app",
+        route_registrar=fake_register,
+    )
+
+    outcome = provisioner.provision(
+        project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+        environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+        project_slug="payments",
+        environment_slug="dev",
+        repo_url="https://github.com/mangatohjunior/demo-app",
+    )
+
+    assert registered == [("payments-dev.dev.app.aero-deck.app", "10.41.0.2", 10555)]
+    assert "https://payments-dev.dev.app.aero-deck.app" in outcome.detail
+    assert (
+        route_hostname_for(
+            "payments",
+            "dev",
+            "f27ee337-a7d0-4d4d-8180-22579d6a2983",
+            "bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+            "dev.app.aero-deck.app",
+        )
+        == "payments-dev.dev.app.aero-deck.app"
+    )
 
 
 def test_select_provisioner_respects_backend_setting() -> None:

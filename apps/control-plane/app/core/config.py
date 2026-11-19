@@ -32,6 +32,7 @@ DOCKER_DEFAULT_MEMORY_LIMIT = "512m"
 DOCKER_DEFAULT_CPUS_LIMIT = "0.5"
 DOCKER_DEFAULT_PIDS_LIMIT = 256
 DOCKER_DEFAULT_BUILD_TIMEOUT_SECONDS = 600
+DOCKER_DEFAULT_HEALTH_TIMEOUT_SECONDS = 30
 
 
 class Settings(BaseSettings):
@@ -147,6 +148,9 @@ class Settings(BaseSettings):
     docker_cpus_limit: str = DOCKER_DEFAULT_CPUS_LIMIT
     docker_pids_limit: int = Field(default=DOCKER_DEFAULT_PIDS_LIMIT, ge=16, le=4096)
     docker_build_timeout_seconds: int = Field(default=DOCKER_DEFAULT_BUILD_TIMEOUT_SECONDS, ge=30, le=1800)
+    docker_health_timeout_seconds: int = Field(default=DOCKER_DEFAULT_HEALTH_TIMEOUT_SECONDS, ge=1, le=300)
+    # Optional base domain for auto-registered Traefik routes (e.g. "dev.app.aero-deck.app").
+    docker_route_base_domain: str | None = None
 
     @field_validator("auth_clients")
     @classmethod
