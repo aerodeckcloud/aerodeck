@@ -25,5 +25,8 @@ cryptography>=43.0,<46.0
 
 # Background work. The API process does not run the worker; the orchestrator
 # starts `celery -A app.worker worker` as a separate container.
+# `packaging` is imported at runtime by `kombu.transport.redis` (>=5.6) without
+# being declared in kombu's own metadata.
 celery>=5.4,<6.0
 redis>=5.2,<7.0
+packaging>=24.0,<26.0
