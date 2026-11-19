@@ -55,6 +55,39 @@ def test_select_digests_keeps_main_and_newest() -> None:
     assert deleted == ["sha256:newest", "sha256:oldest"]
 
 
+def test_select_digests_skips_untagged_oci_child_manifests() -> None:
+    mod = _load_script()
+    manifests = [
+        mod.ManifestInfo(
+            digest="sha256:child-amd64",
+            updated_at="2026-10-25T10:00:00Z",
+            tags=(),
+        ),
+        mod.ManifestInfo(
+            digest="sha256:child-attestation",
+            updated_at="2026-10-25T10:00:01Z",
+            tags=(),
+        ),
+        mod.ManifestInfo(
+            digest="sha256:index-dashboard",
+            updated_at="2026-10-25T10:00:02Z",
+            tags=("dashboard-main", "dashboard-abc"),
+        ),
+        mod.ManifestInfo(
+            digest="sha256:index-main",
+            updated_at="2026-10-24T10:00:00Z",
+            tags=("main", "def456"),
+        ),
+        mod.ManifestInfo(
+            digest="sha256:old-tagged",
+            updated_at="2026-10-20T10:00:00Z",
+            tags=("old-sha",),
+        ),
+    ]
+    deleted = mod.select_digests_to_delete(manifests, keep=2)
+    assert deleted == ["sha256:old-tagged"]
+
+
 def test_select_digests_rejects_keep_below_one() -> None:
     mod = _load_script()
     with pytest.raises(ValueError, match="keep must be >= 1"):
