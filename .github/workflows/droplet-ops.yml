@@ -12,6 +12,7 @@ on:
           - "diagnose"
           - "restart-all"
           - "restart-worker"
+          - "install-auto-updater"
 
 permissions:
   contents: read
@@ -175,4 +176,18 @@ jobs:
               bash /root/aerodeck/configure-iac-worker.sh
               docker ps -a --filter name=aerodeck-worker
             '
+          elif [ "${ACTION}" = "install-auto-updater" ]; then
+            echo "=== INSTALLING PULL-BASED AUTO-UPDATER ON ${CONTROL_DROPLET_HOST} ==="
+            ssh "${ssh_opts[@]}" "root@${CONTROL_DROPLET_HOST}" "mkdir -p /root/aerodeck"
+            scp "${ssh_opts[@]}" \
+              apps/control-plane/scripts/start-on-droplet.sh \
+              apps/control-plane/scripts/rewrite_do_postgres_url.py \
+              apps/control-plane/scripts/configure-iac-worker.sh \
+              apps/control-plane/scripts/start-dashboard-on-droplet.sh \
+              apps/control-plane/scripts/publish-console-route.py \
+              apps/control-plane/scripts/reconcile-droplet-images.sh \
+              apps/control-plane/scripts/install-auto-updater.sh \
+              "root@${CONTROL_DROPLET_HOST}:/root/aerodeck/"
+            ssh "${ssh_opts[@]}" "root@${CONTROL_DROPLET_HOST}" \
+              "chmod +x /root/aerodeck/*.sh && bash /root/aerodeck/install-auto-updater.sh"
           fi
