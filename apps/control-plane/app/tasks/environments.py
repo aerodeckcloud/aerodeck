@@ -9,7 +9,9 @@ are published for the deployment log SSE route (#121). ``Done`` is published onl
 on success so the console does not mark a failed deployment as succeeded.
 """
 
+import inspect
 import uuid
+from typing import Any
 
 from celery import Task, shared_task
 
@@ -87,8 +89,17 @@ def _run(
     if deployment_id is not None and attempt == 1:
         publish_provision_lines_sync(redis_url, deployment_id, PROVISION_START_LINE)
     operation = _provisioner.provision if kind is JobKind.provision else _provisioner.reconcile
+    call_kwargs: dict[str, Any] = dict(meta)
+    params = inspect.signature(operation).parameters
+    accepts_var_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    if not accepts_var_kw:
+        call_kwargs = {k: v for k, v in call_kwargs.items() if k in params}
+    if deployment_id is not None and "on_log" in params:
+        def _publish_line(line: str) -> None:
+            publish_provision_lines_sync(redis_url, deployment_id, line)
+        call_kwargs["on_log"] = _publish_line
     try:
-        outcome = operation(project_id=project_id, environment_id=environment_id, **meta)
+        outcome = operation(project_id=project_id, environment_id=environment_id, **call_kwargs)
     except Exception as exc:
         if kind is JobKind.provision:
             logger.error("event=iac_apply_failed environment=%s project=%s", environment_id, project_id)

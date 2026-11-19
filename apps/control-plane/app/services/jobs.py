@@ -87,6 +87,7 @@ class JobService:
             linked = await self._deployments.get(deployment_id)
             linked_deployment_id = linked.id
             meta["deployment_id"] = str(linked_deployment_id)
+            meta["repo_url"] = linked.repo_url
             # Seed a non-Done line before the worker runs so SSE cannot stub Done
             # while the job is still queued (Terminal would mark succeeded).
             await publish_line(self._redis_url, linked_deployment_id, PROVISION_QUEUED_LINE)
