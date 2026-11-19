@@ -116,11 +116,17 @@ def select_digests_to_delete(
     manifests: list[ManifestInfo],
     keep: int,
 ) -> list[str]:
-    """Keep `main` / `dashboard-main` manifests and newest manifests up to `keep`."""
+    """Keep `main` / `dashboard-main` manifests and newest tagged manifests up to `keep`.
+
+    Untagged manifests are skipped because BuildKit OCI image indexes store
+    their platform and attestation child manifests without tags; deleting an
+    untagged child digest invalidates the parent `main` / `dashboard-main` tag.
+    """
     if keep < 1:
         raise ValueError("keep must be >= 1")
+    tagged = [item for item in manifests if item.tags]
     ordered = sorted(
-        manifests,
+        tagged,
         key=lambda item: (_has_protected_tag(item), item.updated_at, item.digest),
         reverse=True,
     )

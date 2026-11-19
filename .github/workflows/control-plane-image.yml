@@ -99,6 +99,8 @@ jobs:
           registry="${DOCR_NAME:-aerodeck}"
           image="registry.digitalocean.com/${registry}/${IMAGE_REPO}"
           docker build \
+            --provenance=false \
+            --sbom=false \
             --file apps/control-plane/Dockerfile \
             --tag "${image}:${GITHUB_SHA}" \
             --tag "${image}:main" \
