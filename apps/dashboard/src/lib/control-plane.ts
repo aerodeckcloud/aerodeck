@@ -1175,7 +1175,17 @@ async function controlPlaneRequest<T>(
 }
 
 async function discardResponseBody(response: Response): Promise<void> {
-  await response.body?.cancel();
+  // Drain instead of calling `response.body?.cancel()`: Next.js's patched fetch
+  // / undici stream cancel can hang on HTTP/1.1 keep-alive responses, stalling
+  // subsequent requests in createControlPlaneDeploymentAndProvision.
+  if (response.bodyUsed || response.body === null) {
+    return;
+  }
+  try {
+    await response.arrayBuffer();
+  } catch {
+    // Best-effort drain; ignore stream errors on discarded responses.
+  }
 }
 
 /** Existence check before create+provision. UI listing uses listControlPlaneEnvironments. */
