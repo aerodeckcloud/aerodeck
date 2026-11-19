@@ -64,7 +64,14 @@ class FakeCommandRunner:
         return CommandResult(0, "", "")
 
 
-def _make_provisioner(runner: FakeCommandRunner, port: int = 10420) -> DockerProvisioner:
+def _make_provisioner(
+    runner: FakeCommandRunner,
+    port: int = 10420,
+    *,
+    docker_host: str | None = None,
+    docker_runtime: str | None = None,
+    allowed_owners: tuple[str, ...] = (),
+) -> DockerProvisioner:
     return DockerProvisioner(
         docker_bin="docker",
         git_bin="git",
@@ -77,6 +84,9 @@ def _make_provisioner(runner: FakeCommandRunner, port: int = 10420) -> DockerPro
         pids_limit=256,
         build_timeout_seconds=300,
         runner=runner,
+        docker_host=docker_host,
+        docker_runtime=docker_runtime,
+        allowed_owners=allowed_owners,
         port_allocator=lambda _h, _s, _e: port,
     )
 
@@ -113,6 +123,7 @@ def test_provision_clones_builds_runs_and_streams_logs() -> None:
     assert runner.envs[0] is not None and runner.envs[0]["GIT_TERMINAL_PROMPT"] == "0"
 
     run_cmd = runner.calls[3]
+    assert "--cap-drop=ALL" in run_cmd
     assert "--memory" in run_cmd and "512m" in run_cmd
     assert "--cpus" in run_cmd and "0.5" in run_cmd
     assert "--pids-limit" in run_cmd and "256" in run_cmd
@@ -181,8 +192,39 @@ def test_reconcile_restarts_stopped_container() -> None:
 
 
 def test_naming_helpers_sanitize_segments() -> None:
-    assert container_name_for("F27EE337-a7d0", "BACBB040-41fa") == "aerodeck-app-f27ee337-bacbb040"
-    assert image_tag_for("My_App!", "Prod Env", "11111111", "22222222") == "aerodeck/my-app-prod-env:latest"
+    p = "f27ee337-a7d0-4d4d-8180-22579d6a2983"
+    e = "bacbb040-41fa-4623-8e4b-02be2f7abf7b"
+    assert container_name_for(p, e) == "aerodeck-app-f27ee337-bacbb040"
+    assert image_tag_for("My_App!", "Prod Env", p, e) == "aerodeck/my-app-prod-env:latest"
+    with pytest.raises(PermanentJobError, match="invalid UUID"):
+        container_name_for("not-a-uuid", e)
+
+
+def test_provision_enforces_owner_allowlist_and_passes_runtime_and_docker_host() -> None:
+    runner = FakeCommandRunner(create_dockerfile=True)
+    provisioner = _make_provisioner(
+        runner,
+        docker_host="unix:///run/user/1000/docker.sock",
+        docker_runtime="runsc",
+        allowed_owners=("mangatohjunior",),
+    )
+
+    with pytest.raises(PermanentJobError, match="AERODECK_DOCKER_ALLOWED_OWNERS"):
+        provisioner.provision(
+            project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+            environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+            repo_url="https://github.com/untrusted-org/evil-repo",
+        )
+    assert runner.calls == []
+
+    provisioner.provision(
+        project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+        environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+        repo_url="https://github.com/mangatohjunior/demo-app",
+    )
+    assert runner.envs[1] is not None and runner.envs[1]["DOCKER_HOST"] == "unix:///run/user/1000/docker.sock"
+    run_cmd = runner.calls[3]
+    assert "--runtime" in run_cmd and "runsc" in run_cmd
 
 
 def test_select_provisioner_respects_backend_setting() -> None:

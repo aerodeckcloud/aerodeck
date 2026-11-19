@@ -23,6 +23,16 @@ SHA256_HEX_LENGTH = 64
 DEPLOYMENT_LOG_FOLLOW_IDLE_SECONDS_DEFAULT = 1_800
 DEPLOYMENT_LOG_FIRST_PUBLISH_GRACE_SECONDS_DEFAULT = 2
 
+# Default Docker container provisioner limits (#209, #215).
+DOCKER_DEFAULT_BIND_HOST = "127.0.0.1"
+DOCKER_DEFAULT_PORT_START = 10_000
+DOCKER_DEFAULT_PORT_END = 19_999
+DOCKER_DEFAULT_CONTAINER_PORT = 8_000
+DOCKER_DEFAULT_MEMORY_LIMIT = "512m"
+DOCKER_DEFAULT_CPUS_LIMIT = "0.5"
+DOCKER_DEFAULT_PIDS_LIMIT = 256
+DOCKER_DEFAULT_BUILD_TIMEOUT_SECONDS = 600
+
 
 class Settings(BaseSettings):
     """Loaded from ``AERODECK_*`` environment variables or a local ``.env`` file."""
@@ -120,17 +130,23 @@ class Settings(BaseSettings):
     spaces_access_id: SecretStr | None = None
     spaces_secret_key: SecretStr | None = None
 
-    # Docker container provisioner (#209, #210).
+    # Docker container provisioner (#209, #210, #215).
     docker_bin: str = "docker"
     git_bin: str = "git"
-    docker_bind_host: str = "127.0.0.1"
-    docker_port_range_start: int = Field(default=10000, ge=1024, le=60000)
-    docker_port_range_end: int = Field(default=19999, ge=1025, le=65535)
-    docker_container_port: int = Field(default=8000, ge=1, le=65535)
-    docker_memory_limit: str = "512m"
-    docker_cpus_limit: str = "0.5"
-    docker_pids_limit: int = Field(default=256, ge=16, le=4096)
-    docker_build_timeout_seconds: int = Field(default=600, ge=30, le=1800)
+    # Optional DOCKER_HOST URI (e.g. unix:///run/user/1000/docker.sock for rootless Docker or a remote build host).
+    docker_host: str | None = None
+    # Optional OCI runtime for stronger tenant isolation (e.g. "runsc" for gVisor or "sysbox-runc").
+    docker_runtime: str | None = None
+    # Optional GitHub owner allowlist; when non-empty, only repos owned by these accounts can be built.
+    docker_allowed_owners: list[str] = Field(default_factory=list)
+    docker_bind_host: str = DOCKER_DEFAULT_BIND_HOST
+    docker_port_range_start: int = Field(default=DOCKER_DEFAULT_PORT_START, ge=1024, le=60000)
+    docker_port_range_end: int = Field(default=DOCKER_DEFAULT_PORT_END, ge=1025, le=65535)
+    docker_container_port: int = Field(default=DOCKER_DEFAULT_CONTAINER_PORT, ge=1, le=65535)
+    docker_memory_limit: str = DOCKER_DEFAULT_MEMORY_LIMIT
+    docker_cpus_limit: str = DOCKER_DEFAULT_CPUS_LIMIT
+    docker_pids_limit: int = Field(default=DOCKER_DEFAULT_PIDS_LIMIT, ge=16, le=4096)
+    docker_build_timeout_seconds: int = Field(default=DOCKER_DEFAULT_BUILD_TIMEOUT_SECONDS, ge=30, le=1800)
 
     @field_validator("auth_clients")
     @classmethod
