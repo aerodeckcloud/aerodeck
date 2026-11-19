@@ -110,13 +110,27 @@ class Settings(BaseSettings):
     # Celery beat interval. 0 disables the schedule; POST /sandboxes/reap-expired still works.
     sandbox_reap_interval_seconds: int = Field(default=60, ge=0, le=86_400)
 
-    # Worker IaC (#34). Off by default so laptops and the API process stay Noop.
+    # Worker provisioner (#34, #209). Off by default so laptops and the API stay Noop.
+    # Set AERODECK_PROVISIONER_BACKEND=docker for the Dokploy-model container pipeline.
+    provisioner_backend: Literal["noop", "terraform", "docker"] = "noop"
     iac_worker: bool = False
     iac_apply: bool = False
     iac_engine_root: str = "/opt/aerodeck/iac-engine/stacks/tenant"
     terraform_bin: str = "terraform"
     spaces_access_id: SecretStr | None = None
     spaces_secret_key: SecretStr | None = None
+
+    # Docker container provisioner (#209, #210).
+    docker_bin: str = "docker"
+    git_bin: str = "git"
+    docker_bind_host: str = "127.0.0.1"
+    docker_port_range_start: int = Field(default=10000, ge=1024, le=60000)
+    docker_port_range_end: int = Field(default=19999, ge=1025, le=65535)
+    docker_container_port: int = Field(default=8000, ge=1, le=65535)
+    docker_memory_limit: str = "512m"
+    docker_cpus_limit: str = "0.5"
+    docker_pids_limit: int = Field(default=256, ge=16, le=4096)
+    docker_build_timeout_seconds: int = Field(default=600, ge=30, le=1800)
 
     @field_validator("auth_clients")
     @classmethod
