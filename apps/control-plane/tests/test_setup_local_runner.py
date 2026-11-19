@@ -8,7 +8,7 @@ REPO = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = (
     Path(__file__).resolve().parents[1] / "scripts" / "setup-local-runner.sh"
 )
-WORKFLOW_PATH = REPO / ".github" / "workflows" / "dashboard-image.yml"
+OPS_WORKFLOW_PATH = REPO / ".github" / "workflows" / "droplet-ops.yml"
 
 
 def test_setup_local_runner_script_contract() -> None:
@@ -22,6 +22,6 @@ def test_setup_local_runner_script_contract() -> None:
     assert "--replace" in text
 
 
-def test_dashboard_workflow_disables_msys_pathconv_on_self_hosted() -> None:
-    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+def test_droplet_ops_workflow_disables_msys_pathconv_on_self_hosted() -> None:
+    workflow = OPS_WORKFLOW_PATH.read_text(encoding="utf-8")
     assert 'MSYS_NO_PATHCONV: "1"' in workflow
