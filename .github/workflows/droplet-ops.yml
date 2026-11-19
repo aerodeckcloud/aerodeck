@@ -42,99 +42,19 @@ jobs:
           DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
         run: |
           export PATH="/usr/bin:/mingw64/bin:$PATH"
-          echo "=== CHECKING RUNNER SSH FILES & AGENT ==="
-          ls -la --full-time /c/Users/bonito/.ssh 2>&1 || true
-          cat /c/Users/bonito/.ssh/config 2>&1 || true
-          cat /c/Users/bonito/.ssh/known_hosts 2>&1 || true
-          /c/Windows/System32/OpenSSH/ssh-add.exe -L 2>&1 || true
           if [ -z "${DIGITALOCEAN_TOKEN:-}" ]; then
             exit 0
           fi
-          python -m pip install --quiet psycopg2-binary || true
           python - << 'PY'
           import json, os, time, urllib.request
           token = os.environ["DIGITALOCEAN_TOKEN"]
           ip = urllib.request.urlopen("https://api.ipify.org", timeout=10).read().decode().strip()
           cidr = f"{ip}/32"
           headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-          act_req = urllib.request.Request("https://api.digitalocean.com/v2/actions?per_page=20", headers=headers)
-          acts = json.loads(urllib.request.urlopen(act_req, timeout=15).read().decode()).get("actions", [])
-          for a in acts[:12]:
-              print("DO_ACTION:", a.get("id"), a.get("type"), a.get("resource_type"), a.get("resource_id"), a.get("started_at"), a.get("status"))
-
-          req = urllib.request.Request("https://api.digitalocean.com/v2/databases", headers=headers)
-          dbs = json.loads(urllib.request.urlopen(req, timeout=15).read().decode()).get("databases", [])
-          for db in dbs:
-              db_id = db["id"]
-              print("DB:", db_id, db["name"], db["status"], db["num_nodes"], db["size"])
-              fw_url = f"https://api.digitalocean.com/v2/databases/{db_id}/firewall"
-              fw_req = urllib.request.Request(fw_url, headers=headers)
-              fw_rules = json.loads(urllib.request.urlopen(fw_req, timeout=15).read().decode()).get("rules", [])
-              orig_rules = [{"type": r["type"], "value": r["value"]} for r in fw_rules]
-              try:
-                  temp_rules = orig_rules + [{"type": "ip_addr", "value": ip}]
-                  put_req = urllib.request.Request(
-                      fw_url,
-                      data=json.dumps({"rules": temp_rules}).encode(),
-                      headers=headers,
-                      method="PUT",
-                  )
-                  urllib.request.urlopen(put_req, timeout=15)
-                  time.sleep(5)
-                  import psycopg2
-                  conn_info = db["connection"]
-                  users_req = urllib.request.Request(f"https://api.digitalocean.com/v2/databases/{db_id}/users", headers=headers)
-                  users = json.loads(urllib.request.urlopen(users_req, timeout=15).read().decode()).get("users", [])
-                  print("DB USERS:", [(u.get("name"), u.get("role"), bool(u.get("password"))) for u in users], "conn user:", conn_info.get("user"))
-                  admin = next((u for u in users if u.get("role") == "primary" and u.get("password")), None) or next(u for u in users if u.get("password"))
-                  conn = psycopg2.connect(
-                      host=conn_info["host"],
-                      port=conn_info["port"],
-                      user=admin["name"],
-                      password=admin["password"],
-                      dbname=conn_info["database"],
-                      sslmode="require",
-                      connect_timeout=10,
-                  )
-                  conn.autocommit = True
-                  with conn.cursor() as cur:
-                      cur.execute("SELECT usename, state, count(*) FROM pg_stat_activity GROUP BY usename, state")
-                      print("PG_STAT_ACTIVITY BEFORE:", cur.fetchall())
-                      cur.execute("""
-                          SELECT count(pg_terminate_backend(pid))
-                          FROM pg_stat_activity
-                          WHERE pid <> pg_backend_pid()
-                            AND usename NOT IN ('postgres', 'doadmin')
-                      """)
-                      print("TERMINATED NON-SUPERUSER CONNS:", cur.fetchall())
-                      cur.execute("""
-                          SELECT count(pg_terminate_backend(pid))
-                          FROM pg_stat_activity
-                          WHERE pid <> pg_backend_pid()
-                            AND datname = 'defaultdb'
-                            AND state = 'idle'
-                      """)
-                      print("TERMINATED IDLE DEFAULTDB CONNS:", cur.fetchall())
-                      cur.execute("SELECT usename, state, count(*) FROM pg_stat_activity GROUP BY usename, state")
-                      print("PG_STAT_ACTIVITY AFTER:", cur.fetchall())
-                  conn.close()
-              except Exception as exc:
-                  print("DB CLEANUP ERROR:", repr(exc))
-              finally:
-                  restore_req = urllib.request.Request(
-                      fw_url,
-                      data=json.dumps({"rules": orig_rules}).encode(),
-                      headers=headers,
-                      method="PUT",
-                  )
-                  urllib.request.urlopen(restore_req, timeout=15)
-                  print("Restored DB firewall rules.")
-
           req = urllib.request.Request("https://api.digitalocean.com/v2/firewalls", headers=headers)
           data = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
           for fw in data.get("firewalls", []):
-              if "control-fw" not in fw.get("name", "") and "edge-fw" not in fw.get("name", ""):
+              if "control-fw" not in fw.get("name", ""):
                   continue
               addrs = [
                   a
@@ -172,17 +92,16 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="/usr/bin:/mingw64/bin:$PATH"
+          if [ -z "${CONTROL_DROPLET_HOST:-}" ]; then
+            echo "::error::CONTROL_DROPLET_HOST variable is not set."
+            exit 1
+          fi
           raw_key="${CONTROL_SSH_KEY_PATH:-/c/Users/bonito/.ssh/aerodeck_ed25519}"
           key_path="/tmp/aerodeck_ed25519"
+          trap 'rm -f "${key_path}"' EXIT
           cp "${raw_key}" "${key_path}"
           chmod 600 "${key_path}"
-          echo "Derived pubkey from private key:"
-          ssh-keygen -y -f "${key_path}" || true
-          echo "Contents of .pub file:"
-          cat "${raw_key}.pub" || true
-          ssh_opts=(-i "${key_path}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15)
-          echo "Testing Windows OpenSSH client..."
-          /c/Windows/System32/OpenSSH/ssh.exe -i 'C:\Users\bonito\.ssh\aerodeck_ed25519' -o StrictHostKeyChecking=no -o BatchMode=yes root@188.166.67.201 "echo WIN_SSH_OK" 2>&1 || true
+          ssh_opts=(-i "${key_path}" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15)
 
           if [ "${ACTION}" = "diagnose" ]; then
             echo "=== RUNNING DIAGNOSTICS ON ${CONTROL_DROPLET_HOST} ==="
