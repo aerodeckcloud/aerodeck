@@ -9,6 +9,11 @@ ARG PYTHON_VERSION=3.12
 ARG TERRAFORM_VERSION=1.9.8
 
 # --------------------------------------------------------------------------- #
+# Stage 0: static Docker CLI + Buildx plugin (#211)
+# --------------------------------------------------------------------------- #
+FROM docker:27-cli AS docker-cli
+
+# --------------------------------------------------------------------------- #
 # Stage 1: build wheels in an isolated venv
 # --------------------------------------------------------------------------- #
 FROM python:${PYTHON_VERSION}-slim AS builder
@@ -54,13 +59,16 @@ RUN groupadd --system --gid 10001 aerodeck \
     && useradd --system --uid 10001 --gid aerodeck --home-dir /app --no-create-home aerodeck
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl unzip \
+    && apt-get install -y --no-install-recommends ca-certificates curl git unzip \
     && curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
       -o /tmp/terraform.zip \
     && unzip /tmp/terraform.zip -d /usr/local/bin \
     && rm /tmp/terraform.zip \
     && chmod 755 /usr/local/bin/terraform \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 
 WORKDIR /app
 

@@ -37,6 +37,12 @@ OPTIONAL_ENV_KEYS=(
   AERODECK_ACME_DIRECTORY_URL
   AERODECK_ACME_ACCOUNT_EMAIL
   AERODECK_ACME_ACCOUNT_KEY
+  AERODECK_PROVISIONER_BACKEND
+  AERODECK_DOCKER_HOST
+  AERODECK_DOCKER_RUNTIME
+  AERODECK_DOCKER_ALLOWED_OWNERS
+  AERODECK_DOCKER_BIND_HOST
+  AERODECK_DOCKER_CONTAINER_PORT
   AERODECK_IAC_WORKER
   AERODECK_IAC_APPLY
   AERODECK_SPACES_ACCESS_ID
@@ -190,9 +196,16 @@ if [[ "${RESTART_WORKER}" == "true" ]]; then
     fi
   done
 
+  WORKER_EXTRA_FLAGS=()
+  if [[ "${AERODECK_PROVISIONER_BACKEND:-noop}" == "docker" && -z "${AERODECK_DOCKER_HOST:-}" && -S /var/run/docker.sock ]]; then
+    DOCKER_SOCK_GID="$(stat -c '%g' /var/run/docker.sock)"
+    WORKER_EXTRA_FLAGS+=(-v /var/run/docker.sock:/var/run/docker.sock --group-add "${DOCKER_SOCK_GID}")
+  fi
+
   echo "restarting aerodeck-worker container with ${IMAGE}..."
   docker rm -f aerodeck-worker >/dev/null 2>&1 || true
   docker run -d --name aerodeck-worker --network host --restart unless-stopped \
+    "${WORKER_EXTRA_FLAGS[@]}" \
     "${DOCKER_ENV_FLAGS[@]}" \
     "${IMAGE}" \
     celery -A app.worker worker --beat --queues aerodeck --loglevel INFO
