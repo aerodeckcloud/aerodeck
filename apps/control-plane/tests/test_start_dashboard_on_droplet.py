@@ -30,12 +30,17 @@ def test_start_dashboard_on_droplet_script_contract() -> None:
     assert "publish-console-route.py" in text
 
 
-def test_dashboard_workflow_self_hosted_deploy_job() -> None:
+def test_dashboard_workflow_uses_pull_based_cd_without_self_hosted_ssh() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    assert "name: deploy to control Droplet" in workflow
-    assert "runs-on: self-hosted" in workflow
-    assert "vars.DEPLOY_DASHBOARD_SELF_HOSTED == 'true'" in workflow
-    assert "vars.CONTROL_DROPLET_HOST != ''" in workflow
-    assert "start-dashboard-on-droplet.sh" in workflow
-    assert "publish-console-route.py" in workflow
-    assert "mkdir -p /root/aerodeck" in workflow
+    assert "runs-on: self-hosted" not in workflow
+    assert "runs-on: ubuntu-latest" in workflow
+    reconciler = (
+        Path(__file__).resolve().parents[1] / "scripts" / "reconcile-droplet-images.sh"
+    ).read_text(encoding="utf-8")
+    installer = (
+        Path(__file__).resolve().parents[1] / "scripts" / "install-auto-updater.sh"
+    ).read_text(encoding="utf-8")
+    assert "flock -n" in reconciler
+    assert "start-dashboard-on-droplet.sh" in reconciler
+    assert "start-on-droplet.sh" in reconciler
+    assert "aerodeck-auto-updater.timer" in installer
