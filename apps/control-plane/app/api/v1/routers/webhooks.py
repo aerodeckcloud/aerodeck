@@ -4,8 +4,17 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
-from app.api.deps import DeploymentServiceDep, JobServiceDep, SettingsDep, WebhookServiceDep
+from app.api.deps import (
+    DeploymentServiceDep,
+    EnvironmentServiceDep,
+    EnvironmentVariableServiceDep,
+    JobServiceDep,
+    SessionDep,
+    SettingsDep,
+    WebhookServiceDep,
+)
 from app.schemas.auth import ErrorResponse
+from app.services.pr_previews import handle_pull_request_event
 from app.services.webhook_rate_limit import enforce_webhook_rate_limit
 from app.services.webhooks import _MAX_WEBHOOK_BODY_BYTES, WebhookDeliveryResult
 
@@ -27,7 +36,10 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 async def receive_github_webhook(
     request: Request,
     response: Response,
+    session: SessionDep,
     webhooks: WebhookServiceDep,
+    environments: EnvironmentServiceDep,
+    env_vars: EnvironmentVariableServiceDep,
     deployments: DeploymentServiceDep,
     jobs: JobServiceDep,
     settings: SettingsDep,
@@ -59,6 +71,21 @@ async def receive_github_webhook(
             detail="Webhook payload exceeds 1 MiB limit.",
         )
 
+    async def _handle_pr(
+        *, payload: dict[str, object], verified_webhooks: object, parse_addons: object
+    ) -> tuple[str, str | None, list[object]]:
+        return await handle_pull_request_event(
+            session=session,
+            settings=settings,
+            payload=payload,
+            verified_webhooks=verified_webhooks,  # type: ignore[arg-type]
+            environments=environments,
+            env_vars=env_vars,
+            deployments=deployments,
+            jobs=jobs,
+            parse_addons=parse_addons,
+        )
+
     result = await webhooks.handle_github_event(
         raw_body=raw_body,
         event=x_github_event.strip().lower(),
@@ -66,6 +93,7 @@ async def receive_github_webhook(
         delivery_id=x_github_delivery.strip() if x_github_delivery else None,
         deployments=deployments,
         jobs=jobs,
+        pr_preview_handler=_handle_pr,
     )
     if result.status != "triggered":
         response.status_code = status.HTTP_200_OK

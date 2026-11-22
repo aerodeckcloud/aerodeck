@@ -15,7 +15,7 @@ from app.core.github import canonical_github_repo_url, parse_github_repo
 from app.services.docker_policy import (
     CommandResult, CommandRunner, LogSink, SubprocessCommandRunner, classify_failure, container_name_for,
     deployment_image_tag_for, find_available_port, image_tag_for, route_hostname_for, validate_binary,
-    validate_dockerfile, validate_network, validate_runtime, validate_uuid, wait_for_tcp_health,
+    validate_dockerfile, validate_git_ref, validate_network, validate_runtime, validate_uuid, wait_for_tcp_health,
 )
 from app.services.docker_addons import parse_addons_json, provision_environment_addons
 from app.services.docker_env_discovery import build_docker_run_command, ensure_default_docker_config
@@ -88,7 +88,7 @@ class DockerProvisioner:
         self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",
         environment_kind: str = "dev", region: str = "ams3", repo_url: str = "", env_vars_json: str = "",
         addons_json: str = "", image_deployment_id: str = "", rollback_from_deployment_id: str = "",
-        on_log: LogSink | None = None,
+        git_ref: str = "", on_log: LogSink | None = None,
     ) -> JobOutcome:
         _ = (environment_kind, region)
         p_uuid, e_uuid = validate_uuid(project_id, "project_id"), validate_uuid(environment_id, "environment_id")
@@ -131,11 +131,16 @@ class DockerProvisioner:
                 if image_deployment_id
                 else None
             )
+            safe_ref = validate_git_ref(git_ref)
             with tempfile.TemporaryDirectory(prefix="aerodeck-build-") as tmp:
                 checkout = Path(tmp) / "repo"
-                emit(f"Cloning {owner}/{repo} (shallow)...")
+                emit(f"Cloning {owner}/{repo}{f' (branch {safe_ref})' if safe_ref else ' (shallow)'}...")
+                clone_cmd = [git_bin, "clone", "--depth=1", "--single-branch"]
+                if safe_ref:
+                    clone_cmd.extend(["--branch", safe_ref])
+                clone_cmd.extend(["--", clone_url, str(checkout)])
                 clone_res = self.runner.run(
-                    [git_bin, "clone", "--depth=1", "--single-branch", "--", clone_url, str(checkout)],
+                    clone_cmd,
                     env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=120, on_line=on_log,
                 )
                 if clone_res.returncode != 0:

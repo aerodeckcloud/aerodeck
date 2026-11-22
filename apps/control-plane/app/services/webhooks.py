@@ -102,7 +102,7 @@ class WebhookRead(BaseModel):
 class WebhookDeliveryResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["pong", "triggered", "ignored"]
+    status: Literal["pong", "triggered", "cleaned_up", "ignored"]
     reason: str | None = None
     deployment_ids: list[uuid.UUID] = Field(default_factory=list)
 
@@ -253,6 +253,7 @@ class WebhookService:
         delivery_id: str | None,
         deployments: DeploymentCreator,
         jobs: JobEnqueuer,
+        pr_preview_handler: Any = None,
     ) -> WebhookDeliveryResult:
         if len(raw_body) > _MAX_WEBHOOK_BODY_BYTES:
             raise WebhookSignatureError("Webhook payload exceeds maximum allowed size")
@@ -289,6 +290,17 @@ class WebhookService:
 
         if event == "ping":
             return WebhookDeliveryResult(status="pong")
+        if event == "pull_request" and pr_preview_handler is not None:
+            pr_status, pr_reason, pr_ids = await pr_preview_handler(
+                payload=payload,
+                verified_webhooks=verified,
+                parse_addons=_parse_addons,
+            )
+            return WebhookDeliveryResult(
+                status=pr_status,
+                reason=pr_reason,
+                deployment_ids=pr_ids,
+            )
         if event != "push":
             return WebhookDeliveryResult(status="ignored", reason=f"unsupported event: {event}")
         if payload.get("deleted") is True:

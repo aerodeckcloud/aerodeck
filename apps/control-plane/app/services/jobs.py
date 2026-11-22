@@ -85,6 +85,7 @@ class JobService:
         env_vars: dict[str, str] | None = None,
         addons: list[str] | None = None,
         rollback_from_deployment_id: uuid.UUID | None = None,
+        git_ref: str | None = None,
     ) -> JobTicket:
         environment = await self._environments.get(project_id, environment_id)
         meta: dict[str, str] = {
@@ -104,6 +105,8 @@ class JobService:
             meta["addons_json"] = json.dumps(addons)
         if rollback_from_deployment_id is not None and kind is JobKind.provision:
             meta["rollback_from_deployment_id"] = str(rollback_from_deployment_id)
+        if git_ref and kind is JobKind.provision:
+            meta["git_ref"] = git_ref
         linked_deployment_id: uuid.UUID | None = None
         # Only provision publishes onto a deployment log stream (#121).
         if deployment_id is not None and kind is JobKind.provision:

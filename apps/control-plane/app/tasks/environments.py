@@ -22,7 +22,9 @@ from app.services.container_logs import CONTAINER_LOGS_TASK, fetch_container_log
 from app.services.container_ops import (
     CONTAINER_ACTION_TASK,
     CONTAINER_METRICS_TASK,
+    CONTAINER_REMOVE_TASK,
     fetch_container_metrics_sync,
+    remove_container_sync,
     run_container_action_sync,
 )
 from app.services.provisioning import JobKind, NoopProvisioner, Provisioner, TransientJobError
@@ -181,6 +183,17 @@ def collect_environment_container_metrics(
 ) -> dict[str, Any]:
     settings = get_settings()
     return fetch_container_metrics_sync(
+        project_id=project_id,
+        environment_id=environment_id,
+        docker_bin=settings.docker_bin,
+        docker_host=settings.docker_host,
+    )
+
+
+@shared_task(name=CONTAINER_REMOVE_TASK)
+def remove_environment_container(*, project_id: str, environment_id: str) -> bool:
+    settings = get_settings()
+    return remove_container_sync(
         project_id=project_id,
         environment_id=environment_id,
         docker_bin=settings.docker_bin,

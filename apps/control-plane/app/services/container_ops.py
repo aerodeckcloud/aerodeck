@@ -23,6 +23,7 @@ logger = get_logger("services.container_ops")
 
 CONTAINER_ACTION_TASK = "aerodeck.environments.container_action"
 CONTAINER_METRICS_TASK = "aerodeck.environments.container_metrics"
+CONTAINER_REMOVE_TASK = "aerodeck.environments.container_remove"
 
 ContainerAction = Literal["start", "stop", "restart"]
 ContainerState = Literal["running", "exited", "not_found", "unavailable"]
@@ -264,3 +265,46 @@ def dispatch_container_metrics(
             error="Worker did not return container metrics in time.",
         )
     return ContainerMetricsRead.model_validate(payload)
+
+
+def remove_container_sync(
+    *,
+    project_id: str,
+    environment_id: str,
+    docker_bin: str = "docker",
+    docker_host: str | None = None,
+    runner: CommandRunner | None = None,
+) -> bool:
+    """Force-remove an environment's container (used during PR preview teardown, #258)."""
+    cname = container_name_for(project_id, environment_id)
+    safe_bin = validate_binary(docker_bin, "docker_bin")
+    cmd_runner = runner or SubprocessCommandRunner()
+    docker_env = ensure_default_docker_config(os.environ, docker_host)
+    try:
+        res = cmd_runner.run([safe_bin, "rm", "-f", cname], env=docker_env, timeout=30)
+        return res.returncode == 0
+    except (PermanentJobError, TransientJobError) as exc:
+        logger.warning("container remove failed for %s: %s", cname, type(exc).__name__)
+        return False
+
+
+def dispatch_container_remove(
+    settings: Settings,
+    *,
+    project_id: uuid.UUID,
+    environment_id: uuid.UUID,
+) -> None:
+    """Fire-and-forget worker task to remove a torn-down preview environment container."""
+    if settings.provisioner_backend != "docker" or not settings.redis_url:
+        return
+    from app.core.queue import create_celery_app
+
+    try:
+        celery_app = create_celery_app(settings)
+        celery_app.send_task(
+            CONTAINER_REMOVE_TASK,
+            kwargs={"project_id": str(project_id), "environment_id": str(environment_id)},
+            queue=settings.job_queue,
+        )
+    except Exception as exc:
+        logger.warning("failed to enqueue container remove for %s: %s", environment_id, type(exc).__name__)
