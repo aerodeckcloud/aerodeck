@@ -2,35 +2,14 @@
 
 from __future__ import annotations
 
-import time
-from collections import defaultdict, deque
-
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
-from app.api.deps import DeploymentServiceDep, JobServiceDep, WebhookServiceDep
+from app.api.deps import DeploymentServiceDep, JobServiceDep, SettingsDep, WebhookServiceDep
 from app.schemas.auth import ErrorResponse
+from app.services.webhook_rate_limit import enforce_webhook_rate_limit
 from app.services.webhooks import _MAX_WEBHOOK_BODY_BYTES, WebhookDeliveryResult
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
-
-_RATE_LIMIT_MAX_REQUESTS = 60
-_RATE_LIMIT_WINDOW_SECONDS = 60.0
-_ip_windows: dict[str, deque[float]] = defaultdict(deque)
-
-
-def _enforce_rate_limit(client_ip: str) -> None:
-    """Sliding-window per-IP throttle for the public webhook endpoint."""
-    now = time.monotonic()
-    window = _ip_windows[client_ip]
-    cutoff = now - _RATE_LIMIT_WINDOW_SECONDS
-    while window and window[0] < cutoff:
-        window.popleft()
-    if len(window) >= _RATE_LIMIT_MAX_REQUESTS:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many webhook requests; please retry shortly.",
-        )
-    window.append(now)
 
 
 @router.post(
@@ -51,12 +30,14 @@ async def receive_github_webhook(
     webhooks: WebhookServiceDep,
     deployments: DeploymentServiceDep,
     jobs: JobServiceDep,
+    settings: SettingsDep,
     x_github_event: str = Header(default="push", alias="X-GitHub-Event"),
     x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
     x_github_delivery: str | None = Header(default=None, alias="X-GitHub-Delivery"),
 ) -> WebhookDeliveryResult:
+    """Validate rate limit, payload size, and HMAC-SHA256 signature, then dispatch redeploys."""
     client_ip = request.client.host if request.client else "unknown"
-    _enforce_rate_limit(client_ip)
+    await enforce_webhook_rate_limit(client_ip, settings.redis_url)
 
     if not x_hub_signature_256 or not x_hub_signature_256.startswith("sha256="):
         raise HTTPException(
