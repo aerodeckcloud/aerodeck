@@ -4,6 +4,9 @@ import {
   type AcceptedJob,
   type AddonType,
   type ApiError,
+  type ContainerAction,
+  type ContainerActionResult,
+  type ContainerMetrics,
   type ContainerRuntimeLogs,
   type Deployment,
   type DeploymentBlueprint,
@@ -246,6 +249,34 @@ export async function deleteEnvironmentWebhook(
   if (!response.ok) {
     await readJson(response);
   }
+}
+
+export async function runContainerAction(
+  projectId: string,
+  environmentId: string,
+  action: ContainerAction,
+): Promise<ContainerActionResult> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/actions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ action }),
+    },
+  );
+  return readJson(response);
+}
+
+export async function fetchContainerMetrics(
+  projectId: string,
+  environmentId: string,
+): Promise<ContainerMetrics> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/metrics`,
+    { credentials: "same-origin", cache: "no-store" },
+  );
+  return readJson(response);
 }
 
 export async function createProjectRoute(input: {

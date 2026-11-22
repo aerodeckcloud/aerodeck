@@ -19,6 +19,12 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.metrics import record_iac_apply_failure
 from app.services.container_logs import CONTAINER_LOGS_TASK, fetch_container_logs_sync
+from app.services.container_ops import (
+    CONTAINER_ACTION_TASK,
+    CONTAINER_METRICS_TASK,
+    fetch_container_metrics_sync,
+    run_container_action_sync,
+)
 from app.services.provisioning import JobKind, NoopProvisioner, Provisioner, TransientJobError
 from app.tasks.deployment_status import try_mark_deployment_failed_sync
 
@@ -152,4 +158,31 @@ def fetch_environment_container_logs(
         docker_bin=settings.docker_bin,
         docker_host=settings.docker_host,
         tail=tail,
+    )
+
+
+@shared_task(name=CONTAINER_ACTION_TASK)
+def execute_environment_container_action(
+    *, project_id: str, environment_id: str, action: str
+) -> dict[str, Any]:
+    settings = get_settings()
+    return run_container_action_sync(
+        project_id=project_id,
+        environment_id=environment_id,
+        action=action,
+        docker_bin=settings.docker_bin,
+        docker_host=settings.docker_host,
+    )
+
+
+@shared_task(name=CONTAINER_METRICS_TASK)
+def collect_environment_container_metrics(
+    *, project_id: str, environment_id: str
+) -> dict[str, Any]:
+    settings = get_settings()
+    return fetch_container_metrics_sync(
+        project_id=project_id,
+        environment_id=environment_id,
+        docker_bin=settings.docker_bin,
+        docker_host=settings.docker_host,
     )

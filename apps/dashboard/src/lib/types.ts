@@ -270,3 +270,24 @@ export type EnvironmentWebhookInput = {
   enabled?: boolean;
   rotate_secret?: boolean;
 };
+
+export type ContainerAction = "start" | "stop" | "restart";
+
+export type ContainerActionResult = {
+  container: string;
+  action: ContainerAction;
+  status: RuntimeLogsStatus;
+  ok: boolean;
+  error: string | null;
+};
+
+export type ContainerMetrics = {
+  container: string;
+  status: RuntimeLogsStatus;
+  cpu_percent: string | null;
+  memory_usage: string | null;
+  memory_percent: string | null;
+  started_at: string | null;
+  restart_count: number;
+  error: string | null;
+};
