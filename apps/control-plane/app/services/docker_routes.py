@@ -44,12 +44,12 @@ async def _ensure_dns_and_tls(session: AsyncSession, route: Route, cert: Certifi
     except Exception as exc:
         logger.warning("auto DNS publish skipped for %s: %s", route.hostname, type(exc).__name__)
 
-    if cert.status is CertificateStatus.issued:
+    keys = get_certificate_key_store(settings)
+    if cert.status is CertificateStatus.issued and keys.get(cert.id) is not None:
         return
     try:
         dns01 = get_dns01_provider(settings)
         issuer = get_acme_issuer(dns01, settings)
-        keys = get_certificate_key_store(settings)
         material = await asyncio.to_thread(issuer.issue, route.hostname)
         cert.hostname = route.hostname
         cert.status = CertificateStatus.issued
