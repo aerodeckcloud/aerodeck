@@ -97,10 +97,11 @@ export async function POST(request: Request) {
     }
   }
 
-  let addons: ("postgres" | "redis")[] | undefined;
+  let addons: ("postgres" | "redis" | "mongodb")[] | undefined;
   if (Array.isArray(payload.addons)) {
     const allowed = payload.addons.filter(
-      (item): item is "postgres" | "redis" => item === "postgres" || item === "redis",
+      (item): item is "postgres" | "redis" | "mongodb" =>
+        item === "postgres" || item === "redis" || item === "mongodb",
     );
     if (allowed.length > 0) {
       addons = Array.from(new Set(allowed));

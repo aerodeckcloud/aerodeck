@@ -26,7 +26,7 @@ _SECRET_TOKENS = ("SECRET", "TOKEN", "PASSWORD", "PRIVATE_KEY", "API_KEY", "SIGN
 _GENERATE_TOKENS = ("SECRET_KEY", "SIGNING_KEY", "SESSION_SECRET")
 _PLATFORM_MANAGED_KEYS = frozenset({
     "PORT", "HOST", "AERODECK_PUBLIC_URL", "PUBLIC_URL", "PORTAL_PUBLIC_URL",
-    "DATABASE_URL", "POSTGRES_URL", "REDIS_URL",
+    "DATABASE_URL", "POSTGRES_URL", "REDIS_URL", "MONGODB_URI", "MONGO_URL",
 })
 _PY_ENV_RE = re.compile(r"""os\.(?:getenv|environ\.get)\(\s*['"]([A-Za-z_][A-Za-z0-9_]{1,127})['"]""")
 
@@ -81,6 +81,9 @@ def _detect_compose_addons_and_service(checkout: Path) -> tuple[str | None, str 
             elif "redis" in image and "redis" not in seen_types:
                 addons.append(BlueprintAddon(type="redis", env_var="REDIS_URL", version="7"))
                 seen_types.add("redis")
+            elif "mongo" in image and "mongodb" not in seen_types:
+                addons.append(BlueprintAddon(type="mongodb", env_var="MONGODB_URI", version="7"))
+                seen_types.add("mongodb")
             elif svc_cfg.get("build") is not None and app_service is None:
                 app_service = str(svc_name)
         return name, app_service, addons
@@ -117,7 +120,7 @@ def inspect_checkout_blueprint(checkout: Path, repo_url: str, repo_name: str) ->
         addons = [
             BlueprintAddon.model_validate(item)
             for item in (raw.get("addons") or [])
-            if isinstance(item, dict) and item.get("type") in ("postgres", "redis")
+            if isinstance(item, dict) and item.get("type") in ("postgres", "redis", "mongodb")
         ]
         env_items = [
             BlueprintEnvVar.model_validate(item)
@@ -145,6 +148,9 @@ def inspect_checkout_blueprint(checkout: Path, repo_url: str, repo_name: str) ->
     if any("REDIS" in k.upper() for k in (set(defaults.keys()) | code_keys)):
         if not any(a.type == "redis" for a in addons):
             addons.append(BlueprintAddon(type="redis", env_var="REDIS_URL", version="7"))
+    if any("MONGO" in k.upper() for k in (set(defaults.keys()) | code_keys)):
+        if not any(a.type == "mongodb" for a in addons):
+            addons.append(BlueprintAddon(type="mongodb", env_var="MONGODB_URI", version="7"))
 
     env_vars: list[BlueprintEnvVar] = []
     for key in all_keys:

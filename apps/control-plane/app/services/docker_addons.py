@@ -14,7 +14,7 @@ from app.services.docker_policy import CommandRunner, classify_failure, validate
 from app.services.provisioning import PermanentJobError, TransientJobError
 
 LogSink = Callable[[str], None]
-_ALLOWED_ADDONS = frozenset({"postgres", "redis"})
+_ALLOWED_ADDONS = frozenset({"postgres", "redis", "mongodb"})
 _ADDON_READY_TIMEOUT_SECONDS = 30
 
 
@@ -183,5 +183,40 @@ def provision_environment_addons(
             injected["REDIS_URL"] = redis_url
             if on_log is not None:
                 on_log(f"Attached Redis addon ({cname}:6379) -> injected REDIS_URL.")
+
+        elif addon == "mongodb":
+            if not is_running:
+                if on_log is not None:
+                    on_log(f"Provisioning MongoDB 7 addon container ({cname})...")
+                runner.run([docker_bin, "rm", "-f", cname], env=docker_env, timeout=15)
+                run_res = runner.run(
+                    [
+                        docker_bin, "run", "-d", "--name", cname, "--restart", "unless-stopped",
+                        "--network", net_name, "--network-alias", "mongodb", "--network-alias", "mongo",
+                        "--security-opt", "no-new-privileges:true",
+                        "--memory", "384m", "--cpus", "0.5", "--pids-limit", "256",
+                        "--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
+                        "--label", "aerodeck.managed=true",
+                        "--label", "aerodeck.addon=mongodb",
+                        "--label", f"aerodeck.project_id={project_id}",
+                        "--label", f"aerodeck.environment_id={environment_id}",
+                        "-e", "MONGO_INITDB_ROOT_USERNAME=aerodeck",
+                        "-e", f"MONGO_INITDB_ROOT_PASSWORD={pwd}",
+                        "mongo:7",
+                    ],
+                    env=docker_env,
+                    timeout=120,
+                )
+                if run_res.returncode != 0:
+                    raise classify_failure("docker run mongodb addon", run_res)
+                _wait_for_addon_ready(
+                    runner, docker_bin, docker_env, cname,
+                    ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"],
+                )
+            mongo_url = f"mongodb://aerodeck:{pwd}@{cname}:27017/app?authSource=admin"
+            injected["MONGODB_URI"] = mongo_url
+            injected["MONGO_URL"] = mongo_url
+            if on_log is not None:
+                on_log(f"Attached MongoDB addon ({cname}:27017) -> injected MONGODB_URI.")
 
     return net_name, injected

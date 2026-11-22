@@ -9,12 +9,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.core.github import parse_github_repo
 
-AddonType = Literal["postgres", "redis"]
+AddonType = Literal["postgres", "redis", "mongodb"]
 BuildStrategy = Literal["dockerfile", "compose", "auto"]
 BlueprintSource = Literal["aerodeck.yaml", "docker-compose", "dockerfile", "auto"]
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){0,2}$")
+_ADDON_DEFAULTS: dict[AddonType, tuple[str, str]] = {
+    "postgres": ("DATABASE_URL", "16"),
+    "redis": ("REDIS_URL", "7"),
+    "mongodb": ("MONGODB_URI", "7"),
+}
 
 
 class BlueprintBuild(BaseModel):
@@ -36,10 +41,11 @@ class BlueprintAddon(BaseModel):
 
     @model_validator(mode="after")
     def populate_defaults(self) -> BlueprintAddon:
+        default_env, default_ver = _ADDON_DEFAULTS[self.type]
         if not self.env_var:
-            self.env_var = "DATABASE_URL" if self.type == "postgres" else "REDIS_URL"
+            self.env_var = default_env
         if not self.version:
-            self.version = "16" if self.type == "postgres" else "7"
+            self.version = default_ver
         if not _ENV_KEY_RE.fullmatch(self.env_var):
             raise ValueError(f"invalid addon env_var {self.env_var!r}")
         if not _VERSION_RE.fullmatch(self.version):

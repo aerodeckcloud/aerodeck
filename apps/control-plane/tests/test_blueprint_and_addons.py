@@ -99,17 +99,20 @@ def test_provision_environment_addons_starts_postgres_and_redis_and_injects_urls
         docker_env={},
         project_id=p_id,
         environment_id=e_id,
-        addons=parse_addons_json('["postgres", "redis"]'),
+        addons=parse_addons_json('["postgres", "redis", "mongodb"]'),
         on_log=logs.append,
     )
     assert net_name == tenant_network_name(str(p_id), str(e_id))
     assert "DATABASE_URL" in injected and injected["DATABASE_URL"].startswith("postgresql://aerodeck:")
     assert "REDIS_URL" in injected and injected["REDIS_URL"].startswith("redis://:")
+    assert "MONGODB_URI" in injected and injected["MONGODB_URI"].startswith("mongodb://aerodeck:")
     assert any(c[:3] == ["docker", "network", "create"] for c in calls)
     assert any("postgres:16-alpine" in c for c in calls)
     assert any("redis:7-alpine" in c for c in calls)
+    assert any("mongo:7" in c for c in calls)
     assert any(c[:2] == ["docker", "exec"] and "pg_isready" in c for c in calls)
     assert any(c[:2] == ["docker", "exec"] and "redis-cli" in c for c in calls)
+    assert any(c[:2] == ["docker", "exec"] and "mongosh" in c for c in calls)
 
 
 def test_docker_provisioner_attaches_addons_to_tenant_network() -> None:

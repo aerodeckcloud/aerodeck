@@ -23,9 +23,9 @@ class ProvisionJobCreate(BaseModel):
         default=None,
         description="Optional runtime KEY=VALUE environment overrides for the deployed container (#233).",
     )
-    addons: list[Literal["postgres", "redis"]] | None = Field(
+    addons: list[Literal["postgres", "redis", "mongodb"]] | None = Field(
         default=None,
-        description="Optional containerized database addons to provision and attach (#194, #237).",
+        description="Optional containerized database addons to provision and attach (#194, #237, #242).",
     )
 
     @field_validator("env_vars")

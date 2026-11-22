@@ -89,7 +89,7 @@ export function DeploymentBlueprintFields({
           <Database className="size-4 text-primary" />
           <Label>Database addons (auto-inject credentials)</Label>
         </div>
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-2 sm:grid-cols-3">
           {(
             [
               {
@@ -103,6 +103,12 @@ export function DeploymentBlueprintFields({
                 title: "Redis 7",
                 envVar: "REDIS_URL",
                 subtitle: "Dedicated redis:7-alpine cache/queue",
+              },
+              {
+                type: "mongodb" as const,
+                title: "MongoDB 7",
+                envVar: "MONGODB_URI",
+                subtitle: "Dedicated mongo:7 document database",
               },
             ] as const
           ).map((item) => {

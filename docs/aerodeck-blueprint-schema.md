@@ -78,9 +78,9 @@ env:
 ### `addons[]` Items (`BlueprintAddon`)
 | Field | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `type` | `"postgres" \| "redis"` | *Required* | Database engine to provision on the tenant's isolated Docker network. |
-| `env_var` | `string` | `"DATABASE_URL"` or `"REDIS_URL"` | Environment variable name injected into the application container. |
-| `version` | `string` | `"16"` (Postgres) / `"7"` (Redis) | Container image major version tag (`postgres:<version>-alpine`, `redis:<version>-alpine`). |
+| `type` | `"postgres" \| "redis" \| "mongodb"` | *Required* | Database engine to provision on the tenant's isolated Docker network. |
+| `env_var` | `string` | `"DATABASE_URL"`, `"REDIS_URL"`, or `"MONGODB_URI"` | Environment variable name injected into the application container. |
+| `version` | `string` | `"16"` (Postgres) / `"7"` (Redis & MongoDB) | Container image major version tag (`postgres:<version>-alpine`, `redis:<version>-alpine`, `mongo:<version>`). |
 
 ### `env[]` Items (`BlueprintEnvVar`)
 | Field | Type | Default | Description |
