@@ -2,6 +2,7 @@ import { isControlPlaneUuid } from "./control-plane-uuid";
 import type {
   AcceptedJob,
   AddonType,
+  ContainerRuntimeLogs,
   Deployment,
   DeploymentBlueprint,
   DeploymentStatus,
@@ -16,6 +17,7 @@ import type {
   RouteCertificate,
   RouteCertificateStatus,
   RouteDnsRecord,
+  RuntimeLogsStatus,
   Sandbox,
 } from "./types";
 import {
@@ -537,6 +539,57 @@ export async function openControlPlaneDeploymentLogs(
     );
   }
   return response.body;
+}
+
+const RUNTIME_LOGS_STATUSES = new Set<RuntimeLogsStatus>([
+  "running",
+  "exited",
+  "not_found",
+  "unavailable",
+]);
+
+export async function getControlPlaneDeploymentRuntimeLogs(
+  config: ControlPlaneConfig,
+  deploymentId: string,
+  tail = 200,
+  options: ListOptions = {},
+): Promise<ContainerRuntimeLogs> {
+  if (!isControlPlaneUuid(deploymentId)) {
+    throw new ControlPlaneError("control plane deployment id was not a uuid");
+  }
+  const safeTail = Math.max(1, Math.min(Math.trunc(tail), 500));
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/runtime-logs?tail=${safeTail}`,
+    {
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${accessToken}`,
+      },
+      cache: "no-store",
+    },
+  );
+  if (response.status === 404) {
+    throw new ControlPlaneError("control plane deployment was not found (404)", 404);
+  }
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane deployment runtime logs request failed (${response.status})`,
+      response.status,
+    );
+  }
+  const body = (await response.json()) as Record<string, unknown>;
+  const status = typeof body.status === "string" && RUNTIME_LOGS_STATUSES.has(body.status as RuntimeLogsStatus)
+    ? (body.status as RuntimeLogsStatus)
+    : "unavailable";
+  return {
+    container: typeof body.container === "string" ? body.container : "",
+    status,
+    lines: Array.isArray(body.lines) ? body.lines.filter((line): line is string => typeof line === "string") : [],
+    error: typeof body.error === "string" ? body.error : null,
+  };
 }
 
 async function postDeploymentStatus(

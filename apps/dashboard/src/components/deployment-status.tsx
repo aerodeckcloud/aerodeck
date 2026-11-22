@@ -1,13 +1,15 @@
 "use client";
 
-import { CheckCircle2, Loader2, Rocket, XCircle } from "lucide-react";
-import { useState } from "react";
+import { CheckCircle2, ExternalLink, Loader2, Rocket, XCircle } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { DeploymentEnvironmentLink } from "@/components/deployment-environment-link";
 import { LinkButton } from "@/components/link-button";
 import { ProvisionJobPanel } from "@/components/provision-job-panel";
+import { RuntimeLogsPanel } from "@/components/runtime-logs-panel";
 import { Terminal } from "@/components/terminal";
 import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 import { formatInstant } from "@/lib/format";
 import {
   Card,
@@ -18,6 +20,7 @@ import {
 } from "@/components/ui/card";
 import {
   deploymentLogsUrl,
+  fetchProjectDetail,
   markDeploymentFailed,
   markDeploymentSucceeded,
 } from "@/lib/api";
@@ -71,11 +74,34 @@ function statusBadge(status: DeploymentStatus) {
 
 export function DeploymentStatusView({ deployment, logSource }: DeploymentStatusViewProps) {
   const [status, setStatus] = useState<DeploymentStatus>(deployment.status);
+  const [liveHostname, setLiveHostname] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const environments = useEnvironmentCatalog(
-    logSource === "control-plane" && Boolean(deployment.project_id && deployment.environment_id),
-  );
+  const hasLinkedEnv = Boolean(deployment.project_id && deployment.environment_id);
+  const environments = useEnvironmentCatalog(logSource === "control-plane" && hasLinkedEnv);
   const copy = logSourceCopy(logSource);
+
+  useEffect(() => {
+    if (logSource !== "control-plane" || !deployment.project_id || !deployment.environment_id) {
+      return;
+    }
+    let cancelled = false;
+    void fetchProjectDetail(deployment.project_id)
+      .then((detail) => {
+        if (cancelled) {
+          return;
+        }
+        const match = detail.routes.find(
+          (route) => route.environment_id === deployment.environment_id && route.enabled,
+        );
+        setLiveHostname(match?.hostname ?? null);
+      })
+      .catch(() => {
+        // Non-blocking: live app link is best-effort.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [logSource, deployment.project_id, deployment.environment_id, status]);
 
   function recordOutcome(outcome: TerminalOutcome) {
     if (status === "succeeded" || status === "failed") {
@@ -115,10 +141,23 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
             </span>
           </p>
         </div>
-        <LinkButton href="/deploy" variant="outline">
-          <Rocket data-icon="inline-start" />
-          New deployment
-        </LinkButton>
+        <div className="flex flex-wrap items-center gap-2">
+          {liveHostname ? (
+            <a
+              href={`https://${liveHostname}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={buttonVariants({ variant: "default" })}
+            >
+              Open Live App
+              <ExternalLink data-icon="inline-end" />
+            </a>
+          ) : null}
+          <LinkButton href="/deploy" variant="outline">
+            <Rocket data-icon="inline-start" />
+            New deployment
+          </LinkButton>
+        </div>
       </div>
 
       <Card>
@@ -154,6 +193,20 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
               />
             </div>
           ) : null}
+          {liveHostname ? (
+            <div className="sm:col-span-2">
+              <p className="text-xs text-muted-foreground">Live URL</p>
+              <a
+                href={`https://${liveHostname}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-0.5 inline-flex items-center gap-1 font-mono text-xs text-primary underline-offset-4 hover:underline"
+              >
+                https://{liveHostname}
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -174,6 +227,10 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
         onComplete={() => recordOutcome("succeeded")}
         onFailed={() => recordOutcome("failed")}
       />
+
+      {logSource === "control-plane" && hasLinkedEnv ? (
+        <RuntimeLogsPanel deploymentId={deployment.id} />
+      ) : null}
     </div>
   );
 }

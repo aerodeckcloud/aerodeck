@@ -10,7 +10,7 @@ provision that ended without ``Done``. Neither call touches DigitalOcean.
 import uuid
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -20,6 +20,7 @@ from app.schemas.blueprint import DeploymentBlueprint, DeploymentInspectRequest
 from app.schemas.common import Page
 from app.schemas.deployment import DeploymentCreate, DeploymentRead
 from app.services.blueprint_inspector import inspect_github_repository_sync
+from app.services.container_logs import ContainerLogsRead, dispatch_container_logs
 from app.services.deployment_logs import ensure_log_store_ready, iter_deployment_log_lines
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
@@ -154,4 +155,34 @@ async def stream_deployment_logs(
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.get(
+    "/{deployment_id}/runtime-logs",
+    response_model=ContainerLogsRead,
+    status_code=status.HTTP_200_OK,
+    summary="Fetch recent runtime container logs for a deployment's environment (#247)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED,
+)
+async def get_deployment_runtime_logs(
+    deployment_id: uuid.UUID,
+    deployments: DeploymentServiceDep,
+    settings: SettingsDep,
+    tail: int = Query(default=200, ge=1, le=500),
+) -> ContainerLogsRead:
+    deployment = await deployments.get(deployment_id)
+    if deployment.project_id is None or deployment.environment_id is None:
+        return ContainerLogsRead(
+            container="",
+            status="not_found",
+            lines=[],
+            error="Deployment is not linked to an environment.",
+        )
+    return await run_in_threadpool(
+        dispatch_container_logs,
+        settings,
+        project_id=deployment.project_id,
+        environment_id=deployment.environment_id,
+        tail=tail,
     )

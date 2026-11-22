@@ -227,3 +227,12 @@ export type DeploymentBlueprint = {
   addons: BlueprintAddon[];
   env: BlueprintEnvVar[];
 };
+
+export type RuntimeLogsStatus = "running" | "exited" | "not_found" | "unavailable";
+
+export type ContainerRuntimeLogs = {
+  container: string;
+  status: RuntimeLogsStatus;
+  lines: string[];
+  error: string | null;
+};
