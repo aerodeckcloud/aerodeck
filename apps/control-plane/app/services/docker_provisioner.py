@@ -54,6 +54,12 @@ _SAFE_RUNTIME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _SAFE_DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
 _MAX_LOG_LINE_LEN = 400
 _MAX_ERROR_TAIL_LEN = 2000
+_MAX_DOCKERFILE_BYTES = 64 * 1024
+_FORBIDDEN_DOCKERFILE_PATTERNS = (
+    "--mount=type=ssh",
+    "--network=host",
+    "--security-opt",
+)
 _TRANSIENT_MARKERS = (
     "could not resolve host",
     "temporary failure",
@@ -169,6 +175,39 @@ def _validate_runtime(runtime: str | None) -> str | None:
     return stripped
 
 
+def _validate_network(network: str) -> str:
+    stripped = network.strip()
+    if (
+        not stripped
+        or not _SAFE_RUNTIME_RE.fullmatch(stripped)
+        or stripped.lower() == "host"
+        or stripped.lower().startswith("container:")
+    ):
+        raise PermanentJobError("unsafe docker_network; host networking is forbidden for tenant containers")
+    return stripped
+
+
+def _validate_dockerfile(checkout: Path, owner: str, repo: str) -> Path:
+    """Ensure root Dockerfile exists, is not a symlink escaping checkout, and uses no forbidden flags."""
+    dockerfile = checkout / "Dockerfile"
+    if dockerfile.is_symlink():
+        raise PermanentJobError(f"Repository {owner}/{repo} Dockerfile must not be a symlink")
+    if not dockerfile.is_file():
+        raise PermanentJobError(f"Repository {owner}/{repo} does not contain a root Dockerfile")
+    if dockerfile.resolve().parent != checkout.resolve():
+        raise PermanentJobError(f"Repository {owner}/{repo} Dockerfile path escapes checkout directory")
+    size = dockerfile.stat().st_size
+    if size > _MAX_DOCKERFILE_BYTES:
+        raise PermanentJobError(f"Repository {owner}/{repo} Dockerfile exceeds 64 KiB limit")
+    content = dockerfile.read_text(encoding="utf-8", errors="replace").lower()
+    for forbidden in _FORBIDDEN_DOCKERFILE_PATTERNS:
+        if forbidden in content:
+            raise PermanentJobError(
+                f"Repository {owner}/{repo} Dockerfile contains forbidden directive {forbidden!r}"
+            )
+    return dockerfile
+
+
 def _slug_prefix(value: str, fallback: str) -> str:
     lowered = _SAFE_SEGMENT_RE.sub("-", value.lower()).strip("-")
     return (lowered or fallback)[:16].strip("-") or fallback
@@ -257,6 +296,7 @@ class DockerProvisioner:
     runner: CommandRunner
     docker_host: str | None = None
     docker_runtime: str | None = None
+    docker_network: str = "bridge"
     allowed_owners: tuple[str, ...] = ()
     health_timeout_seconds: int = 30
     route_base_domain: str | None = None
@@ -287,6 +327,7 @@ class DockerProvisioner:
             runner=runner or SubprocessCommandRunner(),
             docker_host=settings.docker_host,
             docker_runtime=_validate_runtime(settings.docker_runtime),
+            docker_network=_validate_network(settings.docker_network),
             allowed_owners=tuple(o.strip().lower() for o in settings.docker_allowed_owners if o.strip()),
             health_timeout_seconds=settings.docker_health_timeout_seconds,
             route_base_domain=settings.docker_route_base_domain,
@@ -332,6 +373,7 @@ class DockerProvisioner:
         docker_bin = _validate_binary(self.docker_bin, "docker_bin")
         git_bin = _validate_binary(self.git_bin, "git_bin")
         runtime = _validate_runtime(self.docker_runtime)
+        network = _validate_network(self.docker_network)
 
         def emit(msg: str) -> None:
             if on_log is not None:
@@ -349,11 +391,7 @@ class DockerProvisioner:
             if clone_res.returncode != 0:
                 raise _classify_failure("git clone", clone_res)
 
-            dockerfile = checkout / "Dockerfile"
-            if not dockerfile.is_file():
-                raise PermanentJobError(
-                    f"Repository {owner}/{repo} does not contain a root Dockerfile"
-                )
+            _validate_dockerfile(checkout, owner, repo)
 
             emit(f"Building Docker image {tag}...")
             build_res = self.runner.run(
@@ -378,6 +416,8 @@ class DockerProvisioner:
             candidate,
             "--restart",
             "unless-stopped",
+            "--network",
+            network,
             "--cap-drop=ALL",
             "--security-opt",
             "no-new-privileges:true",
@@ -387,6 +427,12 @@ class DockerProvisioner:
             self.cpus_limit,
             "--pids-limit",
             str(self.pids_limit),
+            "--log-driver",
+            "json-file",
+            "--log-opt",
+            "max-size=10m",
+            "--log-opt",
+            "max-file=3",
             "--label",
             "aerodeck.managed=true",
             "--label",

@@ -57,7 +57,10 @@ reconcile_control_plane() {
     return 0
   fi
 
-  echo "control-plane digest changed (${prev_id:-none} -> ${new_id}); restarting API + worker"
+  echo "control-plane digest changed (${prev_id:-none} -> ${new_id}); syncing scripts and restarting API + worker"
+  mkdir -p "${SCRIPT_DIR}"
+  docker run --rm --entrypoint tar "${CP_IMAGE}" -C /app/scripts -cf - . | tar -C "${SCRIPT_DIR}" -xf - || true
+  chmod +x "${SCRIPT_DIR}"/*.sh 2>/dev/null || true
   if bash "${SCRIPT_DIR}/start-on-droplet.sh" && curl -fsS --max-time 5 http://127.0.0.1:8000/readyz >/dev/null; then
     echo "control-plane updated and ready"
     return 0

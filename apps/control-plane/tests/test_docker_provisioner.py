@@ -135,7 +135,9 @@ def test_provision_clones_builds_runs_and_streams_logs() -> None:
     assert runner.envs[0] is not None and runner.envs[0]["GIT_TERMINAL_PROMPT"] == "0"
 
     run_cmd = runner.calls[2]
+    assert "--network" in run_cmd and "bridge" in run_cmd
     assert "--cap-drop=ALL" in run_cmd
+    assert "--log-opt" in run_cmd and "max-size=10m" in run_cmd
     assert "--memory" in run_cmd and "512m" in run_cmd
     assert "--cpus" in run_cmd and "0.5" in run_cmd
     assert "--pids-limit" in run_cmd and "256" in run_cmd
@@ -332,3 +334,40 @@ def test_select_provisioner_respects_backend_setting() -> None:
     assert select_provisioner(Settings(**base_kwargs)) is None
     docker_prov = select_provisioner(Settings(**base_kwargs, provisioner_backend="docker"))
     assert isinstance(docker_prov, DockerProvisioner)
+
+
+def test_provision_rejects_host_network_and_forbidden_dockerfile_directives() -> None:
+    base_kwargs = {"auth_signing_key": "a" * 32}
+    with pytest.raises(PermanentJobError, match="host networking is forbidden"):
+        DockerProvisioner.from_settings(
+            Settings(**base_kwargs, provisioner_backend="docker", docker_network="host")
+        )
+
+    class EvilDockerfileRunner(FakeCommandRunner):
+        def run(
+            self,
+            args: list[str],
+            *,
+            cwd: Path | None = None,
+            env: dict[str, str] | None = None,
+            timeout: int = 600,
+            on_line: LogSink | None = None,
+        ) -> CommandResult:
+            res = super().run(args, cwd=cwd, env=env, timeout=timeout, on_line=on_line)
+            if args[:2] == ["git", "clone"]:
+                target = Path(args[-1])
+                (target / "Dockerfile").write_text(
+                    "FROM alpine:3.20\nRUN --mount=type=ssh cat /root/.ssh/id_rsa\n",
+                    encoding="utf-8",
+                )
+            return res
+
+    runner = EvilDockerfileRunner()
+    provisioner = _make_provisioner(runner)
+    with pytest.raises(PermanentJobError, match="forbidden directive"):
+        provisioner.provision(
+            project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+            environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+            repo_url="https://github.com/mangatohjunior/evil-dockerfile",
+        )
+    assert [c[:2] for c in runner.calls] == [["git", "clone"]]

@@ -149,6 +149,12 @@ if [[ "${ENABLE}" == "true" ]]; then
   fi
 fi
 
+AERODECK_PROVISIONER_BACKEND="${AERODECK_PROVISIONER_BACKEND:-docker}"
+if [[ -z "${AERODECK_DOCKER_BIND_HOST:-}" ]]; then
+  PRIVATE_VPC_IP="$(ip -4 addr show 2>/dev/null | awk '/inet 10\./ {sub(/\/.*/, "", $2); print $2; exit}' || true)"
+  AERODECK_DOCKER_BIND_HOST="${PRIVATE_VPC_IP:-127.0.0.1}"
+fi
+AERODECK_DOCKER_ROUTE_BASE_DOMAIN="${AERODECK_DOCKER_ROUTE_BASE_DOMAIN:-dev.app.aero-deck.app}"
 AERODECK_IAC_WORKER="${ENABLE}"
 AERODECK_IAC_APPLY="${APPLY}"
 if [[ -n "${SPACES_ACCESS_ID}" ]]; then
