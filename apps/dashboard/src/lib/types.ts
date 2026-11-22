@@ -192,3 +192,38 @@ export type DeployLogEvent = {
   delayMs: number;
   text: string;
 };
+
+export type AddonType = "postgres" | "redis";
+
+export type BlueprintEnvVar = {
+  key: string;
+  description: string;
+  required: boolean;
+  secret: boolean;
+  default: string | null;
+  generate: "hex32" | null;
+};
+
+export type BlueprintAddon = {
+  type: AddonType;
+  env_var: string;
+  version: string;
+};
+
+export type BlueprintBuild = {
+  strategy: "dockerfile" | "compose" | "auto";
+  dockerfile: string;
+  compose_file: string | null;
+  service: string | null;
+  port: number;
+};
+
+export type DeploymentBlueprint = {
+  version: number;
+  name: string;
+  repo_url: string;
+  source: string;
+  build: BlueprintBuild;
+  addons: BlueprintAddon[];
+  env: BlueprintEnvVar[];
+};

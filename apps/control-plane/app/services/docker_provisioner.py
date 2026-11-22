@@ -17,6 +17,7 @@ from app.services.docker_policy import (
     find_available_port, image_tag_for, route_hostname_for, validate_binary, validate_dockerfile,
     validate_network, validate_runtime, validate_uuid, wait_for_tcp_health,
 )
+from app.services.docker_addons import parse_addons_json, provision_environment_addons
 from app.services.docker_env_discovery import build_docker_run_command, ensure_default_docker_config
 from app.services.docker_routes import upsert_environment_route_sync
 from app.services.dockerfile_detector import (
@@ -30,16 +31,12 @@ __all__ = [
     "RouteRegistrar", "SubprocessCommandRunner", "container_name_for", "find_available_port", "image_tag_for",
     "route_hostname_for", "wait_for_tcp_health",
 ]
-
 PortAllocator = Callable[[str, int, int], int]
 HealthChecker = Callable[[str, int, int], bool]
 
 
 class RouteRegistrar(Protocol):
-    def __call__(
-        self, *, project_id: uuid.UUID, environment_id: uuid.UUID, hostname: str,
-        backend_host: str, backend_port: int,
-    ) -> None: ...
+    def __call__(self, *, project_id: uuid.UUID, environment_id: uuid.UUID, hostname: str, backend_host: str, backend_port: int) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,30 +87,24 @@ class DockerProvisioner:
     def provision(
         self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",
         environment_kind: str = "dev", region: str = "ams3", repo_url: str = "", env_vars_json: str = "",
-        on_log: LogSink | None = None,
+        addons_json: str = "", on_log: LogSink | None = None,
     ) -> JobOutcome:
         _ = (environment_kind, region)
-        p_uuid = validate_uuid(project_id, "project_id")
-        e_uuid = validate_uuid(environment_id, "environment_id")
+        p_uuid, e_uuid = validate_uuid(project_id, "project_id"), validate_uuid(environment_id, "environment_id")
         parsed = parse_github_repo(repo_url)
         if parsed is None:
             raise PermanentJobError("A valid GitHub repo_url is required for Docker provisioning")
         owner, repo = parsed
         if self.allowed_owners and owner.lower() not in self.allowed_owners:
             raise PermanentJobError(f"Repository owner {owner!r} is not in AERODECK_DOCKER_ALLOWED_OWNERS")
-        clone_url = f"{canonical_github_repo_url(owner, repo)}.git"
-        cname = container_name_for(str(p_uuid), str(e_uuid))
-        tag = image_tag_for(project_slug, environment_slug, str(p_uuid), str(e_uuid))
+        clone_url, cname, tag = f"{canonical_github_repo_url(owner, repo)}.git", container_name_for(str(p_uuid), str(e_uuid)), image_tag_for(project_slug, environment_slug, str(p_uuid), str(e_uuid))
         docker_bin, git_bin = validate_binary(self.docker_bin, "docker_bin"), validate_binary(self.git_bin, "git_bin")
-        runtime, network = validate_runtime(self.docker_runtime), validate_network(self.docker_network)
-
-        def emit(msg: str) -> None:
-            if on_log is not None:
-                on_log(msg)
-
-        route_hostname = (
-            route_hostname_for(project_slug, environment_slug, str(p_uuid), str(e_uuid), self.route_base_domain)
-            if self.route_base_domain and self.route_registrar is not None else None
+        runtime, network, docker_env = validate_runtime(self.docker_runtime), validate_network(self.docker_network), self._docker_env()
+        emit = on_log or (lambda _m: None)
+        route_hostname = route_hostname_for(project_slug, environment_slug, str(p_uuid), str(e_uuid), self.route_base_domain) if self.route_base_domain and self.route_registrar is not None else None
+        addon_net, addon_env = provision_environment_addons(
+            runner=self.runner, docker_bin=docker_bin, docker_env=docker_env,
+            project_id=p_uuid, environment_id=e_uuid, addons=parse_addons_json(addons_json), on_log=on_log,
         )
         with tempfile.TemporaryDirectory(prefix="aerodeck-build-") as tmp:
             checkout = Path(tmp) / "repo"
@@ -126,7 +117,7 @@ class DockerProvisioner:
                 raise classify_failure("git clone", clone_res)
             df = ensure_dockerfile(checkout, owner, repo, container_port=self.container_port, on_log=on_log)
             target_port = detect_exposed_port(df, default_port=self.container_port)
-            env_file = build_runtime_env_file(checkout, target_port, f"https://{route_hostname}" if route_hostname else None, on_log, env_vars_json)
+            env_file = build_runtime_env_file(checkout, target_port, f"https://{route_hostname}" if route_hostname else None, on_log, env_vars_json, addon_env)
             emit(f"Building Docker image {tag}...")
             build_res = self.runner.run(
                 [docker_bin, "build", "--progress=plain", "--build-arg", "BUILDKIT_INLINE_CACHE=1", "--cache-from", tag, "--tag", tag, str(checkout)],
@@ -136,10 +127,9 @@ class DockerProvisioner:
                 env_file.unlink(missing_ok=True)
                 raise classify_failure("docker build", build_res)
 
-        docker_env, host_port = self._docker_env(), self.port_allocator(self.bind_host, self.port_range_start, self.port_range_end)
-        candidate = f"{cname}-new-{uuid.uuid4().hex[:6]}"
+        host_port, candidate = self.port_allocator(self.bind_host, self.port_range_start, self.port_range_end), f"{cname}-new-{uuid.uuid4().hex[:6]}"
         run_cmd = build_docker_run_command(
-            docker_bin=docker_bin, candidate=candidate, network=network, memory_limit=self.memory_limit,
+            docker_bin=docker_bin, candidate=candidate, network=addon_net or network, memory_limit=self.memory_limit,
             cpus_limit=self.cpus_limit, pids_limit=self.pids_limit, project_id=p_uuid, environment_id=e_uuid,
             env_file=env_file, bind_host=self.bind_host, host_port=host_port, target_port=target_port, runtime=runtime, tag=tag,
         )
@@ -169,10 +159,7 @@ class DockerProvisioner:
         if route_hostname and self.route_registrar is not None:
             emit(f"Registering Traefik route https://{route_hostname} -> {self.bind_host}:{host_port}...")
             try:
-                self.route_registrar(
-                    project_id=p_uuid, environment_id=e_uuid, hostname=route_hostname,
-                    backend_host=self.bind_host, backend_port=host_port,
-                )
+                self.route_registrar(project_id=p_uuid, environment_id=e_uuid, hostname=route_hostname, backend_host=self.bind_host, backend_port=host_port)
             except Exception:
                 self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)
                 raise
@@ -181,14 +168,9 @@ class DockerProvisioner:
         rename_res = self.runner.run([docker_bin, "rename", candidate, cname], env=docker_env, timeout=30)
         if rename_res.returncode != 0:
             raise classify_failure("docker rename", rename_res)
-
-        if route_hostname:
-            emit(f"Container {cname} live at https://{route_hostname} ({self.bind_host}:{host_port}).")
-            detail = f"deployed {tag} as {cname} at https://{route_hostname} ({self.bind_host}:{host_port})"
-        else:
-            emit(f"Container {cname} running on {self.bind_host}:{host_port}.")
-            detail = f"deployed {tag} as {cname} on {self.bind_host}:{host_port}"
-        return JobOutcome(kind=JobKind.provision, project_id=str(p_uuid), environment_id=str(e_uuid), changed=True, detail=detail)
+        loc = f"at https://{route_hostname} ({self.bind_host}:{host_port})" if route_hostname else f"on {self.bind_host}:{host_port}"
+        emit(f"Container {cname} {'live ' if route_hostname else 'running '}{loc}.")
+        return JobOutcome(kind=JobKind.provision, project_id=str(p_uuid), environment_id=str(e_uuid), changed=True, detail=f"deployed {tag} as {cname} {loc}")
 
     def reconcile(
         self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",

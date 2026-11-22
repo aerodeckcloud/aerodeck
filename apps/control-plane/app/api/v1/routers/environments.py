@@ -95,9 +95,10 @@ async def _enqueue(
     *,
     deployment_id: uuid.UUID | None = None,
     env_vars: dict[str, str] | None = None,
+    addons: list[str] | None = None,
 ) -> JobAccepted:
     ticket = await jobs.enqueue(
-        kind, project_id, environment_id, deployment_id=deployment_id, env_vars=env_vars
+        kind, project_id, environment_id, deployment_id=deployment_id, env_vars=env_vars, addons=addons
     )
     return JobAccepted(
         job_id=uuid.UUID(ticket.job_id),
@@ -127,8 +128,15 @@ async def provision_environment(
 ) -> JobAccepted:
     deployment_id = body.deployment_id if body is not None else None
     env_vars = body.env_vars if body is not None else None
+    addons = list(body.addons) if body is not None and body.addons else None
     return await _enqueue(
-        JobKind.provision, project_id, environment_id, jobs, deployment_id=deployment_id, env_vars=env_vars
+        JobKind.provision,
+        project_id,
+        environment_id,
+        jobs,
+        deployment_id=deployment_id,
+        env_vars=env_vars,
+        addons=addons,
     )
 
 

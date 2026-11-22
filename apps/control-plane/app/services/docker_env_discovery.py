@@ -127,8 +127,9 @@ def parse_env_vars_json(raw: str | None) -> dict[str, str] | None:
 def build_runtime_env_file(
     checkout: Path, target_port: int, public_url: str | None = None,
     on_log: LogSink | None = None, user_env: dict[str, str] | str | None = None,
+    addon_env: dict[str, str] | None = None,
 ) -> Path:
-    """Discover repo env defaults, merge platform + operator variables, and write a ``0600`` ``--env-file`` (#231, #233)."""
+    """Discover repo env defaults, merge platform + addon + operator variables, and write a ``0600`` ``--env-file``."""
     env_vars = discover_repo_env_defaults(checkout)
     if env_vars and on_log is not None:
         keys = ", ".join(sorted(env_vars.keys()))
@@ -139,6 +140,8 @@ def build_runtime_env_file(
         env_vars["AERODECK_PUBLIC_URL"] = public_url
         env_vars.setdefault("PUBLIC_URL", public_url)
         env_vars["PORTAL_PUBLIC_URL"] = public_url
+    if addon_env:
+        env_vars.update(addon_env)
     resolved_user_env = parse_env_vars_json(user_env) if isinstance(user_env, str) else user_env
     if resolved_user_env:
         applied: list[str] = []

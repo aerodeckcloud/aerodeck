@@ -52,6 +52,7 @@ export async function POST(request: Request) {
     project_id?: unknown;
     environment_id?: unknown;
     env_vars?: unknown;
+    addons?: unknown;
   };
   try {
     payload = (await request.json()) as {
@@ -59,6 +60,7 @@ export async function POST(request: Request) {
       project_id?: unknown;
       environment_id?: unknown;
       env_vars?: unknown;
+      addons?: unknown;
     };
   } catch {
     return jsonError(400, "Request body must be JSON.", "invalid_json");
@@ -95,12 +97,23 @@ export async function POST(request: Request) {
     }
   }
 
+  let addons: ("postgres" | "redis")[] | undefined;
+  if (Array.isArray(payload.addons)) {
+    const allowed = payload.addons.filter(
+      (item): item is "postgres" | "redis" => item === "postgres" || item === "redis",
+    );
+    if (allowed.length > 0) {
+      addons = Array.from(new Set(allowed));
+    }
+  }
+
   try {
     const deployment = await createControlPlaneDeploymentAndProvision(config, {
       repoUrl: payload.repo_url,
       projectId,
       environmentId,
       envVars,
+      addons,
     });
     return NextResponse.json(deployment, { status: 201 });
   } catch (cause) {
