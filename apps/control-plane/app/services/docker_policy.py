@@ -104,6 +104,7 @@ def classify_failure(step: str, result: CommandResult) -> PermanentJobError | Tr
 _SAFE_SEGMENT_RE = re.compile(r"[^a-z0-9-]+")
 _SAFE_BIN_RE = re.compile(r"^[A-Za-z0-9_./:-]+$")
 _SAFE_RUNTIME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_SAFE_GIT_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 _SAFE_DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
 _MAX_DOCKERFILE_BYTES = 64 * 1024
 _FORBIDDEN_DOCKERFILE_PATTERNS = (
@@ -124,6 +125,17 @@ def validate_binary(binary: str, label: str) -> str:
     if not binary or not _SAFE_BIN_RE.fullmatch(binary):
         raise PermanentJobError(f"unsafe executable path for {label}")
     return binary
+
+
+def validate_git_ref(git_ref: str | None) -> str | None:
+    if not git_ref:
+        return None
+    cleaned = git_ref.strip()
+    if not cleaned:
+        return None
+    if ".." in cleaned or cleaned.endswith("/") or not _SAFE_GIT_REF_RE.fullmatch(cleaned):
+        raise PermanentJobError("invalid git_ref branch name")
+    return cleaned
 
 
 def validate_runtime(runtime: str | None) -> str | None:

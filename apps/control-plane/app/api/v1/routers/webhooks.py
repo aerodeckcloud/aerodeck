@@ -1,4 +1,4 @@
-"""Public GitHub webhook receiver verified via X-Hub-Signature-256 (#249)."""
+"""Public GitHub webhook receiver verified via X-Hub-Signature-256 (#249, #258)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
     "/github",
     response_model=WebhookDeliveryResult,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Receive GitHub push webhooks for automatic blue/green redeploys (#249)",
+    summary="Receive GitHub push and pull_request webhooks (#249, #258)",
     responses={
         status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
         status.HTTP_413_CONTENT_TOO_LARGE: {"model": ErrorResponse},
@@ -35,7 +35,7 @@ async def receive_github_webhook(
     x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
     x_github_delivery: str | None = Header(default=None, alias="X-GitHub-Delivery"),
 ) -> WebhookDeliveryResult:
-    """Validate rate limit, payload size, and HMAC-SHA256 signature, then dispatch redeploys."""
+    """Validate rate limit, payload size, and HMAC-SHA256 signature, then dispatch."""
     client_ip = request.client.host if request.client else "unknown"
     await enforce_webhook_rate_limit(client_ip, settings.redis_url)
 
