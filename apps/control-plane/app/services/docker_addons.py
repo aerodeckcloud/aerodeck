@@ -127,6 +127,7 @@ def provision_environment_addons(
                         "--network", net_name, "--network-alias", "postgres",
                         "--security-opt", "no-new-privileges:true",
                         "--memory", "256m", "--cpus", "0.5", "--pids-limit", "128",
+                        "--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
                         "--label", "aerodeck.managed=true",
                         "--label", "aerodeck.addon=postgres",
                         "--label", f"aerodeck.project_id={project_id}",
@@ -160,8 +161,9 @@ def provision_environment_addons(
                     [
                         docker_bin, "run", "-d", "--name", cname, "--restart", "unless-stopped",
                         "--network", net_name, "--network-alias", "redis",
-                        "--security-opt", "no-new-privileges:true",
+                        "--cap-drop=ALL", "--security-opt", "no-new-privileges:true",
                         "--memory", "128m", "--cpus", "0.25", "--pids-limit", "64",
+                        "--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
                         "--label", "aerodeck.managed=true",
                         "--label", "aerodeck.addon=redis",
                         "--label", f"aerodeck.project_id={project_id}",

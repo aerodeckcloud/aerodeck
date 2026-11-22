@@ -195,12 +195,19 @@ def inspect_github_repository_sync(
     owner, repo = parsed
     safe_git = validate_binary(git_bin, "git_bin")
     canonical = canonical_github_repo_url(owner, repo)
+    if not canonical.startswith("https://github.com/"):
+        raise ValueError("only https://github.com repositories may be inspected")
     clone_url = f"{canonical}.git"
     cmd_runner = runner or SubprocessCommandRunner()
     with tempfile.TemporaryDirectory(prefix="aerodeck-inspect-") as tmp:
         checkout = Path(tmp) / "repo"
         res = cmd_runner.run(
-            [safe_git, "clone", "--depth=1", "--single-branch", "--", clone_url, str(checkout)],
+            [
+                safe_git,
+                "-c", "protocol.allow=never",
+                "-c", "protocol.https.allow=always",
+                "clone", "--depth=1", "--single-branch", "--", clone_url, str(checkout),
+            ],
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
             timeout=45,
         )

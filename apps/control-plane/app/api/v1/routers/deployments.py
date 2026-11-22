@@ -61,13 +61,20 @@ async def inspect_deployment_repository(
     client: ClientDep,
     settings: SettingsDep,
 ) -> DeploymentBlueprint:
-    _ = client
+    # Authenticated via ClientDep (enrolled control-plane caller required).
+    if not client:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
     try:
         return await run_in_threadpool(
             inspect_github_repository_sync,
             body.repo_url,
             git_bin=settings.git_bin,
         )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
