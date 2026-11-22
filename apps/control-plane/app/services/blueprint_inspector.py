@@ -26,7 +26,7 @@ _SECRET_TOKENS = ("SECRET", "TOKEN", "PASSWORD", "PRIVATE_KEY", "API_KEY", "SIGN
 _GENERATE_TOKENS = ("SECRET_KEY", "SIGNING_KEY", "SESSION_SECRET")
 _PLATFORM_MANAGED_KEYS = frozenset({
     "PORT", "HOST", "AERODECK_PUBLIC_URL", "PUBLIC_URL", "PORTAL_PUBLIC_URL",
-    "DATABASE_URL", "REDIS_URL",
+    "DATABASE_URL", "POSTGRES_URL", "REDIS_URL",
 })
 _PY_ENV_RE = re.compile(r"""os\.(?:getenv|environ\.get)\(\s*['"]([A-Za-z_][A-Za-z0-9_]{1,127})['"]""")
 

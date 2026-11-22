@@ -4,14 +4,34 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 import uuid
 from collections.abc import Callable
 
 from app.services.docker_policy import CommandRunner, classify_failure, validate_uuid
-from app.services.provisioning import PermanentJobError
+from app.services.provisioning import PermanentJobError, TransientJobError
 
 LogSink = Callable[[str], None]
 _ALLOWED_ADDONS = frozenset({"postgres", "redis"})
+_ADDON_READY_TIMEOUT_SECONDS = 30
+
+
+def _wait_for_addon_ready(
+    runner: CommandRunner,
+    docker_bin: str,
+    docker_env: dict[str, str],
+    cname: str,
+    probe_cmd: list[str],
+    timeout_seconds: int = _ADDON_READY_TIMEOUT_SECONDS,
+) -> None:
+    """Wait until the addon container accepts connections before booting the app container (#237)."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        res = runner.run([docker_bin, "exec", cname, *probe_cmd], env=docker_env, timeout=10)
+        if res.returncode == 0:
+            return
+        time.sleep(0.5)
+    raise TransientJobError(f"addon container {cname} did not become ready within {timeout_seconds}s")
 
 
 def parse_addons_json(raw: str | None) -> list[str]:
@@ -111,6 +131,10 @@ def provision_environment_addons(
                 )
                 if run_res.returncode != 0:
                     raise classify_failure("docker run postgres addon", run_res)
+                _wait_for_addon_ready(
+                    runner, docker_bin, docker_env, cname,
+                    ["pg_isready", "-U", "aerodeck", "-d", "app"],
+                )
             db_url = f"postgresql://aerodeck:{pwd}@{cname}:5432/app"
             injected["DATABASE_URL"] = db_url
             injected["POSTGRES_URL"] = db_url
@@ -139,6 +163,10 @@ def provision_environment_addons(
                 )
                 if run_res.returncode != 0:
                     raise classify_failure("docker run redis addon", run_res)
+                _wait_for_addon_ready(
+                    runner, docker_bin, docker_env, cname,
+                    ["redis-cli", "-a", pwd, "ping"],
+                )
             redis_url = f"redis://:{pwd}@{cname}:6379/0"
             injected["REDIS_URL"] = redis_url
             if on_log is not None:

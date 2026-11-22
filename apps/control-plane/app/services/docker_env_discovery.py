@@ -140,8 +140,6 @@ def build_runtime_env_file(
         env_vars["AERODECK_PUBLIC_URL"] = public_url
         env_vars.setdefault("PUBLIC_URL", public_url)
         env_vars["PORTAL_PUBLIC_URL"] = public_url
-    if addon_env:
-        env_vars.update(addon_env)
     resolved_user_env = parse_env_vars_json(user_env) if isinstance(user_env, str) else user_env
     if resolved_user_env:
         applied: list[str] = []
@@ -153,6 +151,8 @@ def build_runtime_env_file(
                 applied.append(k)
         if applied and on_log is not None:
             on_log(f"Applied {len(applied)} operator-supplied env variable(s) ({', '.join(sorted(applied))}).")
+    if addon_env:
+        env_vars.update(addon_env)
     return write_secure_env_file(env_vars)
 
 

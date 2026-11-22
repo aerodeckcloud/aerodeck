@@ -108,6 +108,8 @@ def test_provision_environment_addons_starts_postgres_and_redis_and_injects_urls
     assert any(c[:3] == ["docker", "network", "create"] for c in calls)
     assert any("postgres:16-alpine" in c for c in calls)
     assert any("redis:7-alpine" in c for c in calls)
+    assert any(c[:2] == ["docker", "exec"] and "pg_isready" in c for c in calls)
+    assert any(c[:2] == ["docker", "exec"] and "redis-cli" in c for c in calls)
 
 
 def test_docker_provisioner_attaches_addons_to_tenant_network() -> None:

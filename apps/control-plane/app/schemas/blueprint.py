@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.github import parse_github_repo
 
@@ -33,11 +33,13 @@ class BlueprintAddon(BaseModel):
     env_var: str = ""
     version: str = ""
 
-    def model_post_init(self, __context: object) -> None:
+    @model_validator(mode="after")
+    def populate_defaults(self) -> BlueprintAddon:
         if not self.env_var:
-            object.__setattr__(self, "env_var", "DATABASE_URL" if self.type == "postgres" else "REDIS_URL")
+            self.env_var = "DATABASE_URL" if self.type == "postgres" else "REDIS_URL"
         if not self.version:
-            object.__setattr__(self, "version", "16" if self.type == "postgres" else "7")
+            self.version = "16" if self.type == "postgres" else "7"
+        return self
 
 
 class BlueprintEnvVar(BaseModel):

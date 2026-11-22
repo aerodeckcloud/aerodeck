@@ -187,6 +187,8 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
                   setRepoUrl(value);
                   if (blueprint) {
                     setBlueprint(null);
+                    setFieldValues({});
+                    setSelectedAddons([]);
                   }
                   if (repoInvalid) {
                     setRepoInvalid(false);
