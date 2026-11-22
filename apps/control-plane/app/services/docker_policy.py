@@ -4,11 +4,102 @@ from __future__ import annotations
 
 import re
 import socket
+import subprocess
 import time
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from app.services.provisioning import PermanentJobError, TransientJobError
+
+LogSink = Callable[[str], None]
+_MAX_LOG_LINE_LEN = 400
+_MAX_ERROR_TAIL_LEN = 2000
+_TRANSIENT_MARKERS = (
+    "could not resolve host",
+    "temporary failure",
+    "connection reset",
+    "timed out",
+    "toomanyrequests",
+    "429 too many requests",
+    "cannot connect to the docker daemon",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CommandResult:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+class CommandRunner(Protocol):
+    def run(
+        self,
+        args: list[str],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        timeout: int = 600,
+        on_line: LogSink | None = None,
+    ) -> CommandResult: ...
+
+
+class SubprocessCommandRunner:
+    """Execute commands without a shell, optionally streaming merged output lines."""
+
+    def run(
+        self,
+        args: list[str],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        timeout: int = 600,
+        on_line: LogSink | None = None,
+    ) -> CommandResult:
+        try:
+            if on_line is None:
+                completed = subprocess.run(
+                    args, cwd=cwd, env=env, check=False, capture_output=True, text=True, timeout=timeout
+                )
+                return CommandResult(completed.returncode, completed.stdout, completed.stderr)
+
+            collected: list[str] = []
+            proc = subprocess.Popen(
+                args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+            )
+            try:
+                assert proc.stdout is not None
+                for raw_line in proc.stdout:
+                    line = raw_line.rstrip("\r\n")
+                    collected.append(line)
+                    if line:
+                        on_line(sanitize_log_line(line))
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired as exc:
+                proc.kill()
+                proc.wait()
+                raise TransientJobError(f"command timed out after {timeout}s: {args[0]}") from exc
+            return CommandResult(proc.returncode, "\n".join(collected), "")
+        except subprocess.TimeoutExpired as exc:
+            raise TransientJobError(f"command timed out after {timeout}s: {args[0]}") from exc
+        except OSError as exc:
+            raise PermanentJobError(f"failed to execute {args[0]}: {exc}") from exc
+
+
+def sanitize_log_line(line: str) -> str:
+    cleaned = line.replace("\x00", "").strip()
+    return f"{cleaned[:_MAX_LOG_LINE_LEN]}..." if len(cleaned) > _MAX_LOG_LINE_LEN else cleaned
+
+
+def classify_failure(step: str, result: CommandResult) -> PermanentJobError | TransientJobError:
+    blob = f"{result.stdout}\n{result.stderr}".strip()
+    tail = blob[-_MAX_ERROR_TAIL_LEN:] if len(blob) > _MAX_ERROR_TAIL_LEN else blob
+    if any(marker in tail.lower() for marker in _TRANSIENT_MARKERS):
+        return TransientJobError(f"{step} failed (exit {result.returncode}): {tail}")
+    return PermanentJobError(f"{step} failed (exit {result.returncode}): {tail}")
 
 _SAFE_SEGMENT_RE = re.compile(r"[^a-z0-9-]+")
 _SAFE_BIN_RE = re.compile(r"^[A-Za-z0-9_./:-]+$")

@@ -246,23 +246,11 @@ def test_provision_enforces_owner_allowlist_and_passes_runtime_and_docker_host()
 def test_provision_rolls_back_candidate_when_health_check_fails() -> None:
     runner = FakeCommandRunner(create_dockerfile=True)
     registered: list[tuple[str, str, int]] = []
-
-    def fake_register(
-        *,
-        project_id: uuid.UUID,
-        environment_id: uuid.UUID,
-        hostname: str,
-        backend_host: str,
-        backend_port: int,
-    ) -> None:
-        _ = (project_id, environment_id)
-        registered.append((hostname, backend_host, backend_port))
-
     provisioner = _make_provisioner(
         runner,
         route_base_domain="dev.app.aero-deck.app",
         health_checker=lambda _h, _p, _t: False,
-        route_registrar=fake_register,
+        route_registrar=lambda **kw: registered.append((kw["hostname"], kw["backend_host"], kw["backend_port"])),
     )
 
     with pytest.raises(PermanentJobError, match="failed health check"):
@@ -274,12 +262,8 @@ def test_provision_rolls_back_candidate_when_health_check_fails() -> None:
             repo_url="https://github.com/mangatohjunior/demo-app",
         )
 
-    # Candidate was removed, old canonical container was NEVER touched, route was NEVER mutated.
     assert [c[:2] for c in runner.calls] == [
-        ["git", "clone"],
-        ["docker", "build"],
-        ["docker", "run"],
-        ["docker", "rm"],
+        ["git", "clone"], ["docker", "build"], ["docker", "run"], ["docker", "rm"],
     ]
     assert runner.calls[3][-1].startswith("aerodeck-app-f27ee337-bacbb040-new-")
     assert registered == []
@@ -288,23 +272,11 @@ def test_provision_rolls_back_candidate_when_health_check_fails() -> None:
 def test_provision_registers_traefik_route_after_health_check() -> None:
     runner = FakeCommandRunner(create_dockerfile=True)
     registered: list[tuple[str, str, int]] = []
-
-    def fake_register(
-        *,
-        project_id: uuid.UUID,
-        environment_id: uuid.UUID,
-        hostname: str,
-        backend_host: str,
-        backend_port: int,
-    ) -> None:
-        _ = (project_id, environment_id)
-        registered.append((hostname, backend_host, backend_port))
-
     provisioner = _make_provisioner(
         runner,
         port=10555,
         route_base_domain="dev.app.aero-deck.app",
-        route_registrar=fake_register,
+        route_registrar=lambda **kw: registered.append((kw["hostname"], kw["backend_host"], kw["backend_port"])),
     )
 
     outcome = provisioner.provision(
@@ -319,8 +291,7 @@ def test_provision_registers_traefik_route_after_health_check() -> None:
     assert "https://payments-dev.dev.app.aero-deck.app" in outcome.detail
     assert (
         route_hostname_for(
-            "payments",
-            "dev",
+            "payments", "dev",
             "f27ee337-a7d0-4d4d-8180-22579d6a2983",
             "bacbb040-41fa-4623-8e4b-02be2f7abf7b",
             "dev.app.aero-deck.app",
