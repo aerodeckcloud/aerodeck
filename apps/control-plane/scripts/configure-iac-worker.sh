@@ -123,12 +123,28 @@ while [[ $# -gt 0 ]]; do
       DO_TOKEN="${1#*=}"
       shift
       ;;
+    --backend)
+      AERODECK_PROVISIONER_BACKEND="$2"
+      shift 2
+      ;;
+    --backend=*)
+      AERODECK_PROVISIONER_BACKEND="${1#*=}"
+      shift
+      ;;
+    --docker-container-port)
+      AERODECK_DOCKER_CONTAINER_PORT="$2"
+      shift 2
+      ;;
+    --docker-container-port=*)
+      AERODECK_DOCKER_CONTAINER_PORT="${1#*=}"
+      shift
+      ;;
     --no-restart)
       RESTART_WORKER="false"
       shift
       ;;
     --help|-h)
-      echo "usage: $0 [--enable|--disable] [--apply|--no-apply] [--spaces-access-id ID] [--spaces-secret-key SECRET] [--do-token TOKEN] [--no-restart]"
+      echo "usage: $0 [--enable|--disable] [--apply|--no-apply] [--backend docker|terraform|noop] [--docker-container-port PORT] [--spaces-access-id ID] [--spaces-secret-key SECRET] [--do-token TOKEN] [--no-restart]"
       exit 0
       ;;
     *)
@@ -154,7 +170,9 @@ if [[ -z "${AERODECK_DOCKER_BIND_HOST:-}" ]]; then
   PRIVATE_VPC_IP="$(ip -4 addr show 2>/dev/null | awk '/inet 10\./ {sub(/\/.*/, "", $2); print $2; exit}' || true)"
   AERODECK_DOCKER_BIND_HOST="${PRIVATE_VPC_IP:-127.0.0.1}"
 fi
+AERODECK_DOCKER_CONTAINER_PORT="${AERODECK_DOCKER_CONTAINER_PORT:-8000}"
 AERODECK_DOCKER_ROUTE_BASE_DOMAIN="${AERODECK_DOCKER_ROUTE_BASE_DOMAIN:-dev.app.aero-deck.app}"
+AERODECK_DOCKER_HEALTH_TIMEOUT_SECONDS="${AERODECK_DOCKER_HEALTH_TIMEOUT_SECONDS:-30}"
 AERODECK_IAC_WORKER="${ENABLE}"
 AERODECK_IAC_APPLY="${APPLY}"
 if [[ -n "${SPACES_ACCESS_ID}" ]]; then
