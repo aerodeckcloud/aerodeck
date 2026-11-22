@@ -133,20 +133,41 @@ class DockerProvisioner:
                 if image_deployment_id
                 else None
             )
-            safe_ref = validate_git_ref(git_ref)
+            pinned_sha = normalize_git_sha(git_ref) if git_ref else None
+            safe_ref = None if pinned_sha else validate_git_ref(git_ref)
             with tempfile.TemporaryDirectory(prefix="aerodeck-build-") as tmp:
                 checkout = Path(tmp) / "repo"
-                emit(f"Cloning {owner}/{repo}{f' (branch {safe_ref})' if safe_ref else ' (shallow)'}...")
+                if pinned_sha:
+                    clone_label = f"commit {pinned_sha[:7]}"
+                elif safe_ref:
+                    clone_label = f"branch {safe_ref}"
+                else:
+                    clone_label = "default branch"
+                emit(f"Cloning {owner}/{repo} ({clone_label})...")
                 clone_cmd = [git_bin, "clone", "--depth=1", "--single-branch"]
                 if safe_ref:
                     clone_cmd.extend(["--branch", safe_ref])
                 clone_cmd.extend(["--", clone_url, str(checkout)])
+                git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
                 clone_res = self.runner.run(
                     clone_cmd,
-                    env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=120, on_line=on_log,
+                    env=git_env, timeout=120, on_line=on_log,
                 )
                 if clone_res.returncode != 0:
                     raise classify_failure("git clone", clone_res)
+                if pinned_sha is not None:
+                    fetch_res = self.runner.run(
+                        [git_bin, "-C", str(checkout), "fetch", "--depth=1", "origin", pinned_sha],
+                        env=git_env, timeout=120, on_line=on_log,
+                    )
+                    if fetch_res.returncode != 0:
+                        raise classify_failure("git fetch", fetch_res)
+                    checkout_res = self.runner.run(
+                        [git_bin, "-C", str(checkout), "checkout", "--detach", "FETCH_HEAD"],
+                        env=git_env, timeout=30,
+                    )
+                    if checkout_res.returncode != 0:
+                        raise classify_failure("git checkout", checkout_res)
                 rev = self.runner.run(
                     [git_bin, "-C", str(checkout), "rev-parse", "HEAD"],
                     env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},

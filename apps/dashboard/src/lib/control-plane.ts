@@ -897,7 +897,7 @@ export async function listControlPlaneProjectDeployments(
 async function triggerControlPlaneDeploymentAction(
   config: ControlPlaneConfig,
   deploymentId: string,
-  action: "redeploy" | "rollback",
+  action: "redeploy" | "rollback" | "deploy-latest",
   options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   if (!isControlPlaneUuid(deploymentId)) {
@@ -936,6 +936,14 @@ export function redeployControlPlaneDeployment(
   options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   return triggerControlPlaneDeploymentAction(config, deploymentId, "redeploy", options);
+}
+
+export function deployLatestControlPlaneDeployment(
+  config: ControlPlaneConfig,
+  deploymentId: string,
+  options: ListOptions & { actorUserId?: string } = {},
+): Promise<Deployment> {
+  return triggerControlPlaneDeploymentAction(config, deploymentId, "deploy-latest", options);
 }
 
 export function rollbackControlPlaneDeployment(

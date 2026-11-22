@@ -15,6 +15,7 @@ import {
   authenticateControlPlaneUser,
   createControlPlaneDeployment,
   createControlPlaneDeploymentAndProvision,
+  deployLatestControlPlaneDeployment,
   createControlPlaneProject,
   createControlPlaneEnvironment,
   deleteControlPlaneEnvironment,
@@ -1645,6 +1646,20 @@ describe("control plane deployments", () => {
     });
     assert.equal(created.git_sha, sha);
     assert.equal(actorHeader, "11111111-1111-4111-8111-111111111111");
+
+    let latestUrl = "";
+    const latestFetch: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      latestUrl = url;
+      assert.equal(init?.method, "POST");
+      return jsonResponse(recorded, 201);
+    };
+    await deployLatestControlPlaneDeployment(config, deploymentRow.id, { fetch: latestFetch });
+    assert.match(latestUrl, /\/deploy-latest$/);
+    assert.equal(latestUrl.includes("git_sha"), false);
   });
 
   it("rejects a commit that is not 40 hex characters", async () => {

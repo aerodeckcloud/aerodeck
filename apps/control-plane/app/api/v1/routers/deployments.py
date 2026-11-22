@@ -31,6 +31,7 @@ from app.schemas.blueprint import DeploymentBlueprint, DeploymentInspectRequest
 from app.schemas.common import Page
 from app.schemas.deployment import DeploymentCreate, DeploymentRead
 from app.services.blueprint_inspector import inspect_github_repository_sync
+from app.services.docker_policy import normalize_git_sha
 from app.services.container_logs import ContainerLogsRead, dispatch_container_logs
 from app.services.deployment_logs import ensure_log_store_ready, iter_deployment_log_lines
 from app.services.provisioning import JobKind
@@ -230,11 +231,50 @@ async def get_deployment_runtime_logs(
     )
 
 
+def _require_linked(source) -> tuple[uuid.UUID, uuid.UUID]:
+    if source.project_id is None or source.environment_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Deployment is not linked to an environment.",
+        )
+    return source.project_id, source.environment_id
+
+
+async def _enqueue_copy(
+    source,
+    deployments: DeploymentServiceDep,
+    jobs: JobServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: uuid.UUID | None,
+    *,
+    git_ref: str | None,
+) -> DeploymentRead:
+    project_id, environment_id = _require_linked(source)
+    created = await deployments.create(
+        DeploymentCreate(
+            repo_url=source.repo_url,
+            project_id=project_id,
+            environment_id=environment_id,
+        ),
+        trigger=DeploymentTrigger.manual,
+        actor_user_id=await _known_actor(users, actor_user_id),
+    )
+    await jobs.enqueue(
+        JobKind.provision,
+        project_id,
+        environment_id,
+        deployment_id=created.id,
+        git_ref=git_ref,
+    )
+    refreshed = await deployments.get(created.id)
+    return DeploymentRead.model_validate(refreshed)
+
+
 @router.post(
     "/{deployment_id}/redeploy",
     response_model=DeploymentRead,
     status_code=status.HTTP_201_CREATED,
-    summary="Create and enqueue a 1-click redeploy from an existing deployment (#253)",
+    summary="Repeat a recorded release by provisioning its stored commit (#269)",
     responses=_NOT_FOUND | _UNAUTHENTICATED | _UNAVAILABLE,
 )
 async def redeploy_deployment(
@@ -245,28 +285,36 @@ async def redeploy_deployment(
     actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
     source = await deployments.get(deployment_id)
-    if source.project_id is None or source.environment_id is None:
+    _require_linked(source)
+    sha = normalize_git_sha(source.git_sha)
+    if sha is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Cannot redeploy a deployment that is not linked to an environment.",
+            detail="Cannot repeat a deployment that has no recorded commit.",
         )
-    created = await deployments.create(
-        DeploymentCreate(
-            repo_url=source.repo_url,
-            project_id=source.project_id,
-            environment_id=source.environment_id,
-        ),
-        trigger=DeploymentTrigger.manual,
-        actor_user_id=await _known_actor(users, actor_user_id),
+    return await _enqueue_copy(
+        source, deployments, jobs, users, actor_user_id, git_ref=sha
     )
-    await jobs.enqueue(
-        JobKind.provision,
-        source.project_id,
-        source.environment_id,
-        deployment_id=created.id,
+
+
+@router.post(
+    "/{deployment_id}/deploy-latest",
+    response_model=DeploymentRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Deploy the repository default branch instead of a recorded commit (#269)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _UNAVAILABLE,
+)
+async def deploy_latest_deployment(
+    deployment_id: uuid.UUID,
+    deployments: DeploymentServiceDep,
+    jobs: JobServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentRead:
+    source = await deployments.get(deployment_id)
+    return await _enqueue_copy(
+        source, deployments, jobs, users, actor_user_id, git_ref=None
     )
-    refreshed = await deployments.get(created.id)
-    return DeploymentRead.model_validate(refreshed)
 
 
 @router.post(
