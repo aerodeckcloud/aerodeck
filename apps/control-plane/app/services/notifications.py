@@ -13,10 +13,11 @@ import httpx
 from cryptography.fernet import InvalidToken
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
-from app.core.db import SessionLocal
+from app.core.db import create_engine
 from app.core.errors import NotFoundError
 from app.core.logging import get_logger
 from app.models.notification_channel import NotificationChannel, NotificationProvider
@@ -278,33 +279,43 @@ async def _notify_deployment_event(
     deployment_id: str | None = None,
     detail: str | None = None,
 ) -> None:
-    if SessionLocal.kw.get("bind") is None:
-        return
     settings = get_settings()
-    async with SessionLocal() as session:
-        row = await NotificationChannelRepository(session).get_for_project(project_id)
-        if row is None or not row.enabled:
-            return
-        should_send = (
-            (event == "started" and row.notify_on_started)
-            or (event == "succeeded" and row.notify_on_succeeded)
-            or (event == "failed" and row.notify_on_failed)
-        )
-        if not should_send:
-            return
-        try:
-            url = decrypt_env_value(row.encrypted_url, settings.auth_signing_key.get_secret_value())
-        except InvalidToken:
-            return
-        payload = format_notification_payload(
-            row.provider,
-            event=event,
-            project_slug=project_slug,
-            environment_slug=environment_slug,
-            deployment_id=deployment_id,
-            detail=detail,
-        )
-        await _post_notification(url, payload)
+    database_url = settings.database_url
+    if not database_url:
+        return
+    # Celery (and the in-process test dispatcher) calls this through asyncio.run
+    # on a worker thread. asyncpg connections belong to the loop that opened
+    # them, so borrowing SessionLocal's pool from that nested loop poisons the
+    # request pool and the follow-up provision_job_id write never commits.
+    engine = create_engine(database_url, poolclass=NullPool)
+    sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    try:
+        async with sessions() as session:
+            row = await NotificationChannelRepository(session).get_for_project(project_id)
+            if row is None or not row.enabled:
+                return
+            should_send = (
+                (event == "started" and row.notify_on_started)
+                or (event == "succeeded" and row.notify_on_succeeded)
+                or (event == "failed" and row.notify_on_failed)
+            )
+            if not should_send:
+                return
+            try:
+                url = decrypt_env_value(row.encrypted_url, settings.auth_signing_key.get_secret_value())
+            except InvalidToken:
+                return
+            payload = format_notification_payload(
+                row.provider,
+                event=event,
+                project_slug=project_slug,
+                environment_slug=environment_slug,
+                deployment_id=deployment_id,
+                detail=detail,
+            )
+            await _post_notification(url, payload)
+    finally:
+        await engine.dispose()
 
 
 def notify_deployment_event_sync(

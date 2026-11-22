@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
+from app.core.db import create_engine
+from app.models import Base
 from app.models.notification_channel import NotificationProvider
 from app.services.notifications import (
     format_notification_payload,
+    notify_deployment_event_sync,
     validate_notification_url,
 )
+from tests.conftest import make_settings
 
 
 def test_notification_url_validation_and_payload_formatters() -> None:
@@ -51,6 +58,39 @@ def test_notification_url_validation_and_payload_formatters() -> None:
         environment_slug="dev",
     )
     assert generic["event"] == "deployment.succeeded"
+
+
+def test_notify_sync_reads_channels_on_a_private_engine(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Dispatch opens its own engine. Sharing SessionLocal across asyncio.run poisons asyncpg."""
+    database_url = f"sqlite+aiosqlite:///{(tmp_path / 'notifications.db').as_posix()}"
+
+    async def _create_schema() -> None:
+        engine = create_engine(database_url)
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        await engine.dispose()
+
+    asyncio.run(_create_schema())
+    monkeypatch.setattr(
+        "app.services.notifications.get_settings",
+        lambda: make_settings(database_url),
+    )
+
+    with caplog.at_level("WARNING", logger="aerodeck.services.notifications"):
+        notify_deployment_event_sync(
+            project_id=str(uuid.uuid4()),
+            project_slug="portal",
+            environment_slug="dev",
+            event="succeeded",
+            deployment_id=str(uuid.uuid4()),
+            detail="Deployment is live.",
+        )
+
+    assert "deployment notification skipped" not in caplog.text
 
 
 @pytest.mark.asyncio
