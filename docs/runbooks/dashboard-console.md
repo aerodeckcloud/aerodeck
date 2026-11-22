@@ -72,6 +72,17 @@ is still empty, and returns 409 once the swap has started. Push webhooks use
 the same setting. The browser PATCHes
 `/api/console/projects/{id}/environments/{environmentId}` and does not call
 FastAPI.
+A deploy counts as active while it is `queued` or `running`, is not itself
+waiting, and has no `finished_at`. The worker sets `finished_at` when the
+provision ends and then starts the waiting row, so a deploy nobody watches in
+the console still lets the next one start. The console outcome routes
+(`succeeded`, `failed`, `cancel`) start it too; whichever comes second finds
+nothing left to start. A waiting row that cannot be started (the queue refuses
+the job, for example) is marked `failed` instead of staying `running`.
+A `running` row with no `finished_at` keeps new deploys waiting in **Wait**
+mode. That covers rows that stopped before `finished_at` was recorded (#268)
+and rows that were created but never provisioned. Cancel such a row from its
+detail page to let the waiting deploy start.
 When the console client is set and a deployment has `provision_job_id`, detail
 shows a Provision job panel that polls `GET /api/console/jobs/{id}` (→
 `GET /api/v1/jobs/{id}`) about every 5s until succeeded/failed, a poll

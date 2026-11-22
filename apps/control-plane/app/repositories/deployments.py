@@ -106,13 +106,19 @@ class DeploymentRepository:
     async def list_blocking(
         self, environment_id: uuid.UUID, exclude_id: uuid.UUID
     ) -> Sequence[Deployment]:
-        """Queued or running deploys that are not themselves waiting."""
+        """Queued or running deploys that are not waiting and have not finished.
+
+        The worker stamps ``finished_at`` when a provision ends, but the row stays
+        ``running`` until the console reports the outcome. Such a row no longer
+        occupies the environment.
+        """
         rows = await self._session.scalars(
             select(Deployment)
             .where(
                 Deployment.environment_id == environment_id,
                 Deployment.status.in_((DeploymentStatus.queued, DeploymentStatus.running)),
                 Deployment.held_for_deployment_id.is_(None),
+                Deployment.finished_at.is_(None),
                 Deployment.id != exclude_id,
             )
             .order_by(Deployment.started_at.asc(), Deployment.id.asc())
@@ -121,8 +127,8 @@ class DeploymentRepository:
 
     async def cancel_held(
         self, environment_id: uuid.UUID, finished_at: datetime, *, keep_id: uuid.UUID | None
-    ) -> None:
-        """Cancel queued rows that are waiting, except ``keep_id`` when it is set."""
+    ) -> int:
+        """Cancel queued rows that are waiting, except ``keep_id``. Returns how many."""
         statement = update(Deployment).where(
             Deployment.environment_id == environment_id,
             Deployment.held_for_deployment_id.is_not(None),
@@ -130,9 +136,10 @@ class DeploymentRepository:
         )
         if keep_id is not None:
             statement = statement.where(Deployment.id != keep_id)
-        await self._session.execute(
+        result = await self._session.execute(
             statement.values(status=DeploymentStatus.cancelled, finished_at=finished_at)
         )
+        return int(result.rowcount or 0)
 
     async def mark_waiting(self, deployment_id: uuid.UUID, active_id: uuid.UUID) -> None:
         stored = await self._session.get(Deployment, deployment_id)

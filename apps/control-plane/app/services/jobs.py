@@ -10,9 +10,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, UnprocessableError
 from app.core.logging import get_logger
 from app.repositories.jobs import JobState
 from app.services.deployment_logs import (
@@ -21,7 +22,7 @@ from app.services.deployment_logs import (
     publish_line,
 )
 from app.models.deployment import Deployment, DeploymentStatus
-from app.models.project import Environment
+from app.models.project import DeployOverlap, Environment
 from app.services.deployments import DeploymentService
 from app.services.environments import EnvironmentService
 from app.services.provision_replay import parse_provision_replay, provision_replay_json
@@ -31,6 +32,23 @@ logger = get_logger("services.jobs")
 
 MarkDeploymentFailed = Callable[[uuid.UUID], Awaitable[None]]
 SetProvisionJobId = Callable[[uuid.UUID, uuid.UUID], Awaitable[None]]
+
+SWAP_STARTED_DETAIL = "Container swap already started."
+
+_TERMINAL_STATUSES = (
+    DeploymentStatus.succeeded,
+    DeploymentStatus.failed,
+    DeploymentStatus.cancelled,
+)
+
+
+def _has_finished(deployment: Deployment) -> bool:
+    """True once the row is terminal or the worker stamped its finish time.
+
+    A provision nobody watched in the console stays ``running`` with
+    ``finished_at`` set. It no longer occupies the environment.
+    """
+    return deployment.status in _TERMINAL_STATUSES or deployment.finished_at is not None
 
 
 class JobDispatcher(Protocol):
@@ -123,6 +141,9 @@ class JobService:
             meta["deployment_id"] = str(linked_deployment_id)
             meta["image_deployment_id"] = str(linked_deployment_id)
             meta["repo_url"] = linked.repo_url
+            # Lock first, write second: every path that changes deployment rows of
+            # this environment takes the lock before the rows.
+            await self._environments.lock_for_deploy(environment.id)
             replay_json = provision_replay_json(
                 git_ref=git_ref,
                 rollback_from_deployment_id=rollback_from_deployment_id,
@@ -148,31 +169,48 @@ class JobService:
             )
         except Exception:
             if linked_deployment_id is not None:
-                try:
-                    await publish_line(
-                        self._redis_url, linked_deployment_id, PROVISION_QUEUE_FAILED_LINE
-                    )
-                except Exception as publish_exc:
-                    logger.warning(
-                        "event=deployment_log_queue_failed_publish_skipped deployment=%s error_type=%s",
-                        linked_deployment_id,
-                        type(publish_exc).__name__,
-                    )
-                # Release this transaction's row lock before the other connection writes.
-                # Otherwise PostgreSQL waits forever: this request holds the row, and the
-                # isolated update waits for a commit that is waiting on the update.
-                await self._deployments.commit()
-                await self._deployment_hooks.mark_failed(linked_deployment_id)
-                if not self._releasing:
-                    failed = await self._deployments.get(linked_deployment_id)
-                    failed.status = DeploymentStatus.failed
-                    await self.release_waiting(failed)
+                await self._record_dispatch_failure(linked_deployment_id)
             raise
         if linked_deployment_id is not None:
-            await self._deployments.commit()
+            await self._persist_progress()
             await self._remember_provision_job_id(linked_deployment_id, job_id)
         logger.info("queued %s job %s for environment %s", kind.value, job_id, environment.id)
         return JobTicket(job_id=job_id, kind=kind, project_id=environment.project_id, environment_id=environment.id)
+
+    async def _persist_progress(self) -> None:
+        """Commit what this call has written so far.
+
+        Used only where the write has to outlive the request:
+
+        - The broker accepted, refused, or revoked a job. That cannot be undone,
+          so the database must record it even if the request fails afterwards.
+        - A new deployment was cancelled because of a 409. The error rolls the
+          request back, and the cancel must stay.
+
+        It also ends this transaction before the isolated hooks update the same
+        deployment row on another connection. PostgreSQL would otherwise make
+        that update wait for a commit that is itself waiting on the update.
+        """
+        await self._deployments.commit()
+
+    async def _record_dispatch_failure(self, deployment_id: uuid.UUID) -> None:
+        """Mark a deployment the broker refused as failed, then start what waited on it."""
+        try:
+            await publish_line(self._redis_url, deployment_id, PROVISION_QUEUE_FAILED_LINE)
+        except Exception as publish_exc:
+            logger.warning(
+                "event=deployment_log_queue_failed_publish_skipped deployment=%s error_type=%s",
+                deployment_id,
+                type(publish_exc).__name__,
+            )
+        await self._persist_progress()
+        await self._deployment_hooks.mark_failed(deployment_id)
+        if self._releasing:
+            # release_waiting is already running and continues with this row.
+            return
+        failed = await self._deployments.get(deployment_id)
+        await self._deployments.refresh(failed)
+        await self.release_waiting(failed)
 
     async def _remember_provision_job_id(self, deployment_id: uuid.UUID, job_id: str) -> None:
         """Parse job id then best-effort persist (hook is try_* and must not raise)."""
@@ -210,72 +248,118 @@ class JobService:
         """Start the newest deployment that was waiting on ``finished``.
 
         Older waiting rows are cancelled. A second caller finds nothing to claim.
+        When the claimed deployment cannot start it is marked failed, and
+        whatever waited on it is released in turn.
         """
         if self._releasing:
             return
-        if finished.environment_id is None or finished.project_id is None:
-            return
-        if finished.status not in (
-            DeploymentStatus.succeeded,
-            DeploymentStatus.failed,
-            DeploymentStatus.cancelled,
-        ):
-            return
         self._releasing = True
         try:
-            claimed = await self._deployments.claim_newest_waiter(
-                finished.environment_id, finished.id
-            )
-            if claimed is None or claimed.project_id is None or claimed.environment_id is None:
-                return
-            git_ref, rollback_from, replay_addons = parse_provision_replay(claimed.provision_replay_json)
-            try:
-                await self.enqueue(
-                    JobKind.provision,
-                    claimed.project_id,
-                    claimed.environment_id,
-                    deployment_id=claimed.id,
-                    git_ref=git_ref,
-                    rollback_from_deployment_id=rollback_from,
-                    addons=replay_addons,
-                )
-                await self._deployments.commit()
-            except ConflictError:
-                logger.info("event=deployment_wait_release_blocked deployment=%s", claimed.id)
-            except Exception as release_exc:
-                logger.warning(
-                    "event=deployment_wait_release_skipped deployment=%s error_type=%s",
-                    claimed.id,
-                    type(release_exc).__name__,
-                )
+            current: Deployment | None = finished
+            while current is not None:
+                current = await self._start_next_waiter(current)
         finally:
             self._releasing = False
+
+    async def _start_next_waiter(self, finished: Deployment) -> Deployment | None:
+        """Start one waiter. Returns it only when it failed to start."""
+        if finished.environment_id is None or finished.project_id is None:
+            return None
+        if not _has_finished(finished):
+            return None
+        await self._environments.lock_for_deploy(finished.environment_id)
+        claimed = await self._deployments.claim_newest_waiter(finished.environment_id, finished.id)
+        if claimed is None or claimed.project_id is None or claimed.environment_id is None:
+            return None
+        git_ref, rollback_from, replay_addons = parse_provision_replay(claimed.provision_replay_json)
+        try:
+            await self.enqueue(
+                JobKind.provision,
+                claimed.project_id,
+                claimed.environment_id,
+                deployment_id=claimed.id,
+                git_ref=git_ref,
+                rollback_from_deployment_id=rollback_from,
+                addons=replay_addons,
+            )
+        except ConflictError:
+            # Override met a swap in progress; enqueue already cancelled the claimed row.
+            logger.info("event=deployment_wait_release_blocked deployment=%s", claimed.id)
+            return None
+        except SQLAlchemyError:
+            # The session is unusable and nothing below could be saved. Let the caller fail.
+            raise
+        except Exception as release_exc:
+            # The outcome that triggered this release is already decided, so it must
+            # not turn into an error. The waiter did not start, so it must not stay
+            # ``running`` and block the environment.
+            logger.warning(
+                "event=deployment_wait_release_failed deployment=%s error_type=%s",
+                claimed.id,
+                type(release_exc).__name__,
+                exc_info=release_exc,
+            )
+            await self._persist_progress()
+            await self._deployment_hooks.mark_failed(claimed.id)
+            await self._deployments.refresh(claimed)
+            return claimed
+        return None
+
+    async def _override(
+        self, environment: Environment, deployment_id: uuid.UUID, blockers: list[Deployment]
+    ) -> None:
+        """Cancel the active deploys, or refuse with 409 once one has begun its swap."""
+        revoke: list[uuid.UUID | None] = []
+        try:
+            if any(row.swap_started_at is not None for row in blockers):
+                raise ConflictError(SWAP_STARTED_DETAIL)
+            for row in blockers:
+                try:
+                    cancelled = await self._deployments.cancel(row.id)
+                except UnprocessableError:
+                    # Finished between the read and the cancel. Nothing left to stop.
+                    continue
+                revoke.append(cancelled.provision_job_id)
+        except ConflictError:
+            # The swap is left alone. The new row never started, so close it.
+            await self._deployments.cancel(deployment_id)
+            await self._persist_progress()
+            raise
+        superseded = await self._deployments.cancel_held(environment.id, keep_id=None)
+        # Save the cancels before revoking: a revoked job with a row still marked
+        # running would block the environment with nothing left to finish it.
+        await self._persist_progress()
+        for job_id in revoke:
+            await self.revoke_quietly(job_id)
+        logger.info(
+            "event=deployment_override deployment=%s cancelled=%d superseded=%d",
+            deployment_id,
+            len(revoke),
+            superseded,
+        )
 
     async def _wait_or_override(
         self, environment: Environment, deployment_id: uuid.UUID
     ) -> JobTicket | None:
-        """Hold, preempt, or return None so the caller dispatches."""
+        """Hold, preempt, or return None so the caller dispatches.
+
+        The caller holds the environment lock, so the rows read here cannot be
+        claimed or held by another request until this transaction ends.
+        """
         blockers = list(await self._deployments.list_blocking(environment.id, deployment_id))
         if not blockers:
             return None
-        policy = environment.deploy_overlap if environment.deploy_overlap in ("wait", "override") else "wait"
-        if policy == "override":
-            if any(row.swap_started_at is not None for row in blockers):
-                await self._deployments.cancel(deployment_id)
-                await self._deployments.commit()
-                raise ConflictError("Container swap already started.")
-            for row in blockers:
-                cancelled = await self._deployments.cancel(row.id)
-                await self.revoke_quietly(cancelled.provision_job_id)
-            await self._deployments.cancel_held(environment.id, keep_id=None)
+        if environment.deploy_overlap == DeployOverlap.override:
+            await self._override(environment, deployment_id, blockers)
             return None
         active = blockers[0]
-        await self._deployments.cancel_held(environment.id, keep_id=deployment_id)
+        superseded = await self._deployments.cancel_held(environment.id, keep_id=deployment_id)
         await self._deployments.mark_waiting(deployment_id, active.id)
         logger.info(
-            "event=deployment_waiting deployment=%s active=%s",
+            "event=deployment_waiting deployment=%s active=%s superseded=%d",
             deployment_id,
             active.id,
+            superseded,
         )
         return JobTicket(
             job_id=None,

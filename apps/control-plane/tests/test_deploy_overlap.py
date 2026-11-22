@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -13,8 +15,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.deps import get_job_dispatcher
 from app.models.deployment import Deployment
+from app.repositories.deployments import DeploymentRepository
 from app.repositories.jobs import JobState
 from app.services.provisioning import JobKind
+from tests.conftest import TEST_DATABASE_URL
 
 REPO = "https://github.com/mangatohjunior/dev-portal"
 
@@ -191,6 +195,155 @@ async def test_wait_replays_a_pinned_commit_when_the_held_redeploy_starts(
         assert len(dispatcher.calls) == 2
         assert dispatcher.calls[1]["meta"]["git_ref"] == sha
         assert dispatcher.calls[1]["meta"]["deployment_id"] == second.json()["id"]
+    finally:
+        app.dependency_overrides.pop(get_job_dispatcher, None)
+
+
+@pytest.mark.asyncio
+async def test_a_deploy_the_worker_finished_does_not_hold_the_next_one(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    """The row stays running until the console reports Done; finished_at ends the wait."""
+    dispatcher = FakeDispatcher()
+    app.dependency_overrides[get_job_dispatcher] = lambda: dispatcher
+    try:
+        project, environment = await _project_env(client, auth, slug="overlap-unwatched")
+        first = await _deployment(client, auth, project["id"], environment["id"])
+        started = await client.post(
+            _provision(project["id"], environment["id"]),
+            json={"deployment_id": first["id"]},
+            headers=auth,
+        )
+        assert started.status_code == 202, started.text
+
+        sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
+        async with sessions() as session:
+            row = await session.get(Deployment, uuid.UUID(first["id"]))
+            assert row is not None
+            row.finished_at = datetime.now(UTC)
+            await session.commit()
+
+        second = await _deployment(client, auth, project["id"], environment["id"])
+        accepted = await client.post(
+            _provision(project["id"], environment["id"]),
+            json={"deployment_id": second["id"]},
+            headers=auth,
+        )
+        assert accepted.status_code == 202, accepted.text
+        assert accepted.json()["job_id"]
+        assert accepted.json()["active_deployment_id"] is None
+        assert len(dispatcher.calls) == 2
+        unwatched = await client.get(f"/api/v1/deployments/{first['id']}", headers=auth)
+        assert unwatched.json()["status"] == "running"
+    finally:
+        app.dependency_overrides.pop(get_job_dispatcher, None)
+
+
+@pytest.mark.asyncio
+async def test_a_waiting_deploy_that_cannot_start_is_marked_failed(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    class RefusingSecondJob(FakeDispatcher):
+        def dispatch(self, kind: JobKind, *, project_id: str, environment_id: str, **meta: str) -> str:
+            if self.calls:
+                raise ConnectionError("broker is gone")
+            return super().dispatch(kind, project_id=project_id, environment_id=environment_id, **meta)
+
+    dispatcher = RefusingSecondJob()
+    app.dependency_overrides[get_job_dispatcher] = lambda: dispatcher
+    try:
+        project, environment = await _project_env(client, auth, slug="overlap-unstartable")
+        first = await _deployment(client, auth, project["id"], environment["id"])
+        started = await client.post(
+            _provision(project["id"], environment["id"]),
+            json={"deployment_id": first["id"]},
+            headers=auth,
+        )
+        assert started.status_code == 202, started.text
+        second = await _deployment(client, auth, project["id"], environment["id"])
+        held = await client.post(
+            _provision(project["id"], environment["id"]),
+            json={"deployment_id": second["id"]},
+            headers=auth,
+        )
+        assert held.json()["active_deployment_id"] == first["id"]
+
+        # The outcome of the first deploy stands even though the release failed.
+        finished = await client.post(f"/api/v1/deployments/{first['id']}/succeeded", headers=auth)
+        assert finished.status_code == 200, finished.text
+        assert finished.json()["status"] == "succeeded"
+
+        stuck = await client.get(f"/api/v1/deployments/{second['id']}", headers=auth)
+        assert stuck.json()["status"] == "failed"
+        assert stuck.json()["held_for_deployment_id"] is None
+
+        # A failed row does not occupy the environment.
+        third = await _deployment(client, auth, project["id"], environment["id"])
+        dispatcher.calls.clear()
+        retried = await client.post(
+            _provision(project["id"], environment["id"]),
+            json={"deployment_id": third["id"]},
+            headers=auth,
+        )
+        assert retried.status_code == 202, retried.text
+        assert retried.json()["job_id"]
+    finally:
+        app.dependency_overrides.pop(get_job_dispatcher, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="SQLite shares one connection, so two requests cannot overlap in separate transactions",
+)
+async def test_two_provisions_at_once_start_exactly_one(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the environment lock each request reads the other as active and both wait."""
+    dispatcher = FakeDispatcher()
+    app.dependency_overrides[get_job_dispatcher] = lambda: dispatcher
+    readers = 0
+    both_have_read = asyncio.Event()
+    read_blocking = DeploymentRepository.list_blocking
+
+    async def read_then_pause(self: DeploymentRepository, environment_id: uuid.UUID, exclude_id: uuid.UUID):
+        # Give the other request the chance to read before this one writes. The lock
+        # stops it from reading at all, so the pause simply runs out.
+        nonlocal readers
+        rows = await read_blocking(self, environment_id, exclude_id)
+        readers += 1
+        if readers == 2:
+            both_have_read.set()
+        with contextlib.suppress(TimeoutError):
+            async with asyncio.timeout(1):
+                await both_have_read.wait()
+        return rows
+
+    monkeypatch.setattr(DeploymentRepository, "list_blocking", read_then_pause)
+    try:
+        project, environment = await _project_env(client, auth, slug="overlap-race")
+        first = await _deployment(client, auth, project["id"], environment["id"])
+        second = await _deployment(client, auth, project["id"], environment["id"])
+
+        responses = await asyncio.gather(
+            *(
+                client.post(
+                    _provision(project["id"], environment["id"]),
+                    json={"deployment_id": row["id"]},
+                    headers=auth,
+                )
+                for row in (first, second)
+            )
+        )
+
+        assert [response.status_code for response in responses] == [202, 202]
+        bodies = [response.json() for response in responses]
+        started = [body for body in bodies if body["job_id"]]
+        waiting = [body for body in bodies if body["active_deployment_id"]]
+        assert len(started) == 1, bodies
+        assert len(waiting) == 1, bodies
+        assert len(dispatcher.calls) == 1
+        assert waiting[0]["active_deployment_id"] == dispatcher.calls[0]["meta"]["deployment_id"]
     finally:
         app.dependency_overrides.pop(get_job_dispatcher, None)
 
