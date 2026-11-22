@@ -60,6 +60,14 @@ resource "digitalocean_firewall" "control" {
     source_addresses = [var.vpc_ip_range]
   }
 
+  # Tenant application containers on this Droplet (#245). Traefik on the edge
+  # proxies HTTPS traffic to them over the private VPC only.
+  inbound_rule {
+    protocol         = "tcp"
+    port_range       = "10000-19999"
+    source_addresses = [var.vpc_ip_range]
+  }
+
   inbound_rule {
     protocol         = "icmp"
     source_addresses = [var.vpc_ip_range]

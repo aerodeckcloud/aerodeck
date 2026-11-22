@@ -81,6 +81,35 @@ jobs:
                   time.sleep(5)
               else:
                   print(f"{cidr} already allowed in {fw['name']}")
+
+              # Ensure VPC-only tenant app port range 10000-19999 is allowed from the VPC (#245).
+              vpc_cidrs = [
+                  a
+                  for r in fw.get("inbound_rules", [])
+                  if str(r.get("ports")) == "8000"
+                  for a in r.get("sources", {}).get("addresses", [])
+              ]
+              tenant_ports_allowed = any(
+                  str(r.get("ports")) == "10000-19999"
+                  for r in fw.get("inbound_rules", [])
+              )
+              if vpc_cidrs and not tenant_ports_allowed:
+                  tenant_req = urllib.request.Request(
+                      f"https://api.digitalocean.com/v2/firewalls/{fw['id']}/rules",
+                      data=json.dumps({
+                          "inbound_rules": [{
+                              "protocol": "tcp",
+                              "ports": "10000-19999",
+                              "sources": {"addresses": vpc_cidrs},
+                          }]
+                      }).encode(),
+                      headers=headers,
+                      method="POST",
+                  )
+                  urllib.request.urlopen(tenant_req, timeout=15)
+                  print(f"Added VPC tenant ports 10000-19999 ({vpc_cidrs}) to firewall {fw['name']}")
+              else:
+                  print(f"VPC tenant ports 10000-19999 already allowed in {fw['name']}")
           PY
 
       - name: Execute action on Droplet
