@@ -13,7 +13,24 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
+from app.services.docker_env_discovery import (
+    build_runtime_env_file,
+    discover_repo_env_defaults,
+    wait_for_container_or_fast_fail,
+    write_secure_env_file,
+)
 from app.services.docker_policy import CommandRunner, sanitize_log_line, validate_dockerfile
+
+__all__ = [
+    "build_runtime_env_file",
+    "detect_dockerfile_template",
+    "detect_exposed_port",
+    "discover_repo_env_defaults",
+    "ensure_dockerfile",
+    "stream_container_crash_logs",
+    "wait_for_container_or_fast_fail",
+    "write_secure_env_file",
+]
 
 LogSink = Callable[[str], None]
 _EXPOSE_RE = re.compile(r"^\s*EXPOSE\s+(\d+)(?:/tcp)?\b", re.IGNORECASE | re.MULTILINE)
@@ -80,9 +97,9 @@ def detect_dockerfile_template(checkout: Path, container_port: int = 8000) -> tu
             else "COPY pyproject.toml ./\nRUN pip install --no-cache-dir .\n"
         )
         entry_cmd = (
-            f'CMD ["python", "app.py"]\n'
+            'CMD ["python", "app.py"]\n'
             if (checkout / "app.py").is_file()
-            else f'CMD ["python", "main.py"]\n'
+            else 'CMD ["python", "main.py"]\n'
             if (checkout / "main.py").is_file()
             else f'CMD ["python", "-m", "http.server", "{port}"]\n'
         )

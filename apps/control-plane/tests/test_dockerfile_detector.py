@@ -8,7 +8,13 @@ import pytest
 
 from app.core.db import requires_disabled_statement_cache
 from app.services.docker_provisioner import CommandResult, DockerProvisioner, LogSink
-from app.services.dockerfile_detector import detect_dockerfile_template, detect_exposed_port, ensure_dockerfile
+from app.services.dockerfile_detector import (
+    detect_dockerfile_template,
+    detect_exposed_port,
+    discover_repo_env_defaults,
+    ensure_dockerfile,
+    wait_for_container_or_fast_fail,
+)
 from app.services.provisioning import PermanentJobError
 
 
@@ -143,3 +149,46 @@ def test_detect_exposed_port_parses_dockerfile_or_falls_back(tmp_path: Path) -> 
     assert detect_exposed_port(df, default_port=8000) == 3000
     df.write_text("FROM alpine:3.20\n", encoding="utf-8")
     assert detect_exposed_port(df, default_port=8000) == 8000
+
+
+def test_discover_repo_env_defaults_extracts_compose_and_dotenv(tmp_path: Path) -> None:
+    (tmp_path / ".env.example").write_text("FOO=bar\nPATH=/evil\n", encoding="utf-8")
+    (tmp_path / "docker-compose.yaml").write_text(
+        "services:\n"
+        "  keycloak:\n"
+        "    image: quay.io/keycloak/keycloak:25.0\n"
+        "    environment:\n"
+        "      KEYCLOAK_ADMIN: admin\n"
+        "  portal:\n"
+        "    build: .\n"
+        "    environment:\n"
+        "      KEYCLOAK_CLIENT_SECRET: dev-portal-secret\n"
+        "      SESSION_SECRET_KEY: dev-session-secret-change-me\n",
+        encoding="utf-8",
+    )
+    defaults = discover_repo_env_defaults(tmp_path)
+    assert defaults["FOO"] == "bar"
+    assert defaults["KEYCLOAK_CLIENT_SECRET"] == "dev-portal-secret"
+    assert defaults["SESSION_SECRET_KEY"] == "dev-session-secret-change-me"
+    assert "KEYCLOAK_ADMIN" not in defaults
+    assert "PATH" not in defaults
+
+
+def test_wait_for_container_or_fast_fail_aborts_when_container_exits() -> None:
+    class ExitedContainerRunner:
+        def run(self, args: list[str], **kwargs: object) -> CommandResult:
+            _ = (args, kwargs)
+            return CommandResult(0, "false 1\n", "")
+
+    assert (
+        wait_for_container_or_fast_fail(
+            "127.0.0.1",
+            19998,
+            30,
+            runner=ExitedContainerRunner(),
+            docker_bin="docker",
+            container_name="crashed-app",
+            docker_env={},
+        )
+        is False
+    )
