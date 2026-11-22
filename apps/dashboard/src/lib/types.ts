@@ -297,3 +297,15 @@ export type ContainerMetrics = {
   restart_count: number;
   error: string | null;
 };
+
+export type ProjectRole = "owner" | "developer" | "viewer";
+
+export type ProjectMember = {
+  id: string;
+  project_id: string;
+  user_id: string;
+  email: string;
+  role: ProjectRole;
+  created_at: string;
+  updated_at: string;
+};

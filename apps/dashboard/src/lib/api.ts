@@ -19,7 +19,9 @@ import {
   type EnvironmentWebhookInput,
   type Project,
   type ProjectDetail,
+  type ProjectMember,
   type ProjectPage,
+  type ProjectRole,
   type ProjectRoute,
   type ProjectSource,
   type ProvisionJob,
@@ -296,6 +298,41 @@ export async function fetchContainerMetrics(
     { credentials: "same-origin", cache: "no-store" },
   );
   return readJson(response);
+}
+
+export async function fetchProjectMembers(projectId: string): Promise<ProjectMember[]> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/members`,
+    { credentials: "same-origin", cache: "no-store" },
+  );
+  return readJson(response);
+}
+
+export async function upsertProjectMember(
+  projectId: string,
+  email: string,
+  role: ProjectRole,
+): Promise<ProjectMember> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/members`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ email, role }),
+    },
+  );
+  return readJson(response);
+}
+
+export async function removeProjectMember(projectId: string, userId: string): Promise<void> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+    { method: "DELETE", credentials: "same-origin" },
+  );
+  if (!response.ok) {
+    await readJson(response);
+  }
 }
 
 export async function createProjectRoute(input: {

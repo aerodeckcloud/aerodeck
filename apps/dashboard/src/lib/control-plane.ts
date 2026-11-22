@@ -19,6 +19,8 @@ import type {
   EnvironmentWebhookInput,
   JobKind,
   Project,
+  ProjectMember,
+  ProjectRole,
   ProjectRoute,
   ProvisionJob,
   ProvisionJobStatus,
@@ -993,6 +995,102 @@ export async function getControlPlaneContainerMetrics(
     );
   }
   return (await response.json()) as ContainerMetrics;
+}
+
+export async function listControlPlaneProjectMembers(
+  config: ControlPlaneConfig,
+  projectId: string,
+  options: ListOptions = {},
+): Promise<ProjectMember[]> {
+  if (!isControlPlaneUuid(projectId)) {
+    throw new ControlPlaneError("projectId must be a uuid");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/members`,
+    {
+      headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane project members request failed (${response.status})`,
+      response.status,
+    );
+  }
+  return (await response.json()) as ProjectMember[];
+}
+
+export async function upsertControlPlaneProjectMember(
+  config: ControlPlaneConfig,
+  projectId: string,
+  email: string,
+  role: ProjectRole,
+  actorUserId?: string,
+  options: ListOptions = {},
+): Promise<ProjectMember> {
+  if (!isControlPlaneUuid(projectId)) {
+    throw new ControlPlaneError("projectId must be a uuid");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${accessToken}`,
+    "content-type": "application/json",
+  };
+  if (actorUserId && isControlPlaneUuid(actorUserId)) {
+    headers["x-aerodeck-user-id"] = actorUserId;
+  }
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/members`,
+    {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ email, role }),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane project member upsert failed (${response.status})`,
+      response.status,
+    );
+  }
+  return (await response.json()) as ProjectMember;
+}
+
+export async function deleteControlPlaneProjectMember(
+  config: ControlPlaneConfig,
+  projectId: string,
+  userId: string,
+  actorUserId?: string,
+  options: ListOptions = {},
+): Promise<void> {
+  if (!isControlPlaneUuid(projectId) || !isControlPlaneUuid(userId)) {
+    throw new ControlPlaneError("projectId and userId must be uuids");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers: Record<string, string> = { authorization: `Bearer ${accessToken}` };
+  if (actorUserId && isControlPlaneUuid(actorUserId)) {
+    headers["x-aerodeck-user-id"] = actorUserId;
+  }
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+    { method: "DELETE", headers, cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane project member delete failed (${response.status})`,
+      response.status,
+    );
+  }
 }
 
 async function postDeploymentStatus(

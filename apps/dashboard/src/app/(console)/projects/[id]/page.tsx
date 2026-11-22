@@ -10,6 +10,7 @@ import { NewEnvironmentForm } from "@/components/new-environment-form";
 import { PageHeader } from "@/components/page-header";
 import { ProjectDeploymentsSection } from "@/components/project-deployments-section";
 import { ProjectEditPanel } from "@/components/project-edit-panel";
+import { ProjectMembersSection } from "@/components/project-members-section";
 import { ProjectRoutesSection } from "@/components/project-routes-section";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -270,6 +271,7 @@ export default function ProjectDetailPage() {
         environments={environments}
         source={detail?.source}
       />
+      <ProjectMembersSection projectId={project?.id} source={detail?.source} />
     </div>
   );
 }

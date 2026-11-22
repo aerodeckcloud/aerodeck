@@ -8,6 +8,7 @@ from app.models.deployment import Deployment, DeploymentStatus
 from app.models.dns_record import DnsRecord, DnsRecordStatus, DnsRecordType
 from app.models.environment_var import EnvironmentVariable
 from app.models.project import Environment, EnvironmentKind, Project
+from app.models.project_member import ProjectMember, ProjectRole
 from app.models.route import Route
 from app.models.sandbox import Sandbox, SandboxStatus
 from app.models.sandbox_host import SandboxHost, SandboxHostStatus
@@ -29,6 +30,8 @@ __all__ = [
     "EnvironmentVariable",
     "EnvironmentWebhook",
     "Project",
+    "ProjectMember",
+    "ProjectRole",
     "Route",
     "Sandbox",
     "SandboxHost",

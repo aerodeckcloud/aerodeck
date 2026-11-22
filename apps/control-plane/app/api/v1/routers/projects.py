@@ -1,12 +1,20 @@
 import uuid
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 
-from app.api.deps import DeploymentServiceDep, PaginationDep, ProjectServiceDep
+from app.api.deps import (
+    ActorUserIdDep,
+    DeploymentServiceDep,
+    PaginationDep,
+    ProjectMemberServiceDep,
+    ProjectServiceDep,
+)
+from app.models.project_member import ProjectRole
 from app.schemas.auth import ErrorResponse
 from app.schemas.common import Page
 from app.schemas.deployment import DeploymentRead
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
+from app.services.project_members import ProjectMemberRead, ProjectMemberUpsertRequest
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -30,8 +38,15 @@ async def list_projects(page: PaginationDep, projects: ProjectServiceDep) -> Pag
     summary="Create a project",
     responses=_UNAUTHENTICATED | _CONFLICT,
 )
-async def create_project(body: ProjectCreate, projects: ProjectServiceDep) -> ProjectRead:
-    return ProjectRead.model_validate(await projects.create(body))
+async def create_project(
+    body: ProjectCreate,
+    projects: ProjectServiceDep,
+    members: ProjectMemberServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> ProjectRead:
+    created = await projects.create(body)
+    await members.assign_owner_if_user_exists(created.id, actor_user_id)
+    return ProjectRead.model_validate(created)
 
 
 @router.get(
@@ -52,7 +67,14 @@ async def get_project(project_id: uuid.UUID, projects: ProjectServiceDep) -> Pro
     summary="Update a project",
     responses=_UNAUTHENTICATED | _NOT_FOUND,
 )
-async def update_project(project_id: uuid.UUID, body: ProjectUpdate, projects: ProjectServiceDep) -> ProjectRead:
+async def update_project(
+    project_id: uuid.UUID,
+    body: ProjectUpdate,
+    projects: ProjectServiceDep,
+    members: ProjectMemberServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> ProjectRead:
+    await members.require_role(project_id, actor_user_id, ProjectRole.developer)
     return ProjectRead.model_validate(await projects.update(project_id, body))
 
 
@@ -62,7 +84,13 @@ async def update_project(project_id: uuid.UUID, body: ProjectUpdate, projects: P
     summary="Delete a project and its environments",
     responses=_UNAUTHENTICATED | _NOT_FOUND,
 )
-async def delete_project(project_id: uuid.UUID, projects: ProjectServiceDep) -> None:
+async def delete_project(
+    project_id: uuid.UUID,
+    projects: ProjectServiceDep,
+    members: ProjectMemberServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> None:
+    await members.require_role(project_id, actor_user_id, ProjectRole.owner)
     await projects.delete(project_id)
 
 
@@ -93,3 +121,59 @@ async def list_project_deployments(
         limit=page.limit,
         offset=page.offset,
     )
+
+
+@router.get(
+    "/{project_id}/members",
+    response_model=list[ProjectMemberRead],
+    status_code=status.HTTP_200_OK,
+    summary="List members and roles on a project (#256)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def list_project_members(
+    project_id: uuid.UUID, members: ProjectMemberServiceDep
+) -> list[ProjectMemberRead]:
+    return await members.list_members(project_id)
+
+
+@router.put(
+    "/{project_id}/members",
+    response_model=ProjectMemberRead,
+    status_code=status.HTTP_200_OK,
+    summary="Invite or update a project member's role (#256)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def upsert_project_member(
+    project_id: uuid.UUID,
+    body: ProjectMemberUpsertRequest,
+    members: ProjectMemberServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> ProjectMemberRead:
+    try:
+        return await members.upsert_member(project_id, body, actor_user_id=actor_user_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+
+
+@router.delete(
+    "/{project_id}/members/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a member from a project (#256)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def remove_project_member(
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    members: ProjectMemberServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> None:
+    try:
+        await members.remove_member(project_id, user_id, actor_user_id=actor_user_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc

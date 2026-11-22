@@ -1,11 +1,12 @@
 """Shared ``Depends()`` providers."""
 
 import secrets
+import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Annotated
 
-from fastapi import Depends, Query
+from fastapi import Depends, Header, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +49,7 @@ from app.services.hypervisor import FirecrackerHypervisor, Hypervisor, MemoryHyp
 from app.services.jobs import DeploymentEnqueueHooks, JobDispatcher, JobService
 from app.services.letsencrypt import LetsEncryptIssuer
 from app.services.projects import ProjectService
+from app.services.project_members import ProjectMemberRepository, ProjectMemberService
 from app.services.routes import RouteService
 from app.services.sandbox_hosts import SandboxHostService
 from app.services.sandboxes import SandboxService
@@ -91,6 +93,33 @@ def get_project_service(
 
 
 ProjectServiceDep = Annotated[ProjectService, Depends(get_project_service)]
+
+
+def get_project_member_service(
+    session: SessionDep, projects: ProjectServiceDep
+) -> ProjectMemberService:
+    return ProjectMemberService(
+        ProjectMemberRepository(session),
+        ConsoleUserRepository(session),
+        projects,
+    )
+
+
+ProjectMemberServiceDep = Annotated[ProjectMemberService, Depends(get_project_member_service)]
+
+
+def get_actor_user_id(
+    x_aerodeck_user_id: str | None = Header(default=None, alias="X-AeroDeck-User-Id"),
+) -> uuid.UUID | None:
+    if not x_aerodeck_user_id:
+        return None
+    try:
+        return uuid.UUID(x_aerodeck_user_id.strip())
+    except ValueError:
+        return None
+
+
+ActorUserIdDep = Annotated[uuid.UUID | None, Depends(get_actor_user_id)]
 
 
 def get_console_user_service(session: SessionDep) -> ConsoleUserService:
