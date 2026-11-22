@@ -120,7 +120,7 @@ class DockerProvisioner:
             env_file = build_runtime_env_file(checkout, target_port, f"https://{route_hostname}" if route_hostname else None, on_log, env_vars_json, addon_env)
             emit(f"Building Docker image {tag}...")
             build_res = self.runner.run(
-                [docker_bin, "build", "--progress=plain", "--build-arg", "BUILDKIT_INLINE_CACHE=1", "--cache-from", tag, "--tag", tag, str(checkout)],
+                [docker_bin, "build", "--progress=plain", "--tag", tag, str(checkout)],
                 cwd=checkout, env=self._docker_env({"DOCKER_BUILDKIT": "1"}), timeout=self.build_timeout_seconds, on_line=on_log,
             )
             if build_res.returncode != 0:

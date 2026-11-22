@@ -166,8 +166,12 @@ if [[ "${ENABLE}" == "true" ]]; then
 fi
 
 AERODECK_PROVISIONER_BACKEND="${AERODECK_PROVISIONER_BACKEND:-docker}"
-if [[ -z "${AERODECK_DOCKER_BIND_HOST:-}" ]]; then
-  PRIVATE_VPC_IP="$(ip -4 addr show 2>/dev/null | awk '/inet 10\./ {sub(/\/.*/, "", $2); print $2; exit}' || true)"
+# DigitalOcean eth0 carries a 10.18.x.x anchor/metadata IP; the VPC interface is eth1 (e.g. 10.41.0.2).
+if [[ -z "${AERODECK_DOCKER_BIND_HOST:-}" || "${AERODECK_DOCKER_BIND_HOST}" == 10.18.* ]]; then
+  PRIVATE_VPC_IP="$(ip -4 addr show dev eth1 2>/dev/null | awk '/inet 10\./ {sub(/\/.*/, "", $2); print $2; exit}' || true)"
+  if [[ -z "${PRIVATE_VPC_IP}" ]]; then
+    PRIVATE_VPC_IP="$(ip -4 addr show 2>/dev/null | awk '/inet 10\./ && $2 !~ /^10\.18\./ {sub(/\/.*/, "", $2); print $2; exit}' || true)"
+  fi
   AERODECK_DOCKER_BIND_HOST="${PRIVATE_VPC_IP:-127.0.0.1}"
 fi
 AERODECK_DOCKER_CONTAINER_PORT="${AERODECK_DOCKER_CONTAINER_PORT:-8000}"
@@ -228,9 +232,15 @@ if [[ "${RESTART_WORKER}" == "true" ]]; then
     WORKER_EXTRA_FLAGS+=(-v /var/run/docker.sock:/var/run/docker.sock --group-add "${DOCKER_SOCK_GID}")
   fi
 
+  CERT_KEY_DIR=/var/lib/aerodeck/certs
+  mkdir -p "${CERT_KEY_DIR}"
+  chown 10001:10001 "${CERT_KEY_DIR}"
+  chmod 700 "${CERT_KEY_DIR}"
+
   echo "restarting aerodeck-worker container with ${IMAGE}..."
   docker rm -f aerodeck-worker >/dev/null 2>&1 || true
   docker run -d --name aerodeck-worker --network host --restart unless-stopped \
+    -v "${CERT_KEY_DIR}:${CERT_KEY_DIR}" \
     "${WORKER_EXTRA_FLAGS[@]}" \
     "${DOCKER_ENV_FLAGS[@]}" \
     "${IMAGE}" \

@@ -117,8 +117,8 @@ def test_provisioner_auto_generates_dockerfile_and_uses_buildkit_cache() -> None
         on_log=streamed.append,
     )
     build_cmd = calls[1]
-    assert "--cache-from" in build_cmd
-    assert "BUILDKIT_INLINE_CACHE=1" in build_cmd
+    assert "--progress=plain" in build_cmd
+    assert "--cache-from" not in build_cmd
     assert any("auto-generating Dockerfile for Node.js" in line for line in streamed)
 
 
