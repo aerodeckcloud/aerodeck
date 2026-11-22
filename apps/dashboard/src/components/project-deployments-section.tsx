@@ -12,7 +12,15 @@ import { deployLatestDeployment, fetchProjectDeployments, redeployDeployment, ro
 import { formatDuration, formatInstant } from "@/lib/format";
 import type { Deployment, DeploymentStatus, EnvironmentOption, ProjectSource } from "@/lib/types";
 
-function statusBadge(status: DeploymentStatus) {
+function statusBadge(status: DeploymentStatus, heldFor?: string | null) {
+  if (heldFor && (status === "queued" || status === "running")) {
+    return (
+      <Badge variant="secondary">
+        <Loader2 className="size-3" />
+        Waiting
+      </Badge>
+    );
+  }
   if (status === "succeeded") {
     return (
       <Badge variant="default">
@@ -165,7 +173,7 @@ export function ProjectDeploymentsSection({
                       >
                         {dep.id.slice(0, 8)}
                       </Link>
-                      {statusBadge(dep.status)}
+                      {statusBadge(dep.status, dep.held_for_deployment_id)}
                       {envSlug ? <Badge variant="outline">{envSlug}</Badge> : null}
                     </div>
                     <p className="font-mono text-xs text-muted-foreground">

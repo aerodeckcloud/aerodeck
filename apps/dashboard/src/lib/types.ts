@@ -58,6 +58,8 @@ export type Deployment = {
   started_at: string;
   finished_at?: string | null;
   swap_started_at?: string | null;
+  /** Set while this row is waiting behind another deployment. Status stays queued. */
+  held_for_deployment_id?: string | null;
   status: DeploymentStatus;
 };
 
@@ -92,12 +94,16 @@ export const JOB_KINDS = new Set<JobKind>(["provision", "reconcile"]);
 
 /** `202` body from `POST .../environments/{id}/provision|reconcile`. */
 export type AcceptedJob = {
-  job_id: string;
+  job_id: string | null;
+  /** Present when the new deployment is waiting behind this one and no job was started. */
+  active_deployment_id?: string | null;
   kind: JobKind;
   project_id: string;
   environment_id: string;
   status: ProvisionJobStatus;
 };
+
+export type DeployOverlap = "wait" | "override";
 
 export type EnvironmentOption = {
   id: string;
@@ -108,6 +114,8 @@ export type EnvironmentOption = {
   name: string;
   kind: string;
   region: string;
+  /** How a new deploy behaves while another is still queued or running. Defaults to wait. */
+  deploy_overlap?: DeployOverlap;
 };
 
 export type EnvironmentOptionPage = {

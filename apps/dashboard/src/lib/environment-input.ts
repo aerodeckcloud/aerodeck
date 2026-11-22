@@ -105,18 +105,29 @@ export function parseEnvironmentCreateFields(
   return { ok: true, value: { projectId, name, slug, kind, region } };
 }
 
-export const ENVIRONMENT_UPDATE_EMPTY = "Change the name, kind, or region before saving.";
+export const ENVIRONMENT_UPDATE_EMPTY =
+  "Change the name, kind, region, or deploy behavior before saving.";
+export const ENVIRONMENT_OVERLAP_INVALID = "Choose wait or override.";
+
+export const DEPLOY_OVERLAPS = ["wait", "override"] as const;
+export type DeployOverlap = (typeof DEPLOY_OVERLAPS)[number];
+
+export function isValidDeployOverlap(value: string): value is DeployOverlap {
+  return value === "wait" || value === "override";
+}
 
 export type EnvironmentUpdateFields = {
   name?: string;
   kind?: string;
   region?: string;
+  deploy_overlap?: string;
 };
 
 export type EnvironmentUpdateParsed = {
   name?: string;
   kind?: EnvironmentKind;
   region?: string;
+  deploy_overlap?: DeployOverlap;
 };
 
 export type EnvironmentUpdateParseResult =
@@ -148,7 +159,19 @@ export function parseEnvironmentUpdateFields(
     }
     value.region = region;
   }
-  if (value.name === undefined && value.kind === undefined && value.region === undefined) {
+  if (input.deploy_overlap !== undefined) {
+    const overlap = input.deploy_overlap.trim();
+    if (!isValidDeployOverlap(overlap)) {
+      return { ok: false, error: ENVIRONMENT_OVERLAP_INVALID, code: "invalid_overlap" };
+    }
+    value.deploy_overlap = overlap;
+  }
+  if (
+    value.name === undefined &&
+    value.kind === undefined &&
+    value.region === undefined &&
+    value.deploy_overlap === undefined
+  ) {
     return { ok: false, error: ENVIRONMENT_UPDATE_EMPTY, code: "empty_update" };
   }
   return { ok: true, value };

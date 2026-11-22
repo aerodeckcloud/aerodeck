@@ -81,6 +81,14 @@ def _deployment_id_from_meta(
         return None
 
 
+def _release_waiting(deployment_id: uuid.UUID) -> None:
+    """Start the deployment that waited on this one (#271). Never raises."""
+    # Lazy import: waiting_release → services.jobs → repositories.jobs → this module.
+    from app.tasks.waiting_release import try_release_waiting_sync
+
+    try_release_waiting_sync(deployment_id)
+
+
 def _will_retry(task: Task, exc: BaseException) -> bool:
     if not isinstance(exc, _RETRY_ON):
         return False
@@ -170,6 +178,7 @@ def _run(
             publish_provision_lines_sync(redis_url, deployment_id, provision_failure_line(exc))
             try_mark_deployment_failed_sync(deployment_id)
             try_record_deployment_release_sync(deployment_id, git_ref=requested_ref, finished=True)
+            _release_waiting(deployment_id)
             notify_deployment_event_sync(
                 project_id=project_id,
                 project_slug=meta.get("project_slug", project_id[:8]),
@@ -183,6 +192,9 @@ def _run(
         # Fixed success line only — never publish outcome.detail (may grow unsafe).
         publish_provision_lines_sync(redis_url, deployment_id, PROVISION_SUCCESS_LINE, DONE_LINE)
         try_record_deployment_release_sync(deployment_id, git_ref=requested_ref, finished=True)
+        # The row stays ``running`` until the console reports Done. The finish time
+        # is what tells a waiting deployment that this one is over.
+        _release_waiting(deployment_id)
         notify_deployment_event_sync(
             project_id=project_id,
             project_slug=meta.get("project_slug", project_id[:8]),

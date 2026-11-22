@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import re
 import uuid
 from collections.abc import Sequence
@@ -239,6 +240,19 @@ class EnvironmentVariableService:
             skipped=skipped,
             items=[EnvironmentVarRead.model_validate(r) for r in updated],
         )
+
+    def seal(self, values: dict[str, str]) -> str:
+        """Encrypt one-off variables of a deployment that has to wait (#271).
+
+        Same key and cipher as saved variables. The token lives on the waiting
+        deployment row and is removed when the row starts or is cancelled.
+        """
+        return encrypt_env_value(json.dumps(values), self._signing_key)
+
+    def unseal(self, token: str) -> dict[str, str]:
+        """Reverse ``seal``. Raises ``InvalidToken`` when the signing key changed."""
+        values = json.loads(decrypt_env_value(token, self._signing_key))
+        return {str(key): str(value) for key, value in values.items()}
 
     async def load_decrypted_map(
         self, project_id: uuid.UUID, environment_id: uuid.UUID

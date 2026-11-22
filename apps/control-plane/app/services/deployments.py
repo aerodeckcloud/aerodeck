@@ -40,9 +40,11 @@ def _is_deployment_environment_fk_violation(exc: IntegrityError) -> bool:
 
 
 class EnvironmentLookup(Protocol):
-    """Narrow create-time check that the linked environment exists."""
+    """Create-time check that the environment exists, plus its deploy lock."""
 
     async def get(self, project_id: uuid.UUID, environment_id: uuid.UUID) -> Environment: ...
+
+    async def lock_for_deploy(self, environment_id: uuid.UUID) -> None: ...
 
 
 class DeploymentService:
@@ -127,11 +129,61 @@ class DeploymentService:
         return await self._mark_terminal(deployment_id, DeploymentStatus.failed)
 
     async def cancel(self, deployment_id: uuid.UUID) -> Deployment:
+        await self._lock_environment_of(deployment_id)
         return await self._terminal.cancel(deployment_id)
+
+    # One deployment at a time (#271). JobService decides; these keep it off the repository.
+
+    async def list_active(
+        self, environment_id: uuid.UUID, exclude_id: uuid.UUID
+    ) -> Sequence[Deployment]:
+        return await self._deployments.list_active(environment_id, exclude_id)
+
+    async def mark_dispatched(self, deployment_id: uuid.UUID) -> None:
+        await self._deployments.mark_dispatched(deployment_id, datetime.now(UTC))
+
+    async def mark_waiting(
+        self, deployment_id: uuid.UUID, active_id: uuid.UUID, replay_json: str | None
+    ) -> None:
+        await self._deployments.mark_waiting(deployment_id, active_id, replay_json)
+
+    async def cancel_waiting(
+        self, environment_id: uuid.UUID, *, keep_id: uuid.UUID | None
+    ) -> int:
+        return await self._deployments.cancel_waiting(
+            environment_id, datetime.now(UTC), keep_id=keep_id
+        )
+
+    async def claim_newest_waiter(
+        self, environment_id: uuid.UUID, finished_id: uuid.UUID
+    ) -> tuple[Deployment, str | None] | None:
+        return await self._deployments.claim_newest_waiter(
+            environment_id, finished_id, datetime.now(UTC)
+        )
+
+    async def commit(self) -> None:
+        await self._deployments.commit()
+
+    async def refresh(self, deployment: Deployment) -> None:
+        await self._deployments.refresh(deployment)
+
+    async def _lock_environment_of(self, deployment_id: uuid.UUID) -> None:
+        """Take the environment lock before writing the deployment row.
+
+        Enqueue locks the environment and then writes deployment rows. A status
+        change that wrote its row first and asked for the lock second could
+        deadlock against it on PostgreSQL, so both use the same order.
+        """
+        current = await self._deployments.get(deployment_id)
+        if current is not None and current.environment_id is not None:
+            await self._environments.lock_for_deploy(current.environment_id)
+            # Another request may have changed the row while this one waited.
+            await self._deployments.refresh(current)
 
     async def _mark_terminal(
         self, deployment_id: uuid.UUID, status: DeploymentStatus
     ) -> Deployment:
+        await self._lock_environment_of(deployment_id)
         stored = await self._terminal.mark(deployment_id, status)
         if stored is None:
             raise NotFoundError(f"Deployment {deployment_id} not found")

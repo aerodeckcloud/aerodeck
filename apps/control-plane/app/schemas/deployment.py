@@ -49,5 +49,6 @@ class DeploymentRead(BaseModel):
     started_at: datetime
     finished_at: datetime | None
     swap_started_at: datetime | None
+    held_for_deployment_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime

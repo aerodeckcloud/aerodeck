@@ -25,6 +25,20 @@ class EnvironmentRepository:
         )
         return result.scalar_one_or_none()
 
+    async def lock_for_deploy(self, environment_id: uuid.UUID) -> None:
+        """Hold the environment row until this transaction ends.
+
+        Overlap decisions for one environment then run one at a time, so two
+        provisions cannot each read the other as the active deploy. The lock is
+        ``FOR NO KEY UPDATE`` so inserting a deployment that references the
+        environment is not blocked. SQLite drops the clause; it has one writer.
+        """
+        await self._session.execute(
+            select(Environment.id)
+            .where(Environment.id == environment_id)
+            .with_for_update(key_share=True)
+        )
+
     async def get_by_slug(self, project_id: uuid.UUID, slug: str) -> Environment | None:
         result = await self._session.execute(
             select(Environment).where(Environment.project_id == project_id, Environment.slug == slug)

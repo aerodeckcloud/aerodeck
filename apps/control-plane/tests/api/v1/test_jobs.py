@@ -312,6 +312,50 @@ async def test_failed_provision_still_finishes_the_release_record(
     assert recorded[-1]["finished"] is True
 
 
+@pytest.mark.parametrize("fails", [False, True], ids=["succeeded", "failed"])
+async def test_provision_releases_the_waiting_deployment_when_it_ends(
+    client: AsyncClient,
+    auth: dict[str, str],
+    environment: dict,
+    monkeypatch: pytest.MonkeyPatch,
+    fails: bool,
+) -> None:
+    """A deploy nobody watches ends only in the worker, so the worker starts the next one."""
+    released: list[str] = []
+    monkeypatch.setattr(tasks, "_release_waiting", lambda deployment_id: released.append(str(deployment_id)))
+    monkeypatch.setattr(tasks, "get_settings", lambda: make_settings(database_url=None, redis_url=None))
+
+    class Failing:
+        def provision(self, *, project_id: str, environment_id: str, **_: str) -> JobOutcome:
+            raise PermanentJobError("build failed")
+
+        def reconcile(self, *, project_id: str, environment_id: str, **_: str) -> JobOutcome:
+            raise PermanentJobError("unused")
+
+    created = await client.post(
+        "/api/v1/deployments",
+        headers=auth,
+        json={
+            "repo_url": "https://github.com/acme/payments",
+            "project_id": environment["project_id"],
+            "environment_id": environment["id"],
+        },
+    )
+    assert created.status_code == 201, created.text
+    tasks.use_provisioner(Failing() if fails else NoopProvisioner())
+    try:
+        accepted = await client.post(
+            job_url(environment, "provision"),
+            headers=auth,
+            json={"deployment_id": created.json()["id"]},
+        )
+    finally:
+        tasks.use_provisioner(NoopProvisioner())
+
+    assert accepted.status_code == 202, accepted.text
+    assert released == [created.json()["id"]]
+
+
 async def test_cancelled_deployment_does_not_run_provision(
     client: AsyncClient, auth: dict[str, str], environment: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:

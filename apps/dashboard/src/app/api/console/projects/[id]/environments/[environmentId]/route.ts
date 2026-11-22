@@ -35,11 +35,12 @@ export async function PATCH(request: Request, context: RouteContext) {
     return body.response;
   }
 
-  const fields: { name?: string; kind?: string; region?: string } = {};
+  const fields: { name?: string; kind?: string; region?: string; deploy_overlap?: string } = {};
   for (const [key, code] of [
     ["name", "invalid_name"],
     ["kind", "invalid_kind"],
     ["region", "invalid_region"],
+    ["deploy_overlap", "invalid_overlap"],
   ] as const) {
     const field = readOptionalString(body.value, key, code);
     if (!field.ok) {

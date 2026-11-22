@@ -43,6 +43,10 @@ class EnvironmentService:
             raise NotFoundError(f"Environment {environment_id} not found in project {project_id}")
         return environment
 
+    async def lock_for_deploy(self, environment_id: uuid.UUID) -> None:
+        """Serialise deploy overlap decisions for one environment (#271)."""
+        await self._environments.lock_for_deploy(environment_id)
+
     async def list(self, project_id: uuid.UUID, *, limit: int, offset: int) -> tuple[Sequence[Environment], int]:
         await self._projects.get(project_id)
         return await self._environments.list(project_id, limit=limit, offset=offset)

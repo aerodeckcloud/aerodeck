@@ -2,7 +2,7 @@ import re
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.services.provisioning import JobKind
 
@@ -49,11 +49,18 @@ class ProvisionJobCreate(BaseModel):
 class JobAccepted(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    job_id: uuid.UUID
+    job_id: uuid.UUID | None = None
+    active_deployment_id: uuid.UUID | None = None
     kind: JobKind
     project_id: uuid.UUID
     environment_id: uuid.UUID
     status: JobStatusValue = "queued"
+
+    @model_validator(mode="after")
+    def job_or_active_deployment(self) -> "JobAccepted":
+        if self.job_id is None and self.active_deployment_id is None:
+            raise ValueError("job_id or active_deployment_id is required")
+        return self
 
 
 class JobRead(BaseModel):
