@@ -14,6 +14,7 @@ BuildStrategy = Literal["dockerfile", "compose", "auto"]
 BlueprintSource = Literal["aerodeck.yaml", "docker-compose", "dockerfile", "auto"]
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+_VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){0,2}$")
 
 
 class BlueprintBuild(BaseModel):
@@ -39,6 +40,10 @@ class BlueprintAddon(BaseModel):
             self.env_var = "DATABASE_URL" if self.type == "postgres" else "REDIS_URL"
         if not self.version:
             self.version = "16" if self.type == "postgres" else "7"
+        if not _ENV_KEY_RE.fullmatch(self.env_var):
+            raise ValueError(f"invalid addon env_var {self.env_var!r}")
+        if not _VERSION_RE.fullmatch(self.version):
+            raise ValueError(f"invalid addon version {self.version!r}")
         return self
 
 

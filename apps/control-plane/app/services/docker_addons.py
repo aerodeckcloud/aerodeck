@@ -6,7 +6,6 @@ import hashlib
 import hmac
 import json
 import os
-import secrets
 import time
 import uuid
 from collections.abc import Callable
@@ -17,14 +16,15 @@ from app.services.provisioning import PermanentJobError, TransientJobError
 LogSink = Callable[[str], None]
 _ALLOWED_ADDONS = frozenset({"postgres", "redis"})
 _ADDON_READY_TIMEOUT_SECONDS = 30
-_FALLBACK_EPHEMERAL_KEY = secrets.token_bytes(32)
 
 
 def _addon_password(project_id: uuid.UUID, environment_id: uuid.UUID, addon_type: str) -> str:
     """Derive a per-environment addon password via HMAC-SHA256 keyed by AERODECK_AUTH_SIGNING_KEY."""
-    secret = os.environ.get("AERODECK_AUTH_SIGNING_KEY", "").encode("utf-8") or _FALLBACK_EPHEMERAL_KEY
+    key_str = os.environ.get("AERODECK_AUTH_SIGNING_KEY", "").strip()
+    if not key_str:
+        raise PermanentJobError("AERODECK_AUTH_SIGNING_KEY is required to derive addon credentials")
     msg = f"{project_id}:{environment_id}:{addon_type}".encode("utf-8")
-    return hmac.new(secret, msg, hashlib.sha256).hexdigest()[:32]
+    return hmac.new(key_str.encode("utf-8"), msg, hashlib.sha256).hexdigest()[:32]
 
 
 def _wait_for_addon_ready(
@@ -78,8 +78,12 @@ def ensure_tenant_network(
     if inspect_res.returncode == 0:
         return
     create_res = runner.run([docker_bin, "network", "create", "--driver", "bridge", network_name], env=docker_env, timeout=30)
-    if create_res.returncode != 0:
-        raise classify_failure("docker network create", create_res)
+    if create_res.returncode == 0:
+        return
+    # Handle concurrent creation race: if another worker just created the network, inspect succeeds now.
+    if runner.run([docker_bin, "network", "inspect", network_name], env=docker_env, timeout=15).returncode == 0:
+        return
+    raise classify_failure("docker network create", create_res)
 
 
 def provision_environment_addons(

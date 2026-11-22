@@ -19,7 +19,7 @@ from app.schemas.blueprint import (
     DeploymentBlueprint,
 )
 from app.services.docker_env_discovery import discover_repo_env_defaults
-from app.services.docker_policy import CommandRunner, SubprocessCommandRunner
+from app.services.docker_policy import CommandRunner, SubprocessCommandRunner, validate_binary
 from app.services.dockerfile_detector import detect_dockerfile_template, detect_exposed_port
 
 _SECRET_TOKENS = ("SECRET", "TOKEN", "PASSWORD", "PRIVATE_KEY", "API_KEY", "SIGNING_KEY")
@@ -193,13 +193,14 @@ def inspect_github_repository_sync(
     if parsed is None:
         raise ValueError("repo_url must be a valid GitHub repository URL")
     owner, repo = parsed
+    safe_git = validate_binary(git_bin, "git_bin")
     canonical = canonical_github_repo_url(owner, repo)
     clone_url = f"{canonical}.git"
     cmd_runner = runner or SubprocessCommandRunner()
     with tempfile.TemporaryDirectory(prefix="aerodeck-inspect-") as tmp:
         checkout = Path(tmp) / "repo"
         res = cmd_runner.run(
-            [git_bin, "clone", "--depth=1", "--single-branch", "--", clone_url, str(checkout)],
+            [safe_git, "clone", "--depth=1", "--single-branch", "--", clone_url, str(checkout)],
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
             timeout=45,
         )
