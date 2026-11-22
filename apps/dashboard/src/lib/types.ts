@@ -193,7 +193,7 @@ export type DeployLogEvent = {
   text: string;
 };
 
-export type AddonType = "postgres" | "redis";
+export type AddonType = "postgres" | "redis" | "mongodb";
 
 export type BlueprintEnvVar = {
   key: string;
