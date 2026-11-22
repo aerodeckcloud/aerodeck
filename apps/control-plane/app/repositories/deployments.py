@@ -1,10 +1,11 @@
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import ColumnElement, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.deployment import Deployment
+from app.models.deployment import Deployment, DeploymentStatus
 
 
 class DeploymentRepository:
@@ -18,6 +19,43 @@ class DeploymentRepository:
 
     async def get(self, deployment_id: uuid.UUID) -> Deployment | None:
         return await self._session.get(Deployment, deployment_id)
+
+    async def cancel_before_swap(
+        self, deployment_id: uuid.UUID, finished_at: datetime
+    ) -> Deployment | None:
+        """Mark cancelled only while the row is still queued or running and swap has not started."""
+        updated = await self._session.scalar(
+            update(Deployment)
+            .where(
+                Deployment.id == deployment_id,
+                Deployment.status.in_((DeploymentStatus.queued, DeploymentStatus.running)),
+                Deployment.swap_started_at.is_(None),
+            )
+            .values(status=DeploymentStatus.cancelled, finished_at=finished_at)
+            .returning(Deployment)
+        )
+        return updated
+
+    async def begin_swap(self, deployment_id: uuid.UUID, started_at: datetime) -> bool:
+        """Stamp swap start. False when the row was cancelled or is already terminal."""
+        updated = await self._session.scalar(
+            update(Deployment)
+            .where(
+                Deployment.id == deployment_id,
+                Deployment.status.in_((DeploymentStatus.queued, DeploymentStatus.running)),
+                Deployment.swap_started_at.is_(None),
+            )
+            .values(swap_started_at=started_at)
+            .returning(Deployment.id)
+        )
+        if updated is not None:
+            return True
+        current = await self.get(deployment_id)
+        return (
+            current is not None
+            and current.swap_started_at is not None
+            and current.status in (DeploymentStatus.queued, DeploymentStatus.running)
+        )
 
     async def save(self, deployment: Deployment) -> Deployment:
         await self.add(deployment)

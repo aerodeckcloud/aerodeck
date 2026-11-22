@@ -10,6 +10,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Protocol
 
+from app.core.errors import ConflictError, NotFoundError, UnprocessableError
 from app.core.logging import get_logger
 from app.models.deployment import Deployment, DeploymentStatus
 from app.services.docker_policy import normalize_git_sha, validate_git_ref
@@ -22,6 +23,12 @@ class DeploymentStore(Protocol):
     async def get(self, deployment_id: uuid.UUID) -> Deployment | None: ...
 
     async def save(self, deployment: Deployment) -> Deployment: ...
+
+    async def cancel_before_swap(
+        self, deployment_id: uuid.UUID, finished_at: datetime
+    ) -> Deployment | None: ...
+
+    async def begin_swap(self, deployment_id: uuid.UUID, started_at: datetime) -> bool: ...
 
 
 class DeploymentTerminalService:
@@ -37,7 +44,11 @@ class DeploymentTerminalService:
         deployment = await self._deployments.get(deployment_id)
         if deployment is None:
             return None
-        if deployment.status in (DeploymentStatus.succeeded, DeploymentStatus.failed):
+        if deployment.status in (
+            DeploymentStatus.succeeded,
+            DeploymentStatus.failed,
+            DeploymentStatus.cancelled,
+        ):
             logger.info(
                 "deployment %s already %s; leave unchanged",
                 deployment_id,
@@ -78,6 +89,30 @@ class DeploymentTerminalService:
         stored = await self._deployments.save(deployment)
         logger.info("deployment %s release recorded", stored.id)
         return stored
+
+    async def cancel(self, deployment_id: uuid.UUID) -> Deployment:
+        """Cancel before cutover. 409 once swap has started, 422 when already terminal."""
+        finished_at = datetime.now(UTC)
+        stored = await self._deployments.cancel_before_swap(deployment_id, finished_at)
+        if stored is not None:
+            logger.info("deployment %s cancelled", stored.id)
+            return stored
+        current = await self._deployments.get(deployment_id)
+        if current is None:
+            raise NotFoundError(f"Deployment {deployment_id} not found")
+        if current.swap_started_at is not None and current.status in (
+            DeploymentStatus.queued,
+            DeploymentStatus.running,
+        ):
+            raise ConflictError("Container swap already started.")
+        raise UnprocessableError("Only a queued or running deployment can be cancelled.")
+
+    async def begin_swap(self, deployment_id: uuid.UUID) -> bool:
+        """Return False when a later job must not touch the live container."""
+        allowed = await self._deployments.begin_swap(deployment_id, datetime.now(UTC))
+        if not allowed:
+            logger.info("deployment %s swap skipped", deployment_id)
+        return allowed
 
     async def set_provision_job_id(
         self, deployment_id: uuid.UUID, job_id: uuid.UUID

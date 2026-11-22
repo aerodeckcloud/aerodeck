@@ -13,6 +13,7 @@ import {
   failControlPlaneDeployment,
   readControlPlaneConfig,
   authenticateControlPlaneUser,
+  cancelControlPlaneDeployment,
   createControlPlaneDeployment,
   createControlPlaneDeploymentAndProvision,
   deployLatestControlPlaneDeployment,
@@ -1660,6 +1661,20 @@ describe("control plane deployments", () => {
     await deployLatestControlPlaneDeployment(config, deploymentRow.id, { fetch: latestFetch });
     assert.match(latestUrl, /\/deploy-latest$/);
     assert.equal(latestUrl.includes("git_sha"), false);
+
+    let cancelUrl = "";
+    const cancelFetch: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      cancelUrl = url;
+      assert.equal(init?.method, "POST");
+      return jsonResponse({ ...recorded, status: "cancelled" }, 200);
+    };
+    const cancelled = await cancelControlPlaneDeployment(config, deploymentRow.id, { fetch: cancelFetch });
+    assert.match(cancelUrl, /\/cancel$/);
+    assert.equal(cancelled.status, "cancelled");
   });
 
   it("rejects a commit that is not 40 hex characters", async () => {

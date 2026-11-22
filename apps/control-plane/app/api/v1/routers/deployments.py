@@ -318,6 +318,23 @@ async def deploy_latest_deployment(
 
 
 @router.post(
+    "/{deployment_id}/cancel",
+    response_model=DeploymentRead,
+    status_code=status.HTTP_200_OK,
+    summary="Cancel a deployment before the live container is swapped (#270)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED,
+)
+async def cancel_deployment(
+    deployment_id: uuid.UUID,
+    deployments: DeploymentServiceDep,
+    jobs: JobServiceDep,
+) -> DeploymentRead:
+    stored = await deployments.cancel(deployment_id)
+    await jobs.revoke_quietly(stored.provision_job_id)
+    return DeploymentRead.model_validate(stored)
+
+
+@router.post(
     "/{deployment_id}/rollback",
     response_model=DeploymentRead,
     status_code=status.HTTP_201_CREATED,

@@ -561,6 +561,14 @@ export async function redeployDeployment(deploymentId: string): Promise<Deployme
   return readJson(response);
 }
 
+export async function cancelDeployment(deploymentId: string): Promise<Deployment> {
+  const response = await fetch(
+    `/api/console/deployments/${encodeURIComponent(deploymentId)}/cancel`,
+    { method: "POST", credentials: "same-origin" },
+  );
+  return readJson(response);
+}
+
 export async function deployLatestDeployment(deploymentId: string): Promise<Deployment> {
   const response = await fetch(
     `/api/console/deployments/${encodeURIComponent(deploymentId)}/deploy-latest`,

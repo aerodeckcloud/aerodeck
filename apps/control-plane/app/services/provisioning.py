@@ -22,6 +22,10 @@ class PermanentJobError(Exception):
     """Retrying will not help: bad input, policy violation, resource gone."""
 
 
+class DeploymentCancelled(PermanentJobError):
+    """The operator cancelled before cutover. The worker must not mark the row failed."""
+
+
 @dataclass(frozen=True, slots=True)
 class JobOutcome:
     kind: JobKind

@@ -16,6 +16,7 @@ class DeploymentStatus(enum.StrEnum):
     running = "running"
     succeeded = "succeeded"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 class DeploymentTrigger(enum.StrEnum):
@@ -58,6 +59,8 @@ class Deployment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     trigger: Mapped[str | None] = mapped_column(String(16), nullable=True)
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set immediately before the live container is removed. Cancel is refused after this (#270).
+    swap_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[DeploymentStatus] = mapped_column(
         Enum(DeploymentStatus, name="deployment_status", native_enum=False, length=16),
         nullable=False,

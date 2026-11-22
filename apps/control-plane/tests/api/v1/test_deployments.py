@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict
 from unittest.mock import AsyncMock
@@ -7,9 +8,13 @@ import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
 from redis.exceptions import RedisError
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.api.deps import get_job_dispatcher
 from app.core.config import get_settings
+from app.models.deployment import Deployment
 from app.services.deployment_logs import DONE_LINE, publish_line
+from app.services.provisioning import JobKind
 from tests.conftest import make_settings
 
 DEPLOYMENTS = "/api/v1/deployments"
@@ -430,6 +435,114 @@ async def test_terminal_status_sets_finished_at_once(client: AsyncClient, auth: 
     assert marked.json()["status"] == "failed"
     assert marked.json()["finished_at"] is not None
     assert marked.json()["git_sha"] is None
+
+
+class _RevokeDispatcher:
+    def __init__(self, *, explode: bool = False) -> None:
+        self.explode = explode
+        self.revoked: list[str] = []
+
+    def dispatch(self, kind: JobKind, *, project_id: str, environment_id: str, **meta: str) -> str:
+        return str(uuid4())
+
+    def state(self, job_id: str):
+        raise AssertionError("state should not be called")
+
+    def revoke(self, job_id: str) -> None:
+        if self.explode:
+            raise ConnectionError("broker down")
+        self.revoked.append(job_id)
+
+
+async def test_cancel_before_swap_sets_cancelled_and_revokes(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    dispatcher = _RevokeDispatcher()
+    app.dependency_overrides[get_job_dispatcher] = lambda: dispatcher
+    try:
+        created = await client.post(DEPLOYMENTS, json={"repo_url": REPO}, headers=auth)
+        assert created.status_code == 201, created.text
+        deployment_id = created.json()["id"]
+        job_id = str(uuid4())
+        sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
+        async with sessions() as session:
+            row = await session.get(Deployment, UUID(deployment_id))
+            assert row is not None
+            row.provision_job_id = UUID(job_id)
+            await session.commit()
+
+        cancelled = await client.post(f"{DEPLOYMENTS}/{deployment_id}/cancel", headers=auth)
+        assert cancelled.status_code == 200, cancelled.text
+        body = cancelled.json()
+        assert body["status"] == "cancelled"
+        assert body["finished_at"] is not None
+        assert body["swap_started_at"] is None
+        assert dispatcher.revoked == [job_id]
+
+        again = await client.post(f"{DEPLOYMENTS}/{deployment_id}/cancel", headers=auth)
+        assert again.status_code == 422
+        assert again.json()["code"] == "unprocessable"
+
+        finished = await client.post(DEPLOYMENTS, json={"repo_url": REPO}, headers=auth)
+        finished_id = finished.json()["id"]
+        assert (await client.post(f"{DEPLOYMENTS}/{finished_id}/succeeded", headers=auth)).status_code == 200
+        refused = await client.post(f"{DEPLOYMENTS}/{finished_id}/cancel", headers=auth)
+        assert refused.status_code == 422
+
+        failed = await client.post(DEPLOYMENTS, json={"repo_url": REPO}, headers=auth)
+        failed_id = failed.json()["id"]
+        assert (await client.post(f"{DEPLOYMENTS}/{failed_id}/failed", headers=auth)).status_code == 200
+        assert (await client.post(f"{DEPLOYMENTS}/{failed_id}/cancel", headers=auth)).status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_job_dispatcher, None)
+
+
+async def test_cancel_is_refused_once_swap_has_started(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    dispatcher = _RevokeDispatcher()
+    app.dependency_overrides[get_job_dispatcher] = lambda: dispatcher
+    try:
+        created = await client.post(DEPLOYMENTS, json={"repo_url": REPO}, headers=auth)
+        deployment_id = created.json()["id"]
+        sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
+        async with sessions() as session:
+            row = await session.get(Deployment, UUID(deployment_id))
+            assert row is not None
+            row.swap_started_at = datetime.now(UTC)
+            await session.commit()
+
+        refused = await client.post(f"{DEPLOYMENTS}/{deployment_id}/cancel", headers=auth)
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["code"] == "conflict"
+        assert dispatcher.revoked == []
+        stored = await client.get(f"{DEPLOYMENTS}/{deployment_id}", headers=auth)
+        assert stored.json()["status"] == "running"
+    finally:
+        app.dependency_overrides.pop(get_job_dispatcher, None)
+
+
+async def test_cancel_stays_cancelled_when_revoke_fails(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    app.dependency_overrides[get_job_dispatcher] = lambda: _RevokeDispatcher(explode=True)
+    try:
+        created = await client.post(DEPLOYMENTS, json={"repo_url": REPO}, headers=auth)
+        deployment_id = created.json()["id"]
+        sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
+        async with sessions() as session:
+            row = await session.get(Deployment, UUID(deployment_id))
+            assert row is not None
+            row.provision_job_id = uuid4()
+            await session.commit()
+        cancelled = await client.post(f"{DEPLOYMENTS}/{deployment_id}/cancel", headers=auth)
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["status"] == "cancelled"
+        clobbered = await client.post(f"{DEPLOYMENTS}/{deployment_id}/failed", headers=auth)
+        assert clobbered.status_code == 200, clobbered.text
+        assert clobbered.json()["status"] == "cancelled"
+    finally:
+        app.dependency_overrides.pop(get_job_dispatcher, None)
 
 
 async def test_deployment_routes_require_a_token(client: AsyncClient) -> None:

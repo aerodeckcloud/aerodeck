@@ -175,6 +175,67 @@ def try_record_deployment_release_sync(
         )
 
 
+async def _begin_swap_on_private_engine(database_url: str, deployment_id: uuid.UUID) -> bool:
+    engine = create_engine(database_url, poolclass=NullPool)
+    sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    try:
+        async with sessions() as session:
+            try:
+                allowed = await DeploymentTerminalService(DeploymentRepository(session)).begin_swap(
+                    deployment_id
+                )
+                await session.commit()
+                return allowed
+            except Exception:
+                await session.rollback()
+                raise
+    finally:
+        await engine.dispose()
+
+
+def try_begin_deployment_swap_sync(deployment_id: uuid.UUID) -> bool:
+    """Stamp swap start. True when the database is unset so tests without a URL still deploy."""
+    settings = get_settings()
+    if not settings.database_url:
+        return True
+    try:
+        return asyncio.run(_begin_swap_on_private_engine(settings.database_url, deployment_id))
+    except Exception as swap_exc:
+        logger.warning(
+            "event=deployment_swap_stamp_skipped deployment=%s error_type=%s",
+            deployment_id,
+            type(swap_exc).__name__,
+        )
+        return True
+
+
+async def _deployment_is_cancelled(database_url: str, deployment_id: uuid.UUID) -> bool:
+    engine = create_engine(database_url, poolclass=NullPool)
+    sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    try:
+        async with sessions() as session:
+            stored = await DeploymentRepository(session).get(deployment_id)
+            return stored is not None and stored.status is DeploymentStatus.cancelled
+    finally:
+        await engine.dispose()
+
+
+def deployment_is_cancelled_sync(deployment_id: uuid.UUID) -> bool:
+    """True only when the row is cancelled. False when the database URL is unset."""
+    settings = get_settings()
+    if not settings.database_url:
+        return False
+    try:
+        return asyncio.run(_deployment_is_cancelled(settings.database_url, deployment_id))
+    except Exception as status_exc:
+        logger.warning(
+            "event=deployment_cancel_check_skipped deployment=%s error_type=%s",
+            deployment_id,
+            type(status_exc).__name__,
+        )
+        return False
+
+
 def try_mark_deployment_failed_sync(deployment_id: uuid.UUID) -> None:
     """Best-effort sync mark; log and continue on failure."""
     try:

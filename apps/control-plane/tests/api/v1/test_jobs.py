@@ -312,6 +312,91 @@ async def test_failed_provision_still_finishes_the_release_record(
     assert recorded[-1]["finished"] is True
 
 
+async def test_cancelled_deployment_does_not_run_provision(
+    client: AsyncClient, auth: dict[str, str], environment: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class MustNotRun:
+        def provision(self, *, project_id: str, environment_id: str, **_: str) -> JobOutcome:
+            raise AssertionError("cancelled deployment must not provision")
+
+        def reconcile(self, *, project_id: str, environment_id: str, **_: str) -> JobOutcome:
+            raise AssertionError("unused")
+
+    monkeypatch.setattr(tasks, "deployment_is_cancelled_sync", lambda _deployment_id: True)
+    monkeypatch.setattr(tasks, "get_settings", lambda: make_settings(database_url=None, redis_url=None))
+    created = await client.post(
+        "/api/v1/deployments",
+        headers=auth,
+        json={
+            "repo_url": "https://github.com/acme/payments",
+            "project_id": environment["project_id"],
+            "environment_id": environment["id"],
+        },
+    )
+    assert created.status_code == 201, created.text
+    tasks.use_provisioner(MustNotRun())
+    try:
+        accepted = await client.post(
+            job_url(environment, "provision"),
+            headers=auth,
+            json={"deployment_id": created.json()["id"]},
+        )
+        job = await client.get(f"/api/v1/jobs/{accepted.json()['job_id']}", headers=auth)
+    finally:
+        tasks.use_provisioner(NoopProvisioner())
+
+    assert job.json()["status"] == "succeeded"
+    assert job.json()["result"]["changed"] is False
+    assert job.json()["result"]["detail"] == "cancelled"
+
+
+async def test_swap_refusal_does_not_mark_the_deployment_failed(
+    client: AsyncClient, auth: dict[str, str], environment: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class ReachesSwap:
+        def provision(self, *, project_id: str, environment_id: str, on_swap=None, **_: str) -> JobOutcome:
+            if on_swap is not None:
+                on_swap()
+            return JobOutcome(
+                kind=JobKind.provision,
+                project_id=project_id,
+                environment_id=environment_id,
+                changed=True,
+                detail="swapped",
+            )
+
+        def reconcile(self, *, project_id: str, environment_id: str, **_: str) -> JobOutcome:
+            raise PermanentJobError("unused")
+
+    monkeypatch.setattr(tasks, "try_begin_deployment_swap_sync", lambda _deployment_id: False)
+    monkeypatch.setattr(tasks, "get_settings", lambda: make_settings(database_url=None, redis_url=None))
+    created = await client.post(
+        "/api/v1/deployments",
+        headers=auth,
+        json={
+            "repo_url": "https://github.com/acme/payments",
+            "project_id": environment["project_id"],
+            "environment_id": environment["id"],
+        },
+    )
+    assert created.status_code == 201, created.text
+    tasks.use_provisioner(ReachesSwap())
+    try:
+        accepted = await client.post(
+            job_url(environment, "provision"),
+            headers=auth,
+            json={"deployment_id": created.json()["id"]},
+        )
+        job = await client.get(f"/api/v1/jobs/{accepted.json()['job_id']}", headers=auth)
+    finally:
+        tasks.use_provisioner(NoopProvisioner())
+
+    stored = await client.get(f"/api/v1/deployments/{created.json()['id']}", headers=auth)
+    assert job.json()["status"] == "succeeded"
+    assert job.json()["result"]["detail"] == "cancelled"
+    assert stored.json()["status"] == "running"
+
+
 async def test_failed_job_reports_the_error(client: AsyncClient, auth: dict[str, str], environment: dict) -> None:
     class Broken:
         def provision(self, *, project_id: str, environment_id: str, **_: str) -> JobOutcome:
