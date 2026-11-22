@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { EnvironmentEditRow } from "@/components/environment-edit-row";
 import { NewEnvironmentForm } from "@/components/new-environment-form";
 import { PageHeader } from "@/components/page-header";
+import { ProjectDeploymentsSection } from "@/components/project-deployments-section";
 import { ProjectEditPanel } from "@/components/project-edit-panel";
 import { ProjectRoutesSection } from "@/components/project-routes-section";
 import { Card, CardContent } from "@/components/ui/card";
@@ -232,6 +233,11 @@ export default function ProjectDetailPage() {
         projectUnavailable={Boolean(error && !project)}
         routesUnavailable={detail?.routes_unavailable ?? false}
         onRouteCreated={handleRouteCreated}
+      />
+      <ProjectDeploymentsSection
+        projectId={project?.id}
+        environments={environments}
+        source={detail?.source}
       />
     </div>
   );

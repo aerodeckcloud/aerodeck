@@ -799,6 +799,86 @@ export async function deleteControlPlaneEnvironmentWebhook(
   }
 }
 
+export async function listControlPlaneProjectDeployments(
+  config: ControlPlaneConfig,
+  projectId: string,
+  environmentId?: string,
+  options: ListOptions = {},
+): Promise<Deployment[]> {
+  if (!isControlPlaneUuid(projectId)) {
+    throw new ControlPlaneError("projectId must be a uuid");
+  }
+  if (environmentId && !isControlPlaneUuid(environmentId)) {
+    throw new ControlPlaneError("environmentId must be a uuid");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const query = new URLSearchParams({ limit: "30", offset: "0" });
+  if (environmentId) {
+    query.set("environment_id", environmentId);
+  }
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/deployments?${query.toString()}`,
+    {
+      headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane project deployments failed (${response.status})`,
+      response.status,
+    );
+  }
+  return parseDeploymentPage(await response.json()).items;
+}
+
+async function triggerControlPlaneDeploymentAction(
+  config: ControlPlaneConfig,
+  deploymentId: string,
+  action: "redeploy" | "rollback",
+  options: ListOptions = {},
+): Promise<Deployment> {
+  if (!isControlPlaneUuid(deploymentId)) {
+    throw new ControlPlaneError("deploymentId must be a uuid");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/${action}`,
+    {
+      method: "POST",
+      headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane deployment ${action} failed (${response.status})`,
+      response.status,
+    );
+  }
+  return parseDeployment(await response.json());
+}
+
+export function redeployControlPlaneDeployment(
+  config: ControlPlaneConfig,
+  deploymentId: string,
+  options: ListOptions = {},
+): Promise<Deployment> {
+  return triggerControlPlaneDeploymentAction(config, deploymentId, "redeploy", options);
+}
+
+export function rollbackControlPlaneDeployment(
+  config: ControlPlaneConfig,
+  deploymentId: string,
+  options: ListOptions = {},
+): Promise<Deployment> {
+  return triggerControlPlaneDeploymentAction(config, deploymentId, "rollback", options);
+}
+
 async function postDeploymentStatus(
   config: ControlPlaneConfig,
   deploymentId: string,

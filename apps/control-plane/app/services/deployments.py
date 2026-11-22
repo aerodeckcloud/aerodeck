@@ -95,6 +95,18 @@ class DeploymentService:
     async def list(self, *, limit: int, offset: int) -> tuple[Sequence[Deployment], int]:
         return await self._deployments.list(limit=limit, offset=offset)
 
+    async def list_for_project(
+        self,
+        project_id: uuid.UUID,
+        *,
+        environment_id: uuid.UUID | None = None,
+        limit: int,
+        offset: int,
+    ) -> tuple[Sequence[Deployment], int]:
+        return await self._deployments.list_for_project(
+            project_id, environment_id=environment_id, limit=limit, offset=offset
+        )
+
     async def mark_succeeded(self, deployment_id: uuid.UUID) -> Deployment:
         return await self._mark_terminal(deployment_id, DeploymentStatus.succeeded)
 

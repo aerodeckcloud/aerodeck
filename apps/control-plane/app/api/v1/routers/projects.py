@@ -1,10 +1,11 @@
 import uuid
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 
-from app.api.deps import PaginationDep, ProjectServiceDep
+from app.api.deps import DeploymentServiceDep, PaginationDep, ProjectServiceDep
 from app.schemas.auth import ErrorResponse
 from app.schemas.common import Page
+from app.schemas.deployment import DeploymentRead
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -63,3 +64,32 @@ async def update_project(project_id: uuid.UUID, body: ProjectUpdate, projects: P
 )
 async def delete_project(project_id: uuid.UUID, projects: ProjectServiceDep) -> None:
     await projects.delete(project_id)
+
+
+@router.get(
+    "/{project_id}/deployments",
+    response_model=Page[DeploymentRead],
+    status_code=status.HTTP_200_OK,
+    summary="List deployments for a project (optionally filtered by environment) (#253)",
+    responses=_NOT_FOUND,
+)
+async def list_project_deployments(
+    project_id: uuid.UUID,
+    page: PaginationDep,
+    projects: ProjectServiceDep,
+    deployments: DeploymentServiceDep,
+    environment_id: uuid.UUID | None = Query(default=None),
+) -> Page[DeploymentRead]:
+    await projects.get(project_id)
+    items, total = await deployments.list_for_project(
+        project_id,
+        environment_id=environment_id,
+        limit=page.limit,
+        offset=page.offset,
+    )
+    return Page(
+        items=[DeploymentRead.model_validate(row) for row in items],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
+    )

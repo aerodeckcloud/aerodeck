@@ -14,8 +14,8 @@ from app.core.config import Settings
 from app.core.github import canonical_github_repo_url, parse_github_repo
 from app.services.docker_policy import (
     CommandResult, CommandRunner, LogSink, SubprocessCommandRunner, classify_failure, container_name_for,
-    find_available_port, image_tag_for, route_hostname_for, validate_binary, validate_dockerfile,
-    validate_network, validate_runtime, validate_uuid, wait_for_tcp_health,
+    deployment_image_tag_for, find_available_port, image_tag_for, route_hostname_for, validate_binary,
+    validate_dockerfile, validate_network, validate_runtime, validate_uuid, wait_for_tcp_health,
 )
 from app.services.docker_addons import parse_addons_json, provision_environment_addons
 from app.services.docker_env_discovery import build_docker_run_command, ensure_default_docker_config
@@ -87,7 +87,8 @@ class DockerProvisioner:
     def provision(
         self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",
         environment_kind: str = "dev", region: str = "ams3", repo_url: str = "", env_vars_json: str = "",
-        addons_json: str = "", on_log: LogSink | None = None,
+        addons_json: str = "", image_deployment_id: str = "", rollback_from_deployment_id: str = "",
+        on_log: LogSink | None = None,
     ) -> JobOutcome:
         _ = (environment_kind, region)
         p_uuid, e_uuid = validate_uuid(project_id, "project_id"), validate_uuid(environment_id, "environment_id")
@@ -106,32 +107,60 @@ class DockerProvisioner:
             runner=self.runner, docker_bin=docker_bin, docker_env=docker_env,
             project_id=p_uuid, environment_id=e_uuid, addons=parse_addons_json(addons_json), on_log=on_log,
         )
-        with tempfile.TemporaryDirectory(prefix="aerodeck-build-") as tmp:
-            checkout = Path(tmp) / "repo"
-            emit(f"Cloning {owner}/{repo} (shallow)...")
-            clone_res = self.runner.run(
-                [git_bin, "clone", "--depth=1", "--single-branch", "--", clone_url, str(checkout)],
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=120, on_line=on_log,
+        run_tag = tag
+        if rollback_from_deployment_id:
+            rollback_tag = deployment_image_tag_for(
+                project_slug, environment_slug, str(p_uuid), str(e_uuid), rollback_from_deployment_id
             )
-            if clone_res.returncode != 0:
-                raise classify_failure("git clone", clone_res)
-            df = ensure_dockerfile(checkout, owner, repo, container_port=self.container_port, on_log=on_log)
-            target_port = detect_exposed_port(df, default_port=self.container_port)
-            env_file = build_runtime_env_file(checkout, target_port, f"https://{route_hostname}" if route_hostname else None, on_log, env_vars_json, addon_env)
-            emit(f"Building Docker image {tag}...")
-            build_res = self.runner.run(
-                [docker_bin, "build", "--progress=plain", "--tag", tag, str(checkout)],
-                cwd=checkout, env=self._docker_env({"DOCKER_BUILDKIT": "1"}), timeout=self.build_timeout_seconds, on_line=on_log,
+            emit(f"Rolling back to retained Docker image {rollback_tag}...")
+            inspect_img = self.runner.run([docker_bin, "image", "inspect", rollback_tag], env=docker_env, timeout=15)
+            if inspect_img.returncode != 0:
+                raise PermanentJobError(
+                    f"Rollback image {rollback_tag} is no longer available on this host; use Redeploy instead"
+                )
+            target_port = self.container_port
+            with tempfile.TemporaryDirectory(prefix="aerodeck-rollback-") as tmp:
+                env_file = build_runtime_env_file(
+                    Path(tmp), target_port, f"https://{route_hostname}" if route_hostname else None,
+                    on_log, env_vars_json, addon_env,
+                )
+            run_tag = rollback_tag
+        else:
+            deploy_tag = (
+                deployment_image_tag_for(project_slug, environment_slug, str(p_uuid), str(e_uuid), image_deployment_id)
+                if image_deployment_id
+                else None
             )
-            if build_res.returncode != 0:
-                env_file.unlink(missing_ok=True)
-                raise classify_failure("docker build", build_res)
+            with tempfile.TemporaryDirectory(prefix="aerodeck-build-") as tmp:
+                checkout = Path(tmp) / "repo"
+                emit(f"Cloning {owner}/{repo} (shallow)...")
+                clone_res = self.runner.run(
+                    [git_bin, "clone", "--depth=1", "--single-branch", "--", clone_url, str(checkout)],
+                    env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=120, on_line=on_log,
+                )
+                if clone_res.returncode != 0:
+                    raise classify_failure("git clone", clone_res)
+                df = ensure_dockerfile(checkout, owner, repo, container_port=self.container_port, on_log=on_log)
+                target_port = detect_exposed_port(df, default_port=self.container_port)
+                env_file = build_runtime_env_file(checkout, target_port, f"https://{route_hostname}" if route_hostname else None, on_log, env_vars_json, addon_env)
+                emit(f"Building Docker image {tag}...")
+                build_cmd = [docker_bin, "build", "--progress=plain", "--tag", tag]
+                if deploy_tag:
+                    build_cmd.extend(["--tag", deploy_tag])
+                build_cmd.append(str(checkout))
+                build_res = self.runner.run(
+                    build_cmd,
+                    cwd=checkout, env=self._docker_env({"DOCKER_BUILDKIT": "1"}), timeout=self.build_timeout_seconds, on_line=on_log,
+                )
+                if build_res.returncode != 0:
+                    env_file.unlink(missing_ok=True)
+                    raise classify_failure("docker build", build_res)
 
         host_port, candidate = self.port_allocator(self.bind_host, self.port_range_start, self.port_range_end), f"{cname}-new-{uuid.uuid4().hex[:6]}"
         run_cmd = build_docker_run_command(
             docker_bin=docker_bin, candidate=candidate, network=addon_net or network, memory_limit=self.memory_limit,
             cpus_limit=self.cpus_limit, pids_limit=self.pids_limit, project_id=p_uuid, environment_id=e_uuid,
-            env_file=env_file, bind_host=self.bind_host, host_port=host_port, target_port=target_port, runtime=runtime, tag=tag,
+            env_file=env_file, bind_host=self.bind_host, host_port=host_port, target_port=target_port, runtime=runtime, tag=run_tag,
         )
         emit(f"Starting candidate container {candidate} on {self.bind_host}:{host_port} (-> :{target_port})...")
         try:

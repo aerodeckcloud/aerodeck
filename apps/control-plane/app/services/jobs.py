@@ -84,6 +84,7 @@ class JobService:
         deployment_id: uuid.UUID | None = None,
         env_vars: dict[str, str] | None = None,
         addons: list[str] | None = None,
+        rollback_from_deployment_id: uuid.UUID | None = None,
     ) -> JobTicket:
         environment = await self._environments.get(project_id, environment_id)
         meta: dict[str, str] = {
@@ -101,12 +102,15 @@ class JobService:
             meta["env_vars_json"] = json.dumps(merged_env)
         if addons:
             meta["addons_json"] = json.dumps(addons)
+        if rollback_from_deployment_id is not None and kind is JobKind.provision:
+            meta["rollback_from_deployment_id"] = str(rollback_from_deployment_id)
         linked_deployment_id: uuid.UUID | None = None
         # Only provision publishes onto a deployment log stream (#121).
         if deployment_id is not None and kind is JobKind.provision:
             linked = await self._deployments.get(deployment_id)
             linked_deployment_id = linked.id
             meta["deployment_id"] = str(linked_deployment_id)
+            meta["image_deployment_id"] = str(linked_deployment_id)
             meta["repo_url"] = linked.repo_url
             # Seed a non-Done line before the worker runs so SSE cannot stub Done
             # while the job is still queued (Terminal would mark succeeded).
