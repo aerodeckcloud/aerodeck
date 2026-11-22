@@ -27,9 +27,11 @@ def rewrite_do_postgres_url(raw: str) -> str:
             "Do not wrap the host in extra quotes."
         )
     if parsed.port is None:
-        raise SystemExit("URI must include a port (DigitalOcean uses 25060).")
+        raise SystemExit("URI must include a port (DigitalOcean uses 25060 or 25061 for PgBouncer).")
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query.pop("sslmode", None)
+    query.pop("statement_cache_size", None)
+    query.pop("pgbouncer", None)
     query["ssl"] = "require"
     user = quote(unquote(parsed.username), safe="")
     password = quote(unquote(parsed.password), safe="")
