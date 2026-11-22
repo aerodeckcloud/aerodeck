@@ -69,30 +69,25 @@ class DockerProvisioner:
         health_checker: HealthChecker | None = None, route_registrar: RouteRegistrar | None = upsert_environment_route_sync,
     ) -> DockerProvisioner:
         return cls(
-            docker_bin=validate_binary(settings.docker_bin, "docker_bin"),
-            git_bin=validate_binary(settings.git_bin, "git_bin"),
-            bind_host=settings.docker_bind_host,
-            port_range_start=settings.docker_port_range_start,
-            port_range_end=settings.docker_port_range_end,
-            container_port=settings.docker_container_port,
-            memory_limit=settings.docker_memory_limit,
-            cpus_limit=settings.docker_cpus_limit,
-            pids_limit=settings.docker_pids_limit,
-            build_timeout_seconds=settings.docker_build_timeout_seconds,
-            runner=runner or SubprocessCommandRunner(),
-            docker_host=settings.docker_host,
-            docker_runtime=validate_runtime(settings.docker_runtime),
-            docker_network=validate_network(settings.docker_network),
+            docker_bin=validate_binary(settings.docker_bin, "docker_bin"), git_bin=validate_binary(settings.git_bin, "git_bin"),
+            bind_host=settings.docker_bind_host, port_range_start=settings.docker_port_range_start,
+            port_range_end=settings.docker_port_range_end, container_port=settings.docker_container_port,
+            memory_limit=settings.docker_memory_limit, cpus_limit=settings.docker_cpus_limit,
+            pids_limit=settings.docker_pids_limit, build_timeout_seconds=settings.docker_build_timeout_seconds,
+            runner=runner or SubprocessCommandRunner(), docker_host=settings.docker_host,
+            docker_runtime=validate_runtime(settings.docker_runtime), docker_network=validate_network(settings.docker_network),
             allowed_owners=tuple(o.strip().lower() for o in settings.docker_allowed_owners if o.strip()),
-            health_timeout_seconds=settings.docker_health_timeout_seconds,
-            route_base_domain=settings.docker_route_base_domain,
-            port_allocator=port_allocator or find_available_port,
-            health_checker=health_checker or wait_for_tcp_health,
+            health_timeout_seconds=settings.docker_health_timeout_seconds, route_base_domain=settings.docker_route_base_domain,
+            port_allocator=port_allocator or find_available_port, health_checker=health_checker or wait_for_tcp_health,
             route_registrar=route_registrar,
         )
 
     def _docker_env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         env = dict(os.environ)
+        if not env.get("DOCKER_CONFIG"):
+            cfg_dir = Path(tempfile.gettempdir()) / "aerodeck-docker-config"
+            cfg_dir.mkdir(parents=True, exist_ok=True)
+            env["DOCKER_CONFIG"] = str(cfg_dir)
         if self.docker_host:
             env["DOCKER_HOST"] = self.docker_host
         if extra:
@@ -138,14 +133,8 @@ class DockerProvisioner:
             ensure_dockerfile(checkout, owner, repo, container_port=self.container_port, on_log=on_log)
             emit(f"Building Docker image {tag}...")
             build_res = self.runner.run(
-                [
-                    docker_bin, "build", "--progress=plain",
-                    "--build-arg", "BUILDKIT_INLINE_CACHE=1",
-                    "--cache-from", tag,
-                    "--tag", tag, str(checkout),
-                ],
-                cwd=checkout, env=self._docker_env({"DOCKER_BUILDKIT": "1"}),
-                timeout=self.build_timeout_seconds, on_line=on_log,
+                [docker_bin, "build", "--progress=plain", "--build-arg", "BUILDKIT_INLINE_CACHE=1", "--cache-from", tag, "--tag", tag, str(checkout)],
+                cwd=checkout, env=self._docker_env({"DOCKER_BUILDKIT": "1"}), timeout=self.build_timeout_seconds, on_line=on_log,
             )
             if build_res.returncode != 0:
                 raise classify_failure("docker build", build_res)

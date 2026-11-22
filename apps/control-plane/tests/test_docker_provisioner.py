@@ -239,6 +239,7 @@ def test_provision_enforces_owner_allowlist_and_passes_runtime_and_docker_host()
         repo_url="https://github.com/mangatohjunior/demo-app",
     )
     assert runner.envs[1] is not None and runner.envs[1]["DOCKER_HOST"] == "unix:///run/user/1000/docker.sock"
+    assert runner.envs[1].get("DOCKER_CONFIG")
     run_cmd = runner.calls[2]
     assert "--runtime" in run_cmd and "runsc" in run_cmd
 
