@@ -158,7 +158,10 @@ class JobService:
                         linked_deployment_id,
                         type(publish_exc).__name__,
                     )
-                # Own session+commit: the request that raised will roll back.
+                # Release this transaction's row lock before the other connection writes.
+                # Otherwise PostgreSQL waits forever: this request holds the row, and the
+                # isolated update waits for a commit that is waiting on the update.
+                await self._deployments.commit()
                 await self._deployment_hooks.mark_failed(linked_deployment_id)
                 if not self._releasing:
                     failed = await self._deployments.get(linked_deployment_id)
@@ -166,6 +169,7 @@ class JobService:
                     await self.release_waiting(failed)
             raise
         if linked_deployment_id is not None:
+            await self._deployments.commit()
             await self._remember_provision_job_id(linked_deployment_id, job_id)
         logger.info("queued %s job %s for environment %s", kind.value, job_id, environment.id)
         return JobTicket(job_id=job_id, kind=kind, project_id=environment.project_id, environment_id=environment.id)
