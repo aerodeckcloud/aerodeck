@@ -4,13 +4,16 @@ from fastapi import APIRouter, HTTPException, status
 from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import (
+    ActorUserIdDep,
     EnvironmentServiceDep,
     EnvironmentVariableServiceDep,
     JobServiceDep,
     PaginationDep,
+    ProjectMemberServiceDep,
     SettingsDep,
     WebhookServiceDep,
 )
+from app.models.project_member import ProjectRole
 from app.schemas.auth import ErrorResponse
 from app.schemas.common import Page
 from app.schemas.environment import EnvironmentCreate, EnvironmentRead, EnvironmentUpdate
@@ -203,7 +206,10 @@ async def upsert_environment_vars(
     environment_id: uuid.UUID,
     body: EnvironmentVarUpsertRequest,
     env_vars: EnvironmentVariableServiceDep,
+    members: ProjectMemberServiceDep,
+    actor_user_id: ActorUserIdDep,
 ) -> list[EnvironmentVarRead]:
+    await members.require_role(project_id, actor_user_id, ProjectRole.developer)
     return await env_vars.upsert_many(project_id, environment_id, body.items)
 
 
@@ -218,7 +224,10 @@ async def delete_environment_var(
     environment_id: uuid.UUID,
     key: str,
     env_vars: EnvironmentVariableServiceDep,
+    members: ProjectMemberServiceDep,
+    actor_user_id: ActorUserIdDep,
 ) -> None:
+    await members.require_role(project_id, actor_user_id, ProjectRole.developer)
     await env_vars.delete_key(project_id, environment_id, key)
 
 
