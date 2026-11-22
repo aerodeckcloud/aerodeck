@@ -22,12 +22,14 @@ from app.core.logging import get_logger
 from app.models.project import Environment
 from app.models.webhook import EnvironmentWebhook
 from app.schemas.deployment import DeploymentCreate
-from app.services.environment_vars import decrypt_env_value, encrypt_env_value
+from app.services.environment_vars import _fernet_for, encrypt_env_value
 from app.services.provisioning import JobKind
 
 logger = get_logger("services.webhooks")
 
 _ALLOWED_ADDONS = {"postgres", "redis", "mongodb"}
+_MAX_REPO_WEBHOOKS = 50
+_MAX_WEBHOOK_BODY_BYTES = 1024 * 1024
 
 
 class WebhookSignatureError(AppError):
@@ -156,12 +158,17 @@ class WebhookRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_enabled_for_repo(self, repo_url: str) -> Sequence[EnvironmentWebhook]:
+    async def list_enabled_for_repo(
+        self, repo_url: str, *, limit: int = _MAX_REPO_WEBHOOKS
+    ) -> Sequence[EnvironmentWebhook]:
         rows = await self._session.scalars(
-            select(EnvironmentWebhook).where(
+            select(EnvironmentWebhook)
+            .where(
                 EnvironmentWebhook.repo_url == repo_url,
                 EnvironmentWebhook.enabled.is_(True),
             )
+            .order_by(EnvironmentWebhook.created_at, EnvironmentWebhook.id)
+            .limit(limit)
         )
         return rows.all()
 
@@ -246,6 +253,8 @@ class WebhookService:
         deployments: DeploymentCreator,
         jobs: JobEnqueuer,
     ) -> WebhookDeliveryResult:
+        if len(raw_body) > _MAX_WEBHOOK_BODY_BYTES:
+            raise WebhookSignatureError("Webhook payload exceeds maximum allowed size")
         try:
             payload = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, ValueError) as exc:
@@ -264,10 +273,11 @@ class WebhookService:
         canonical_repo = canonical_github_repo_url(*parsed)
 
         candidates = await self._repo.list_enabled_for_repo(canonical_repo)
+        fernet = _fernet_for(self._signing_key)
         verified: list[EnvironmentWebhook] = []
         for candidate in candidates:
             try:
-                secret = decrypt_env_value(candidate.encrypted_secret, self._signing_key)
+                secret = fernet.decrypt(candidate.encrypted_secret.encode("ascii")).decode("utf-8")
             except InvalidToken:
                 continue
             if verify_github_signature(raw_body, signature, secret):

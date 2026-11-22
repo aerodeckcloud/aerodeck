@@ -5,8 +5,8 @@ import { jsonError } from "@/lib/mock-http";
 
 /**
  * Public GitHub webhook proxy (#249).
- * Forwards the raw body bytes and GitHub signature headers directly to the
- * control-plane `/api/v1/webhooks/github` endpoint without modifying bytes.
+ * Streams the raw request body and GitHub signature headers directly to the
+ * control-plane `/api/v1/webhooks/github` endpoint without buffering into memory.
  */
 export async function POST(request: Request) {
   await connection();
@@ -15,7 +15,6 @@ export async function POST(request: Request) {
     return jsonError(404, "Webhooks require the control plane.", "not_found");
   }
 
-  const rawBody = await request.arrayBuffer();
   const headers: Record<string, string> = {
     "content-type": request.headers.get("content-type") ?? "application/json",
   };
@@ -27,12 +26,14 @@ export async function POST(request: Request) {
   }
 
   try {
-    const upstream = await fetch(`${config.baseUrl}/api/v1/webhooks/github`, {
+    const init: RequestInit & { duplex?: "half" } = {
       method: "POST",
       headers,
-      body: rawBody,
+      body: request.body,
+      duplex: "half",
       cache: "no-store",
-    });
+    };
+    const upstream = await fetch(`${config.baseUrl}/api/v1/webhooks/github`, init);
     const text = await upstream.text();
     return new NextResponse(text, {
       status: upstream.status,
