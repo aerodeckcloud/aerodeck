@@ -2,8 +2,10 @@ import { MOCK_API_PREFIX } from "@/lib/catalog";
 import {
   PROVISION_ENQUEUE_FAILED,
   type AcceptedJob,
+  type AddonType,
   type ApiError,
   type Deployment,
+  type DeploymentBlueprint,
   type EnvironmentOption,
   type EnvironmentOptionPage,
   type Project,
@@ -340,10 +342,25 @@ export async function createEnvironment(input: {
   return readJson(response);
 }
 
+export async function inspectDeploymentRepo(repoUrl: string): Promise<DeploymentBlueprint> {
+  const response = await fetch("/api/console/deployments/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ repo_url: repoUrl }),
+  });
+  return readJson(response);
+}
+
 export async function createDeployment(
   repoUrl: string,
   controlPlane: true,
-  target: { projectId: string; environmentId: string; envVars?: Record<string, string> },
+  target: {
+    projectId: string;
+    environmentId: string;
+    envVars?: Record<string, string>;
+    addons?: AddonType[];
+  },
 ): Promise<Deployment>;
 export async function createDeployment(
   repoUrl: string,
@@ -353,7 +370,12 @@ export async function createDeployment(
 export async function createDeployment(
   repoUrl: string,
   controlPlane = false,
-  target?: { projectId: string; environmentId: string; envVars?: Record<string, string> },
+  target?: {
+    projectId: string;
+    environmentId: string;
+    envVars?: Record<string, string>;
+    addons?: AddonType[];
+  },
 ): Promise<Deployment> {
   if (controlPlane && (!target?.projectId || !target?.environmentId)) {
     throw new Error("Select an environment to provision.");
@@ -365,6 +387,9 @@ export async function createDeployment(
     body.environment_id = target.environmentId;
     if (target.envVars && Object.keys(target.envVars).length > 0) {
       body.env_vars = target.envVars;
+    }
+    if (target.addons && target.addons.length > 0) {
+      body.addons = target.addons;
     }
   }
   const response = await fetch(path, {

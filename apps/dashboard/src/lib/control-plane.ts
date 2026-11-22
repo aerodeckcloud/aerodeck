@@ -1,7 +1,9 @@
 import { isControlPlaneUuid } from "./control-plane-uuid";
 import type {
   AcceptedJob,
+  AddonType,
   Deployment,
+  DeploymentBlueprint,
   DeploymentStatus,
   DnsRecordStatus,
   DnsRecordType,
@@ -1230,7 +1232,7 @@ export async function provisionControlPlaneEnvironment(
   projectId: string,
   environmentId: string,
   deploymentId: string,
-  options: ListOptions & { envVars?: Record<string, string> } = {},
+  options: ListOptions & { envVars?: Record<string, string>; addons?: AddonType[] } = {},
 ): Promise<void> {
   if (
     !isControlPlaneUuid(projectId) ||
@@ -1242,11 +1244,18 @@ export async function provisionControlPlaneEnvironment(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
-  const body: { deployment_id: string; env_vars?: Record<string, string> } = {
+  const body: {
+    deployment_id: string;
+    env_vars?: Record<string, string>;
+    addons?: AddonType[];
+  } = {
     deployment_id: deploymentId,
   };
   if (options.envVars && Object.keys(options.envVars).length > 0) {
     body.env_vars = options.envVars;
+  }
+  if (options.addons && options.addons.length > 0) {
+    body.addons = options.addons;
   }
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/provision`,
@@ -1263,6 +1272,38 @@ export async function provisionControlPlaneEnvironment(
   );
   await throwIfEnvironmentJobResponseFailed(response, "provision");
   await discardResponseBody(response);
+}
+
+export async function inspectControlPlaneDeploymentRepo(
+  config: ControlPlaneConfig,
+  repoUrl: string,
+  options: ListOptions = {},
+): Promise<DeploymentBlueprint> {
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(`${config.baseUrl}/api/v1/deployments/inspect`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ repo_url: repoUrl }),
+    cache: "no-store",
+  });
+  if (response.status === 422) {
+    await discardResponseBody(response);
+    throw new ControlPlaneError("control plane inspect rejected (422)", 422);
+  }
+  if (!response.ok) {
+    await discardResponseBody(response);
+    throw new ControlPlaneError(
+      `control plane inspect request failed (${response.status})`,
+      response.status,
+    );
+  }
+  return (await response.json()) as DeploymentBlueprint;
 }
 
 export async function reconcileControlPlaneEnvironment(
@@ -1358,6 +1399,7 @@ export async function createControlPlaneDeploymentAndProvision(
     projectId: string;
     environmentId: string;
     envVars?: Record<string, string>;
+    addons?: AddonType[];
   },
   options: ListOptions = {},
 ): Promise<Deployment> {
@@ -1374,7 +1416,7 @@ export async function createControlPlaneDeploymentAndProvision(
       input.projectId,
       input.environmentId,
       deployment.id,
-      { ...options, envVars: input.envVars },
+      { ...options, envVars: input.envVars, addons: input.addons },
     );
   } catch (cause) {
     // Deployment exists; attach its id for the console error payload (do not navigate —

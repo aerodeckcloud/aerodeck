@@ -75,6 +75,7 @@ class JobService:
         *,
         deployment_id: uuid.UUID | None = None,
         env_vars: dict[str, str] | None = None,
+        addons: list[str] | None = None,
     ) -> JobTicket:
         environment = await self._environments.get(project_id, environment_id)
         meta: dict[str, str] = {
@@ -85,6 +86,8 @@ class JobService:
         }
         if env_vars:
             meta["env_vars_json"] = json.dumps(env_vars)
+        if addons:
+            meta["addons_json"] = json.dumps(addons)
         linked_deployment_id: uuid.UUID | None = None
         # Only provision publishes onto a deployment log stream (#121).
         if deployment_id is not None and kind is JobKind.provision:

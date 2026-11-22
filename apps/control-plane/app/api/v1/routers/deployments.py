@@ -10,13 +10,16 @@ provision that ended without ``Done``. Neither call touches DigitalOcean.
 import uuid
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
-from app.api.deps import DeploymentServiceDep, PaginationDep, SettingsDep
+from app.api.deps import ClientDep, DeploymentServiceDep, PaginationDep, SettingsDep
 from app.schemas.auth import ErrorResponse
+from app.schemas.blueprint import DeploymentBlueprint, DeploymentInspectRequest
 from app.schemas.common import Page
 from app.schemas.deployment import DeploymentCreate, DeploymentRead
+from app.services.blueprint_inspector import inspect_github_repository_sync
 from app.services.deployment_logs import ensure_log_store_ready, iter_deployment_log_lines
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
@@ -44,6 +47,39 @@ async def list_deployments(page: PaginationDep, deployments: DeploymentServiceDe
         limit=page.limit,
         offset=page.offset,
     )
+
+
+@router.post(
+    "/inspect",
+    response_model=DeploymentBlueprint,
+    status_code=status.HTTP_200_OK,
+    summary="Inspect a GitHub repository and return its DeploymentBlueprint (#236)",
+    responses=_UNAUTHENTICATED | _UNAVAILABLE,
+)
+async def inspect_deployment_repository(
+    body: DeploymentInspectRequest,
+    client: ClientDep,
+    settings: SettingsDep,
+) -> DeploymentBlueprint:
+    # Authenticated via ClientDep (enrolled control-plane caller required).
+    if not client:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    try:
+        return await run_in_threadpool(
+            inspect_github_repository_sync,
+            body.repo_url,
+            git_bin=settings.git_bin,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post(

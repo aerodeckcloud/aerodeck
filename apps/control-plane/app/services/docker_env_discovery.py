@@ -127,8 +127,9 @@ def parse_env_vars_json(raw: str | None) -> dict[str, str] | None:
 def build_runtime_env_file(
     checkout: Path, target_port: int, public_url: str | None = None,
     on_log: LogSink | None = None, user_env: dict[str, str] | str | None = None,
+    addon_env: dict[str, str] | None = None,
 ) -> Path:
-    """Discover repo env defaults, merge platform + operator variables, and write a ``0600`` ``--env-file`` (#231, #233)."""
+    """Discover repo env defaults, merge platform + addon + operator variables, and write a ``0600`` ``--env-file``."""
     env_vars = discover_repo_env_defaults(checkout)
     if env_vars and on_log is not None:
         keys = ", ".join(sorted(env_vars.keys()))
@@ -150,6 +151,8 @@ def build_runtime_env_file(
                 applied.append(k)
         if applied and on_log is not None:
             on_log(f"Applied {len(applied)} operator-supplied env variable(s) ({', '.join(sorted(applied))}).")
+    if addon_env:
+        env_vars.update(addon_env)
     return write_secure_env_file(env_vars)
 
 
