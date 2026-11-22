@@ -22,9 +22,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   createDeployment,
+  fetchEnvironmentVars,
   fetchLogSource,
   inspectDeploymentRepo,
   ProvisionEnqueueFailed,
+  upsertEnvironmentVars,
 } from "@/lib/api";
 import { environmentOptionKey } from "@/lib/environment-option";
 import { parseGithubRepo } from "@/lib/github";
@@ -50,11 +52,39 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
   const [inspecting, setInspecting] = useState(false);
 
   const { environmentKey, setEnvironmentKey, environments, environmentsError, loadingEnvironments, reload } = useDeployEnvironments(isControlPlane);
+  const [savedEnvKeys, setSavedEnvKeys] = useState<Set<string>>(() => new Set());
+  const [persistEnvVars, setPersistEnvVars] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [repoInvalid, setRepoInvalid] = useState(false);
   const [environmentRequired, setEnvironmentRequired] = useState(false);
   const [enqueueBlocked, setEnqueueBlocked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!isControlPlane) {
+      return;
+    }
+    const selected = environments.find((row) => environmentOptionKey(row) === environmentKey);
+    if (!selected) {
+      setSavedEnvKeys(new Set());
+      return;
+    }
+    let cancelled = false;
+    void fetchEnvironmentVars(selected.project_id, selected.id)
+      .then((rows) => {
+        if (!cancelled) {
+          setSavedEnvKeys(new Set(rows.map((r) => r.key)));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSavedEnvKeys(new Set());
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isControlPlane, environments, environmentKey]);
 
   async function handleInspect() {
     setError(null);
@@ -104,7 +134,10 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
 
     if (blueprint) {
       const missing = blueprint.env.find(
-        (item) => item.required && (fieldValues[item.key] ?? "").trim().length === 0,
+        (item) =>
+          item.required &&
+          !savedEnvKeys.has(item.key) &&
+          (fieldValues[item.key] ?? "").trim().length === 0,
       );
       if (missing) {
         setError(`Required environment variable ${missing.key} is missing.`);
@@ -137,6 +170,16 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
 
     setSubmitting(true);
     try {
+      if (isControlPlane && target && persistEnvVars && target.envVars) {
+        const items = Object.entries(target.envVars).map(([key, value]) => ({
+          key,
+          value,
+          is_secret: true,
+        }));
+        if (items.length > 0) {
+          await upsertEnvironmentVars(target.projectId, target.environmentId, items);
+        }
+      }
       const deployment = isControlPlane && target ? await createDeployment(repoUrl, true, target) : await createDeployment(repoUrl, false);
       router.push(`/deployments/${deployment.id}`);
     } catch (cause) {
@@ -247,8 +290,19 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
                 onToggleAddon={toggleAddon}
                 extraEnvText={envVarsText}
                 onExtraEnvTextChange={setEnvVarsText}
+                savedEnvKeys={savedEnvKeys}
                 disabled={submitting || enqueueBlocked}
               />
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={persistEnvVars}
+                  disabled={submitting || enqueueBlocked}
+                  onChange={(e) => setPersistEnvVars(e.target.checked)}
+                  className="size-3.5 accent-primary"
+                />
+                Save entered variables encrypted to this environment for future redeploys
+              </label>
             </>
           ) : null}
           {error ? (

@@ -9,6 +9,8 @@ import {
   type DeploymentBlueprint,
   type EnvironmentOption,
   type EnvironmentOptionPage,
+  type EnvironmentVarSummary,
+  type EnvironmentVarUpsertItem,
   type Project,
   type ProjectDetail,
   type ProjectPage,
@@ -159,6 +161,48 @@ export async function queueEnvironmentReconcile(
     },
   );
   return readJson(response);
+}
+
+export async function fetchEnvironmentVars(
+  projectId: string,
+  environmentId: string,
+): Promise<EnvironmentVarSummary[]> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/env-vars`,
+    { credentials: "same-origin", cache: "no-store" },
+  );
+  return readJson(response);
+}
+
+export async function upsertEnvironmentVars(
+  projectId: string,
+  environmentId: string,
+  items: EnvironmentVarUpsertItem[],
+): Promise<EnvironmentVarSummary[]> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/env-vars`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ items }),
+    },
+  );
+  return readJson(response);
+}
+
+export async function deleteEnvironmentVar(
+  projectId: string,
+  environmentId: string,
+  key: string,
+): Promise<void> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/env-vars/${encodeURIComponent(key)}`,
+    { method: "DELETE", credentials: "same-origin" },
+  );
+  if (!response.ok) {
+    await readJson(response);
+  }
 }
 
 export async function createProjectRoute(input: {

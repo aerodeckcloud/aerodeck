@@ -8,6 +8,7 @@ import {
   EnvironmentRegionField,
   withCurrentOption,
 } from "@/components/environment-form-fields";
+import { EnvironmentVarsManager } from "@/components/environment-vars-manager";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -202,6 +203,10 @@ export function EnvironmentEditRow({
           {error}
         </p>
       ) : null}
+      <EnvironmentVarsManager
+        projectId={environment.project_id}
+        environmentId={environment.id}
+      />
     </form>
   );
 }

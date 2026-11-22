@@ -6,6 +6,7 @@ from app.models.console_session import ConsoleSession
 from app.models.console_user import ConsoleUser
 from app.models.deployment import Deployment, DeploymentStatus
 from app.models.dns_record import DnsRecord, DnsRecordStatus, DnsRecordType
+from app.models.environment_var import EnvironmentVariable
 from app.models.project import Environment, EnvironmentKind, Project
 from app.models.route import Route
 from app.models.sandbox import Sandbox, SandboxStatus
@@ -24,6 +25,7 @@ __all__ = [
     "DnsRecordType",
     "Environment",
     "EnvironmentKind",
+    "EnvironmentVariable",
     "Project",
     "Route",
     "Sandbox",
