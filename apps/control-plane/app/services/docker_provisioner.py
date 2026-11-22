@@ -17,8 +17,12 @@ from app.services.docker_policy import (
     find_available_port, image_tag_for, route_hostname_for, validate_binary, validate_dockerfile,
     validate_network, validate_runtime, validate_uuid, wait_for_tcp_health,
 )
+from app.services.docker_env_discovery import build_docker_run_command, ensure_default_docker_config
 from app.services.docker_routes import upsert_environment_route_sync
-from app.services.dockerfile_detector import detect_exposed_port, ensure_dockerfile, stream_container_crash_logs
+from app.services.dockerfile_detector import (
+    build_runtime_env_file, detect_exposed_port, ensure_dockerfile,
+    stream_container_crash_logs, wait_for_container_or_fast_fail,
+)
 from app.services.provisioning import JobKind, JobOutcome, PermanentJobError
 
 __all__ = [
@@ -81,16 +85,7 @@ class DockerProvisioner:
         )
 
     def _docker_env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
-        env = dict(os.environ)
-        if not env.get("DOCKER_CONFIG"):
-            cfg_dir = Path(tempfile.gettempdir()) / "aerodeck-docker-config"
-            cfg_dir.mkdir(parents=True, exist_ok=True)
-            env["DOCKER_CONFIG"] = str(cfg_dir)
-        if self.docker_host:
-            env["DOCKER_HOST"] = self.docker_host
-        if extra:
-            env.update(extra)
-        return env
+        return ensure_default_docker_config(os.environ, self.docker_host, extra)
 
     def provision(
         self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",
@@ -115,6 +110,10 @@ class DockerProvisioner:
             if on_log is not None:
                 on_log(msg)
 
+        route_hostname = (
+            route_hostname_for(project_slug, environment_slug, str(p_uuid), str(e_uuid), self.route_base_domain)
+            if self.route_base_domain and self.route_registrar is not None else None
+        )
         with tempfile.TemporaryDirectory(prefix="aerodeck-build-") as tmp:
             checkout = Path(tmp) / "repo"
             emit(f"Cloning {owner}/{repo} (shallow)...")
@@ -124,39 +123,41 @@ class DockerProvisioner:
             )
             if clone_res.returncode != 0:
                 raise classify_failure("git clone", clone_res)
-            dockerfile = ensure_dockerfile(checkout, owner, repo, container_port=self.container_port, on_log=on_log)
-            target_port = detect_exposed_port(dockerfile, default_port=self.container_port)
+            df = ensure_dockerfile(checkout, owner, repo, container_port=self.container_port, on_log=on_log)
+            target_port = detect_exposed_port(df, default_port=self.container_port)
+            env_file = build_runtime_env_file(checkout, target_port, f"https://{route_hostname}" if route_hostname else None, on_log)
             emit(f"Building Docker image {tag}...")
             build_res = self.runner.run(
                 [docker_bin, "build", "--progress=plain", "--build-arg", "BUILDKIT_INLINE_CACHE=1", "--cache-from", tag, "--tag", tag, str(checkout)],
                 cwd=checkout, env=self._docker_env({"DOCKER_BUILDKIT": "1"}), timeout=self.build_timeout_seconds, on_line=on_log,
             )
             if build_res.returncode != 0:
+                env_file.unlink(missing_ok=True)
                 raise classify_failure("docker build", build_res)
 
-        docker_env = self._docker_env()
-        host_port = self.port_allocator(self.bind_host, self.port_range_start, self.port_range_end)
+        docker_env, host_port = self._docker_env(), self.port_allocator(self.bind_host, self.port_range_start, self.port_range_end)
         candidate = f"{cname}-new-{uuid.uuid4().hex[:6]}"
-        run_cmd = [
-            docker_bin, "run", "-d", "--name", candidate, "--restart", "unless-stopped",
-            "--network", network, "--cap-drop=ALL", "--security-opt", "no-new-privileges:true",
-            "--memory", self.memory_limit, "--cpus", self.cpus_limit, "--pids-limit", str(self.pids_limit),
-            "--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
-            "--label", "aerodeck.managed=true", "--label", f"aerodeck.project_id={p_uuid}",
-            "--label", f"aerodeck.environment_id={e_uuid}", "-e", f"PORT={target_port}",
-            "-p", f"{self.bind_host}:{host_port}:{target_port}",
-        ]
-        if runtime is not None:
-            run_cmd.extend(["--runtime", runtime])
-        run_cmd.append(tag)
-
+        run_cmd = build_docker_run_command(
+            docker_bin=docker_bin, candidate=candidate, network=network, memory_limit=self.memory_limit,
+            cpus_limit=self.cpus_limit, pids_limit=self.pids_limit, project_id=p_uuid, environment_id=e_uuid,
+            env_file=env_file, bind_host=self.bind_host, host_port=host_port, target_port=target_port, runtime=runtime, tag=tag,
+        )
         emit(f"Starting candidate container {candidate} on {self.bind_host}:{host_port} (-> :{target_port})...")
-        run_res = self.runner.run(run_cmd, env=docker_env, timeout=60)
+        try:
+            run_res = self.runner.run(run_cmd, env=docker_env, timeout=60)
+        finally:
+            env_file.unlink(missing_ok=True)
         if run_res.returncode != 0:
             raise classify_failure("docker run", run_res)
 
         emit(f"Waiting for health check on {self.bind_host}:{host_port} (timeout {self.health_timeout_seconds}s)...")
-        if not self.health_checker(self.bind_host, host_port, self.health_timeout_seconds):
+        healthy = (
+            wait_for_container_or_fast_fail(
+                self.bind_host, host_port, self.health_timeout_seconds,
+                runner=self.runner, docker_bin=docker_bin, container_name=candidate, docker_env=docker_env,
+            ) if self.health_checker is wait_for_tcp_health else self.health_checker(self.bind_host, host_port, self.health_timeout_seconds)
+        )
+        if not healthy:
             last = stream_container_crash_logs(self.runner, docker_bin, candidate, docker_env, on_log)
             self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)
             raise PermanentJobError(
@@ -164,11 +165,7 @@ class DockerProvisioner:
                 f"{f' (last log: {last})' if last else ''}; rolled back and kept previous container live"
             )
 
-        route_hostname: str | None = None
-        if self.route_base_domain and self.route_registrar is not None:
-            route_hostname = route_hostname_for(
-                project_slug, environment_slug, str(p_uuid), str(e_uuid), self.route_base_domain
-            )
+        if route_hostname and self.route_registrar is not None:
             emit(f"Registering Traefik route https://{route_hostname} -> {self.bind_host}:{host_port}...")
             try:
                 self.route_registrar(
@@ -190,35 +187,21 @@ class DockerProvisioner:
         else:
             emit(f"Container {cname} running on {self.bind_host}:{host_port}.")
             detail = f"deployed {tag} as {cname} on {self.bind_host}:{host_port}"
-        return JobOutcome(
-            kind=JobKind.provision, project_id=str(p_uuid), environment_id=str(e_uuid),
-            changed=True, detail=detail,
-        )
+        return JobOutcome(kind=JobKind.provision, project_id=str(p_uuid), environment_id=str(e_uuid), changed=True, detail=detail)
 
     def reconcile(
         self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",
         environment_kind: str = "dev", region: str = "ams3", repo_url: str = "", on_log: LogSink | None = None,
     ) -> JobOutcome:
         _ = (project_slug, environment_slug, environment_kind, region, repo_url, on_log)
-        p_uuid = validate_uuid(project_id, "project_id")
-        e_uuid = validate_uuid(environment_id, "environment_id")
-        cname = container_name_for(str(p_uuid), str(e_uuid))
-        docker_bin = validate_binary(self.docker_bin, "docker_bin")
-        docker_env = self._docker_env()
-        inspect_res = self.runner.run(
-            [docker_bin, "inspect", "-f", "{{.State.Running}}", cname], env=docker_env, timeout=30
-        )
+        p_uuid, e_uuid = validate_uuid(project_id, "project_id"), validate_uuid(environment_id, "environment_id")
+        cname, docker_bin, docker_env = container_name_for(str(p_uuid), str(e_uuid)), validate_binary(self.docker_bin, "docker_bin"), self._docker_env()
+        inspect_res = self.runner.run([docker_bin, "inspect", "-f", "{{.State.Running}}", cname], env=docker_env, timeout=30)
         if inspect_res.returncode != 0:
             raise PermanentJobError(f"container {cname} does not exist; deploy first")
         if inspect_res.stdout.strip().lower() == "true":
-            return JobOutcome(
-                kind=JobKind.reconcile, project_id=str(p_uuid), environment_id=str(e_uuid),
-                changed=False, detail=f"container {cname} is already running",
-            )
+            return JobOutcome(kind=JobKind.reconcile, project_id=str(p_uuid), environment_id=str(e_uuid), changed=False, detail=f"container {cname} is already running")
         start_res = self.runner.run([docker_bin, "start", cname], env=docker_env, timeout=60)
         if start_res.returncode != 0:
             raise classify_failure("docker start", start_res)
-        return JobOutcome(
-            kind=JobKind.reconcile, project_id=str(p_uuid), environment_id=str(e_uuid),
-            changed=True, detail=f"restarted stopped container {cname}",
-        )
+        return JobOutcome(kind=JobKind.reconcile, project_id=str(p_uuid), environment_id=str(e_uuid), changed=True, detail=f"restarted stopped container {cname}")
