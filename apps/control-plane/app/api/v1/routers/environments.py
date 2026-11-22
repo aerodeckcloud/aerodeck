@@ -5,6 +5,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import (
     ActorUserIdDep,
+    AuditLogServiceDep,
     EnvironmentServiceDep,
     EnvironmentVariableServiceDep,
     JobServiceDep,
@@ -207,10 +208,22 @@ async def upsert_environment_vars(
     body: EnvironmentVarUpsertRequest,
     env_vars: EnvironmentVariableServiceDep,
     members: ProjectMemberServiceDep,
+    audit: AuditLogServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> list[EnvironmentVarRead]:
     await members.require_role(project_id, actor_user_id, ProjectRole.developer)
-    return await env_vars.upsert_many(project_id, environment_id, body.items)
+    result = await env_vars.upsert_many(project_id, environment_id, body.items)
+    keys = ", ".join(item.key for item in body.items[:5])
+    suffix = f" (+{len(body.items) - 5} more)" if len(body.items) > 5 else ""
+    await audit.record(
+        project_id=project_id,
+        environment_id=environment_id,
+        action="env_vars.upserted",
+        resource_type="env_var",
+        summary=f"Saved {len(body.items)} encrypted env var(s): {keys}{suffix}",
+        actor_user_id=actor_user_id,
+    )
+    return result
 
 
 @router.delete(
@@ -225,10 +238,20 @@ async def delete_environment_var(
     key: str,
     env_vars: EnvironmentVariableServiceDep,
     members: ProjectMemberServiceDep,
+    audit: AuditLogServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> None:
     await members.require_role(project_id, actor_user_id, ProjectRole.developer)
     await env_vars.delete_key(project_id, environment_id, key)
+    await audit.record(
+        project_id=project_id,
+        environment_id=environment_id,
+        action="env_vars.deleted",
+        resource_type="env_var",
+        resource_id=key,
+        summary=f"Deleted environment variable {key}",
+        actor_user_id=actor_user_id,
+    )
 
 
 @router.post(

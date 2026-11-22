@@ -309,3 +309,15 @@ export type ProjectMember = {
   created_at: string;
   updated_at: string;
 };
+
+export type AuditEvent = {
+  id: string;
+  project_id: string;
+  environment_id: string | null;
+  actor: string;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  summary: string;
+  created_at: string;
+};

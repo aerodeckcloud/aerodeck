@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { EnvironmentEditRow } from "@/components/environment-edit-row";
 import { NewEnvironmentForm } from "@/components/new-environment-form";
 import { PageHeader } from "@/components/page-header";
+import { ProjectAuditSection } from "@/components/project-audit-section";
 import { ProjectDeploymentsSection } from "@/components/project-deployments-section";
 import { ProjectEditPanel } from "@/components/project-edit-panel";
 import { ProjectMembersSection } from "@/components/project-members-section";
@@ -272,6 +273,7 @@ export default function ProjectDetailPage() {
         source={detail?.source}
       />
       <ProjectMembersSection projectId={project?.id} source={detail?.source} />
+      <ProjectAuditSection projectId={project?.id} source={detail?.source} />
     </div>
   );
 }

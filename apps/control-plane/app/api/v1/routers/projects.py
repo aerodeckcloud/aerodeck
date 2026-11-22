@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import (
     ActorUserIdDep,
+    AuditLogServiceDep,
     DeploymentServiceDep,
     PaginationDep,
     ProjectMemberServiceDep,
@@ -14,6 +15,7 @@ from app.schemas.auth import ErrorResponse
 from app.schemas.common import Page
 from app.schemas.deployment import DeploymentRead
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
+from app.services.audit_logs import AuditEventRead
 from app.services.project_members import ProjectMemberRead, ProjectMemberUpsertRequest
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -72,10 +74,21 @@ async def update_project(
     body: ProjectUpdate,
     projects: ProjectServiceDep,
     members: ProjectMemberServiceDep,
+    audit: AuditLogServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> ProjectRead:
     await members.require_role(project_id, actor_user_id, ProjectRole.developer)
-    return ProjectRead.model_validate(await projects.update(project_id, body))
+    updated = await projects.update(project_id, body)
+    payload = ProjectRead.model_validate(updated)
+    await audit.record(
+        project_id=project_id,
+        action="project.updated",
+        resource_type="project",
+        resource_id=str(project_id),
+        summary=f"Updated project '{payload.name}'",
+        actor_user_id=actor_user_id,
+    )
+    return payload
 
 
 @router.delete(
@@ -147,15 +160,25 @@ async def upsert_project_member(
     project_id: uuid.UUID,
     body: ProjectMemberUpsertRequest,
     members: ProjectMemberServiceDep,
+    audit: AuditLogServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> ProjectMemberRead:
     try:
-        return await members.upsert_member(project_id, body, actor_user_id=actor_user_id)
+        saved = await members.upsert_member(project_id, body, actor_user_id=actor_user_id)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
+    await audit.record(
+        project_id=project_id,
+        action="member.updated",
+        resource_type="member",
+        resource_id=str(saved.user_id),
+        summary=f"Set {saved.email} role to {saved.role.value}",
+        actor_user_id=actor_user_id,
+    )
+    return saved
 
 
 @router.delete(
@@ -168,6 +191,7 @@ async def remove_project_member(
     project_id: uuid.UUID,
     user_id: uuid.UUID,
     members: ProjectMemberServiceDep,
+    audit: AuditLogServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> None:
     try:
@@ -177,3 +201,27 @@ async def remove_project_member(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
+    await audit.record(
+        project_id=project_id,
+        action="member.removed",
+        resource_type="member",
+        resource_id=str(user_id),
+        summary=f"Removed member {user_id} from project",
+        actor_user_id=actor_user_id,
+    )
+
+
+@router.get(
+    "/{project_id}/audit-logs",
+    response_model=Page[AuditEventRead],
+    status_code=status.HTTP_200_OK,
+    summary="List activity and audit log events for a project (#257)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def list_project_audit_logs(
+    project_id: uuid.UUID,
+    page: PaginationDep,
+    audit: AuditLogServiceDep,
+) -> Page[AuditEventRead]:
+    items, total = await audit.list_for_project(project_id, limit=page.limit, offset=page.offset)
+    return Page(items=items, total=total, limit=page.limit, offset=page.offset)

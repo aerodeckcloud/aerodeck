@@ -14,7 +14,15 @@ from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from app.api.deps import ClientDep, DeploymentServiceDep, JobServiceDep, PaginationDep, SettingsDep
+from app.api.deps import (
+    ActorUserIdDep,
+    AuditLogServiceDep,
+    ClientDep,
+    DeploymentServiceDep,
+    JobServiceDep,
+    PaginationDep,
+    SettingsDep,
+)
 from app.models.deployment import DeploymentStatus
 from app.schemas.auth import ErrorResponse
 from app.schemas.blueprint import DeploymentBlueprint, DeploymentInspectRequest
@@ -92,8 +100,25 @@ async def inspect_deployment_repository(
     summary="Create a deployment",
     responses=_UNAUTHENTICATED | _NOT_FOUND,
 )
-async def create_deployment(body: DeploymentCreate, deployments: DeploymentServiceDep) -> DeploymentRead:
-    return DeploymentRead.model_validate(await deployments.create(body))
+async def create_deployment(
+    body: DeploymentCreate,
+    deployments: DeploymentServiceDep,
+    audit: AuditLogServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentRead:
+    created = await deployments.create(body)
+    payload = DeploymentRead.model_validate(created)
+    if payload.project_id is not None:
+        await audit.record(
+            project_id=payload.project_id,
+            environment_id=payload.environment_id,
+            action="deployment.created",
+            resource_type="deployment",
+            resource_id=str(payload.id),
+            summary=f"Started deployment of {payload.owner}/{payload.repo}",
+            actor_user_id=actor_user_id,
+        )
+    return payload
 
 
 @router.get(
