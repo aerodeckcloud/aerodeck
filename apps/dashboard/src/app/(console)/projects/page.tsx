@@ -1,20 +1,23 @@
 "use client";
 
+import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { NewEnvironmentForm } from "@/components/new-environment-form";
 import { NewProjectForm } from "@/components/new-project-form";
 import { PageHeader } from "@/components/page-header";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { fetchEnvironments, fetchProjectPage } from "@/lib/api";
+import { fetchDeployments, fetchEnvironments, fetchProjectPage } from "@/lib/api";
 import { environmentsForProject, mergeEnvironmentsById } from "@/lib/environment-list";
 import { projectDetailPath } from "@/lib/project-detail-path";
-import type { EnvironmentOption, Project, ProjectPage } from "@/lib/types";
+import type { Deployment, EnvironmentOption, Project, ProjectPage } from "@/lib/types";
 
 export default function ProjectsPage() {
   const [page, setPage] = useState<ProjectPage | null>(null);
   const [environments, setEnvironments] = useState<EnvironmentOption[]>([]);
+  const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [environmentsWarning, setEnvironmentsWarning] = useState<string | null>(null);
 
@@ -29,9 +32,17 @@ export default function ProjectsPage() {
         setError(null);
         if (nextPage.source !== "control-plane") {
           setEnvironments([]);
+          setDeployments([]);
           setEnvironmentsWarning(null);
           return;
         }
+        void fetchDeployments(true)
+          .then((items) => {
+            if (!cancelled) {
+              setDeployments(items);
+            }
+          })
+          .catch(() => {});
         try {
           const catalog = await fetchEnvironments();
           if (!cancelled) {
@@ -113,17 +124,47 @@ export default function ProjectsPage() {
               ) : null}
               {rows.map((row) => {
                 const envs = environmentsForProject(environments, row.id);
+                const latestDeploy = deployments.find((dep) => dep.project_id === row.id);
                 return (
                   <div key={row.id} className="py-4 first:pt-4">
-                    <p className="font-medium">
-                      <Link
-                        href={projectDetailPath(row.id)}
-                        className="text-foreground hover:text-primary hover:underline"
-                      >
-                        {row.name}
-                      </Link>
-                    </p>
-                    <p className="font-mono text-xs text-primary">{row.slug}</p>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="font-medium">
+                          <Link
+                            href={projectDetailPath(row.id)}
+                            className="text-foreground hover:text-primary hover:underline"
+                          >
+                            {row.name}
+                          </Link>
+                        </p>
+                        <p className="font-mono text-xs text-primary">{row.slug}</p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant="secondary">
+                          {envs.length} env{envs.length === 1 ? "" : "s"}
+                        </Badge>
+                        {latestDeploy ? (
+                          <Link href={`/deployments/${latestDeploy.id}`}>
+                            {latestDeploy.status === "succeeded" ? (
+                              <Badge variant="default">
+                                <CheckCircle2 className="size-3" />
+                                Last deploy ok
+                              </Badge>
+                            ) : latestDeploy.status === "failed" ? (
+                              <Badge variant="destructive">
+                                <XCircle className="size-3" />
+                                Last deploy failed
+                              </Badge>
+                            ) : (
+                              <Badge variant="secondary">
+                                <Loader2 className="size-3 animate-spin" />
+                                Deploying
+                              </Badge>
+                            )}
+                          </Link>
+                        ) : null}
+                      </div>
+                    </div>
                     {row.description ? (
                       <p className="mt-1 text-sm text-muted-foreground">{row.description}</p>
                     ) : null}

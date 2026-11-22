@@ -12,6 +12,7 @@ import {
   type DeploymentBlueprint,
   type EnvironmentOption,
   type EnvironmentOptionPage,
+  type EnvironmentVarCloneResult,
   type EnvironmentVarSummary,
   type EnvironmentVarUpsertItem,
   type EnvironmentWebhook,
@@ -208,6 +209,24 @@ export async function deleteEnvironmentVar(
   if (!response.ok) {
     await readJson(response);
   }
+}
+
+export async function cloneEnvironmentVars(
+  projectId: string,
+  environmentId: string,
+  sourceEnvironmentId: string,
+  overwrite = false,
+): Promise<EnvironmentVarCloneResult> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/env-vars/clone`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ source_environment_id: sourceEnvironmentId, overwrite }),
+    },
+  );
+  return readJson(response);
 }
 
 export async function fetchEnvironmentWebhook(

@@ -25,12 +25,14 @@ import type { EnvironmentOption } from "@/lib/types";
 
 type EnvironmentEditRowProps = {
   environment: EnvironmentOption;
+  peerEnvironments?: EnvironmentOption[];
   onUpdated: (environment: EnvironmentOption) => void;
   onDeleted: (environmentId: string) => void;
 };
 
 export function EnvironmentEditRow({
   environment,
+  peerEnvironments = [],
   onUpdated,
   onDeleted,
 }: EnvironmentEditRowProps) {
@@ -212,6 +214,7 @@ export function EnvironmentEditRow({
       <EnvironmentVarsManager
         projectId={environment.project_id}
         environmentId={environment.id}
+        peerEnvironments={peerEnvironments}
       />
       <EnvironmentWebhookManager
         projectId={environment.project_id}

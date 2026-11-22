@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, HTTPException, status
 from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import (
@@ -22,7 +22,12 @@ from app.services.container_ops import (
     dispatch_container_action,
     dispatch_container_metrics,
 )
-from app.services.environment_vars import EnvironmentVarRead, EnvironmentVarUpsertRequest
+from app.services.environment_vars import (
+    EnvironmentVarCloneRequest,
+    EnvironmentVarCloneResult,
+    EnvironmentVarRead,
+    EnvironmentVarUpsertRequest,
+)
 from app.services.provisioning import JobKind
 from app.services.webhooks import WebhookRead, WebhookUpsertRequest
 
@@ -215,6 +220,33 @@ async def delete_environment_var(
     env_vars: EnvironmentVariableServiceDep,
 ) -> None:
     await env_vars.delete_key(project_id, environment_id, key)
+
+
+@router.post(
+    "/{environment_id}/env-vars/clone",
+    response_model=EnvironmentVarCloneResult,
+    status_code=status.HTTP_200_OK,
+    summary="Clone encrypted environment variables from another environment in the same project (#255)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def clone_environment_vars(
+    project_id: uuid.UUID,
+    environment_id: uuid.UUID,
+    body: EnvironmentVarCloneRequest,
+    env_vars: EnvironmentVariableServiceDep,
+) -> EnvironmentVarCloneResult:
+    try:
+        return await env_vars.clone_from_environment(
+            project_id,
+            environment_id,
+            body.source_environment_id,
+            overwrite=body.overwrite,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get(

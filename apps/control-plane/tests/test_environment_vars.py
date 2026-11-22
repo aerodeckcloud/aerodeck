@@ -87,6 +87,58 @@ async def test_env_vars_api_encrypts_at_rest_and_masks_responses(
     missing = await client.delete(f"{base}/NO_SUCH_KEY", headers=auth)
     assert missing.status_code == 404
 
+    # Clone encrypted vars to a second environment without exposing plaintext (#255)
+    staging = (
+        await client.post(
+            f"/api/v1/projects/{project['id']}/environments",
+            json={"slug": "staging", "name": "Staging", "kind": "staging", "region": "ams3"},
+            headers=auth,
+        )
+    ).json()
+    staging_base = f"/api/v1/projects/{project['id']}/environments/{staging['id']}/env-vars"
+
+    # Pre-seed a conflicting key in staging
+    await client.put(
+        staging_base,
+        json={"items": [{"key": "GITLAB_TOKEN", "value": "staging-token", "is_secret": True}]},
+        headers=auth,
+    )
+    # Add a second key in dev
+    await client.put(
+        base,
+        json={"items": [{"key": "API_BASE", "value": "https://api.example.com", "is_secret": False}]},
+        headers=auth,
+    )
+
+    # Clone without overwrite skips GITLAB_TOKEN and copies API_BASE
+    clone_res = await client.post(
+        f"{staging_base}/clone",
+        json={"source_environment_id": env["id"], "overwrite": False},
+        headers=auth,
+    )
+    assert clone_res.status_code == 200
+    assert clone_res.json()["copied"] == 1
+    assert clone_res.json()["skipped"] == 1
+    assert "glpat-secret-value" not in clone_res.text
+
+    # Clone with overwrite copies both
+    overwrite_res = await client.post(
+        f"{staging_base}/clone",
+        json={"source_environment_id": env["id"], "overwrite": True},
+        headers=auth,
+    )
+    assert overwrite_res.status_code == 200
+    assert overwrite_res.json()["copied"] == 2
+    assert overwrite_res.json()["skipped"] == 0
+
+    # Cloning from self -> 422
+    self_clone = await client.post(
+        f"{staging_base}/clone",
+        json={"source_environment_id": staging["id"], "overwrite": False},
+        headers=auth,
+    )
+    assert self_clone.status_code == 422
+
 
 @pytest.mark.asyncio
 async def test_job_service_merges_persisted_env_vars_with_deploy_overrides() -> None:
