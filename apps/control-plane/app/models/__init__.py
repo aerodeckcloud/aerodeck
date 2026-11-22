@@ -1,5 +1,6 @@
 """SQLAlchemy ORM models. Import every model here so Alembic sees the full metadata."""
 
+from app.models.audit_event import AuditEvent
 from app.models.base import Base
 from app.models.certificate import Certificate, CertificateStatus
 from app.models.console_session import ConsoleSession
@@ -15,6 +16,7 @@ from app.models.sandbox_host import SandboxHost, SandboxHostStatus
 from app.models.webhook import EnvironmentWebhook
 
 __all__ = [
+    "AuditEvent",
     "Base",
     "Certificate",
     "CertificateStatus",

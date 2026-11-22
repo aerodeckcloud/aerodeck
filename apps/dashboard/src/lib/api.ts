@@ -4,6 +4,7 @@ import {
   type AcceptedJob,
   type AddonType,
   type ApiError,
+  type AuditEvent,
   type ContainerAction,
   type ContainerActionResult,
   type ContainerMetrics,
@@ -333,6 +334,14 @@ export async function removeProjectMember(projectId: string, userId: string): Pr
   if (!response.ok) {
     await readJson(response);
   }
+}
+
+export async function fetchProjectAuditLogs(projectId: string): Promise<AuditEvent[]> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/audit-logs`,
+    { credentials: "same-origin", cache: "no-store" },
+  );
+  return readJson(response);
 }
 
 export async function createProjectRoute(input: {

@@ -2,6 +2,7 @@ import { isControlPlaneUuid } from "./control-plane-uuid";
 import type {
   AcceptedJob,
   AddonType,
+  AuditEvent,
   ContainerAction,
   ContainerActionResult,
   ContainerMetrics,
@@ -1091,6 +1092,34 @@ export async function deleteControlPlaneProjectMember(
       response.status,
     );
   }
+}
+
+export async function listControlPlaneProjectAuditLogs(
+  config: ControlPlaneConfig,
+  projectId: string,
+  options: ListOptions = {},
+): Promise<AuditEvent[]> {
+  if (!isControlPlaneUuid(projectId)) {
+    throw new ControlPlaneError("projectId must be a uuid");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/audit-logs?limit=50&offset=0`,
+    {
+      headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane project audit logs failed (${response.status})`,
+      response.status,
+    );
+  }
+  const body = (await response.json()) as { items?: unknown };
+  return Array.isArray(body.items) ? (body.items as AuditEvent[]) : [];
 }
 
 async function postDeploymentStatus(

@@ -28,6 +28,7 @@ from app.repositories.routes import RouteRepository
 from app.repositories.sandbox_hosts import SandboxHostRepository
 from app.repositories.sandboxes import SandboxRepository
 from app.services.acme import AcmeIssuer, AcmeUnavailableError, FakeAcmeIssuer
+from app.services.audit_logs import AuditLogRepository, AuditLogService
 from app.services.auth import AuthenticatedClient, AuthService
 from app.services.certificate_keys import FileCertificateKeyStore
 from app.services.certificates import CertificateService
@@ -106,6 +107,19 @@ def get_project_member_service(
 
 
 ProjectMemberServiceDep = Annotated[ProjectMemberService, Depends(get_project_member_service)]
+
+
+def get_audit_log_service(
+    session: SessionDep, projects: ProjectServiceDep
+) -> AuditLogService:
+    return AuditLogService(
+        AuditLogRepository(session),
+        projects,
+        ConsoleUserRepository(session),
+    )
+
+
+AuditLogServiceDep = Annotated[AuditLogService, Depends(get_audit_log_service)]
 
 
 def get_actor_user_id(
