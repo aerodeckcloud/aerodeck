@@ -249,6 +249,12 @@ export type EnvironmentVarUpsertItem = {
   is_secret?: boolean;
 };
 
+export type EnvironmentVarCloneResult = {
+  copied: number;
+  skipped: number;
+  items: EnvironmentVarSummary[];
+};
+
 export type EnvironmentWebhook = {
   id: string;
   project_id: string;

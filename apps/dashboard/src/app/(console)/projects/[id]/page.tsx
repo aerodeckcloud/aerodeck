@@ -1,5 +1,6 @@
 "use client";
 
+import { ExternalLink, Globe, Layers } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -10,6 +11,7 @@ import { PageHeader } from "@/components/page-header";
 import { ProjectDeploymentsSection } from "@/components/project-deployments-section";
 import { ProjectEditPanel } from "@/components/project-edit-panel";
 import { ProjectRoutesSection } from "@/components/project-routes-section";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { fetchProjectDetail } from "@/lib/api";
 import { mergeEnvironmentsById } from "@/lib/environment-list";
@@ -166,6 +168,34 @@ export default function ProjectDetailPage() {
           {error}
         </p>
       ) : null}
+      {detailReady && detail?.source === "control-plane" ? (
+        <div className="mb-6 flex flex-wrap items-center gap-2">
+          <Badge variant="secondary">
+            <Layers className="size-3" />
+            {environments.length} environment{environments.length === 1 ? "" : "s"}
+          </Badge>
+          <Badge variant="secondary">
+            <Globe className="size-3" />
+            {routes.filter((r) => r.enabled).length} live route
+            {routes.filter((r) => r.enabled).length === 1 ? "" : "s"}
+          </Badge>
+          {routes
+            .filter((r) => r.enabled)
+            .slice(0, 3)
+            .map((route) => (
+              <a
+                key={route.id}
+                href={`https://${route.hostname}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-2.5 py-0.5 font-mono text-xs text-primary hover:underline"
+              >
+                https://{route.hostname}
+                <ExternalLink className="size-3" />
+              </a>
+            ))}
+        </div>
+      ) : null}
       {canMutate && project ? (
         <ProjectEditPanel project={project} onUpdated={handleProjectUpdated} />
       ) : null}
@@ -208,6 +238,7 @@ export default function ProjectDetailPage() {
                   <EnvironmentEditRow
                     key={env.id}
                     environment={env}
+                    peerEnvironments={environments.filter((other) => other.id !== env.id)}
                     onUpdated={handleEnvironmentUpdated}
                     onDeleted={handleEnvironmentDeleted}
                   />

@@ -62,6 +62,21 @@ class EnvironmentVarRead(BaseModel):
     updated_at: datetime
 
 
+class EnvironmentVarCloneRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_environment_id: uuid.UUID
+    overwrite: bool = False
+
+
+class EnvironmentVarCloneResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    copied: int
+    skipped: int
+    items: list[EnvironmentVarRead]
+
+
 def _fernet_for(signing_key: str) -> Fernet:
     digest = hashlib.sha256(_ENCRYPTION_DOMAIN + signing_key.encode("utf-8")).digest()
     return Fernet(base64.urlsafe_b64encode(digest))
@@ -181,6 +196,49 @@ class EnvironmentVariableService:
             raise NotFoundError(f"Environment variable {key!r} not found")
         await self._repo.delete(row)
         logger.info("deleted env var %s for environment %s", key, environment_id)
+
+    async def clone_from_environment(
+        self,
+        project_id: uuid.UUID,
+        target_environment_id: uuid.UUID,
+        source_environment_id: uuid.UUID,
+        *,
+        overwrite: bool = False,
+    ) -> EnvironmentVarCloneResult:
+        if source_environment_id == target_environment_id:
+            raise ValueError("Source and target environments must be different.")
+        await self._environments.get(project_id, source_environment_id)
+        await self._environments.get(project_id, target_environment_id)
+        source_rows = await self._repo.list_for_environment(project_id, source_environment_id)
+        target_rows = await self._repo.list_for_environment(project_id, target_environment_id)
+        existing_keys = {row.key for row in target_rows}
+        copied = 0
+        skipped = 0
+        for row in source_rows:
+            if row.key in existing_keys and not overwrite:
+                skipped += 1
+                continue
+            await self._repo.upsert(
+                project_id=project_id,
+                environment_id=target_environment_id,
+                key=row.key,
+                encrypted_value=row.encrypted_value,
+                is_secret=row.is_secret,
+            )
+            copied += 1
+        logger.info(
+            "cloned env vars from %s to %s (copied=%d, skipped=%d)",
+            source_environment_id,
+            target_environment_id,
+            copied,
+            skipped,
+        )
+        updated = await self._repo.list_for_environment(project_id, target_environment_id)
+        return EnvironmentVarCloneResult(
+            copied=copied,
+            skipped=skipped,
+            items=[EnvironmentVarRead.model_validate(r) for r in updated],
+        )
 
     async def load_decrypted_map(
         self, project_id: uuid.UUID, environment_id: uuid.UUID

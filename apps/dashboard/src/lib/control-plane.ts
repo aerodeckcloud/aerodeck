@@ -12,6 +12,7 @@ import type {
   DnsRecordStatus,
   DnsRecordType,
   EnvironmentOption,
+  EnvironmentVarCloneResult,
   EnvironmentVarSummary,
   EnvironmentVarUpsertItem,
   EnvironmentWebhook,
@@ -709,6 +710,55 @@ export async function deleteControlPlaneEnvironmentVar(
       response.status,
     );
   }
+}
+
+export async function cloneControlPlaneEnvironmentVars(
+  config: ControlPlaneConfig,
+  projectId: string,
+  environmentId: string,
+  sourceEnvironmentId: string,
+  overwrite = false,
+  options: ListOptions = {},
+): Promise<EnvironmentVarCloneResult> {
+  if (
+    !isControlPlaneUuid(projectId) ||
+    !isControlPlaneUuid(environmentId) ||
+    !isControlPlaneUuid(sourceEnvironmentId)
+  ) {
+    throw new ControlPlaneError("projectId, environmentId, and sourceEnvironmentId must be uuids");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/env-vars/clone`,
+    {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ source_environment_id: sourceEnvironmentId, overwrite }),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane env vars clone failed (${response.status})`,
+      response.status,
+    );
+  }
+  const body = (await response.json()) as {
+    copied?: unknown;
+    skipped?: unknown;
+    items?: unknown;
+  };
+  return {
+    copied: typeof body.copied === "number" ? body.copied : 0,
+    skipped: typeof body.skipped === "number" ? body.skipped : 0,
+    items: parseEnvironmentVarList(body.items),
+  };
 }
 
 export async function getControlPlaneEnvironmentWebhook(
