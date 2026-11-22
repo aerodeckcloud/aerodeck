@@ -16,10 +16,34 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { createDeployment, fetchLogSource, ProvisionEnqueueFailed } from "@/lib/api";
 import { environmentOptionKey } from "@/lib/environment-option";
 import { parseGithubRepo } from "@/lib/github";
 import { useDeployEnvironments } from "@/lib/use-deploy-environments";
+
+function parseDotenvText(raw: string): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const rawLine of raw.split(/\r?\n/)) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    if (line.startsWith("export ")) {
+      line = line.slice(7).trim();
+    }
+    const eqIndex = line.indexOf("=");
+    if (eqIndex <= 0) {
+      continue;
+    }
+    const key = line.slice(0, eqIndex).trim();
+    const val = line.slice(eqIndex + 1).trim().replace(/^['"]|['"]$/g, "");
+    if (/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key)) {
+      out[key] = val;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 
 export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boolean }) {
   const router = useRouter();
@@ -39,6 +63,7 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
   }, [controlPlane]);
 
   const [repoUrl, setRepoUrl] = useState("");
+  const [envVarsText, setEnvVarsText] = useState("");
   const {
     environmentKey,
     setEnvironmentKey,
@@ -68,7 +93,9 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
       return;
     }
 
-    let target: { projectId: string; environmentId: string } | undefined;
+    let target:
+      | { projectId: string; environmentId: string; envVars?: Record<string, string> }
+      | undefined;
     if (isControlPlane) {
       const selected = environments.find(
         (row) => environmentOptionKey(row) === environmentKey,
@@ -78,7 +105,11 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
         setError("Select an environment to provision.");
         return;
       }
-      target = { projectId: selected.project_id, environmentId: selected.id };
+      target = {
+        projectId: selected.project_id,
+        environmentId: selected.id,
+        envVars: parseDotenvText(envVarsText),
+      };
     }
 
     setSubmitting(true);
@@ -145,24 +176,41 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
             <p className="text-xs text-muted-foreground">Example: https://github.com/org/app.git</p>
           </div>
           {isControlPlane ? (
-            <EnvironmentSelect
-              environments={environments}
-              environmentKey={environmentKey}
-              onEnvironmentKeyChange={(key) => {
-                setEnvironmentKey(key);
-                if (environmentRequired) {
-                  setEnvironmentRequired(false);
-                }
-                if (error && !enqueueBlocked) {
-                  setError(null);
-                }
-              }}
-              environmentsError={environmentsError}
-              loadingEnvironments={loadingEnvironments}
-              invalid={!!environmentsError || environmentRequired}
-              disabled={submitting || enqueueBlocked}
-              onRetry={reload}
-            />
+            <>
+              <EnvironmentSelect
+                environments={environments}
+                environmentKey={environmentKey}
+                onEnvironmentKeyChange={(key) => {
+                  setEnvironmentKey(key);
+                  if (environmentRequired) {
+                    setEnvironmentRequired(false);
+                  }
+                  if (error && !enqueueBlocked) {
+                    setError(null);
+                  }
+                }}
+                environmentsError={environmentsError}
+                loadingEnvironments={loadingEnvironments}
+                invalid={!!environmentsError || environmentRequired}
+                disabled={submitting || enqueueBlocked}
+                onRetry={reload}
+              />
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="env-vars">Environment variables (optional)</Label>
+                <Textarea
+                  id="env-vars"
+                  rows={3}
+                  placeholder={"KEY=value\nGITLAB_TOKEN=..."}
+                  value={envVarsText}
+                  disabled={submitting || enqueueBlocked}
+                  onChange={(e) => setEnvVarsText(e.target.value)}
+                  className="font-mono text-xs"
+                />
+                <p className="text-xs text-muted-foreground">
+                  One KEY=VALUE per line (or paste a .env file). Overrides auto-discovered repository defaults.
+                </p>
+              </div>
+            </>
           ) : null}
           {error ? (
             <p className="text-sm text-destructive" role="alert">

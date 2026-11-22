@@ -153,6 +153,9 @@ def test_detect_exposed_port_parses_dockerfile_or_falls_back(tmp_path: Path) -> 
 
 def test_discover_repo_env_defaults_extracts_compose_and_dotenv(tmp_path: Path) -> None:
     (tmp_path / ".env.example").write_text("FOO=bar\nPATH=/evil\n", encoding="utf-8")
+    mock_secrets = tmp_path / "mock-secrets"
+    mock_secrets.mkdir()
+    (mock_secrets / "gitlab-token").write_text("glpat-mock-token-123\n", encoding="utf-8")
     (tmp_path / "docker-compose.yaml").write_text(
         "services:\n"
         "  keycloak:\n"
@@ -168,6 +171,7 @@ def test_discover_repo_env_defaults_extracts_compose_and_dotenv(tmp_path: Path) 
     )
     defaults = discover_repo_env_defaults(tmp_path)
     assert defaults["FOO"] == "bar"
+    assert defaults["GITLAB_TOKEN"] == "glpat-mock-token-123"
     assert defaults["KEYCLOAK_CLIENT_SECRET"] == "dev-portal-secret"
     assert defaults["SESSION_SECRET_KEY"] == "dev-session-secret-change-me"
     assert "KEYCLOAK_ADMIN" not in defaults

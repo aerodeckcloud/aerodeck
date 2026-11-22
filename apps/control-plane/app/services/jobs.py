@@ -4,6 +4,7 @@ The dispatcher is a protocol so routes never import Celery, and tests can
 swap in an in-process implementation.
 """
 
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -73,6 +74,7 @@ class JobService:
         environment_id: uuid.UUID,
         *,
         deployment_id: uuid.UUID | None = None,
+        env_vars: dict[str, str] | None = None,
     ) -> JobTicket:
         environment = await self._environments.get(project_id, environment_id)
         meta: dict[str, str] = {
@@ -81,6 +83,8 @@ class JobService:
             "environment_kind": environment.kind.value,
             "region": environment.region,
         }
+        if env_vars:
+            meta["env_vars_json"] = json.dumps(env_vars)
         linked_deployment_id: uuid.UUID | None = None
         # Only provision publishes onto a deployment log stream (#121).
         if deployment_id is not None and kind is JobKind.provision:

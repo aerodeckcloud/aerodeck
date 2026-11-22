@@ -89,7 +89,8 @@ class DockerProvisioner:
 
     def provision(
         self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",
-        environment_kind: str = "dev", region: str = "ams3", repo_url: str = "", on_log: LogSink | None = None,
+        environment_kind: str = "dev", region: str = "ams3", repo_url: str = "", env_vars_json: str = "",
+        on_log: LogSink | None = None,
     ) -> JobOutcome:
         _ = (environment_kind, region)
         p_uuid = validate_uuid(project_id, "project_id")
@@ -125,7 +126,7 @@ class DockerProvisioner:
                 raise classify_failure("git clone", clone_res)
             df = ensure_dockerfile(checkout, owner, repo, container_port=self.container_port, on_log=on_log)
             target_port = detect_exposed_port(df, default_port=self.container_port)
-            env_file = build_runtime_env_file(checkout, target_port, f"https://{route_hostname}" if route_hostname else None, on_log)
+            env_file = build_runtime_env_file(checkout, target_port, f"https://{route_hostname}" if route_hostname else None, on_log, env_vars_json)
             emit(f"Building Docker image {tag}...")
             build_res = self.runner.run(
                 [docker_bin, "build", "--progress=plain", "--build-arg", "BUILDKIT_INLINE_CACHE=1", "--cache-from", tag, "--tag", tag, str(checkout)],
