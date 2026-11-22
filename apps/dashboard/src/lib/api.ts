@@ -11,6 +11,8 @@ import {
   type EnvironmentOptionPage,
   type EnvironmentVarSummary,
   type EnvironmentVarUpsertItem,
+  type EnvironmentWebhook,
+  type EnvironmentWebhookInput,
   type Project,
   type ProjectDetail,
   type ProjectPage,
@@ -198,6 +200,47 @@ export async function deleteEnvironmentVar(
 ): Promise<void> {
   const response = await fetch(
     `/api/console/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/env-vars/${encodeURIComponent(key)}`,
+    { method: "DELETE", credentials: "same-origin" },
+  );
+  if (!response.ok) {
+    await readJson(response);
+  }
+}
+
+export async function fetchEnvironmentWebhook(
+  projectId: string,
+  environmentId: string,
+): Promise<EnvironmentWebhook | null> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/webhook`,
+    { credentials: "same-origin", cache: "no-store" },
+  );
+  return readJson(response);
+}
+
+export async function upsertEnvironmentWebhook(
+  projectId: string,
+  environmentId: string,
+  input: EnvironmentWebhookInput,
+): Promise<EnvironmentWebhook> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/webhook`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(input),
+    },
+  );
+  return readJson(response);
+}
+
+export async function deleteEnvironmentWebhook(
+  projectId: string,
+  environmentId: string,
+): Promise<void> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/webhook`,
     { method: "DELETE", credentials: "same-origin" },
   );
   if (!response.ok) {

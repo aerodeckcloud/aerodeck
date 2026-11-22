@@ -7,6 +7,7 @@ from app.api.deps import (
     EnvironmentVariableServiceDep,
     JobServiceDep,
     PaginationDep,
+    WebhookServiceDep,
 )
 from app.schemas.auth import ErrorResponse
 from app.schemas.common import Page
@@ -14,6 +15,7 @@ from app.schemas.environment import EnvironmentCreate, EnvironmentRead, Environm
 from app.schemas.job import JobAccepted, ProvisionJobCreate
 from app.services.environment_vars import EnvironmentVarRead, EnvironmentVarUpsertRequest
 from app.services.provisioning import JobKind
+from app.services.webhooks import WebhookRead, WebhookUpsertRequest
 
 router = APIRouter(prefix="/projects/{project_id}/environments", tags=["environments"])
 
@@ -204,3 +206,48 @@ async def delete_environment_var(
     env_vars: EnvironmentVariableServiceDep,
 ) -> None:
     await env_vars.delete_key(project_id, environment_id, key)
+
+
+@router.get(
+    "/{environment_id}/webhook",
+    response_model=WebhookRead | None,
+    status_code=status.HTTP_200_OK,
+    summary="Get GitHub push webhook configuration for an environment (#249)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def get_environment_webhook(
+    project_id: uuid.UUID,
+    environment_id: uuid.UUID,
+    webhooks: WebhookServiceDep,
+) -> WebhookRead | None:
+    return await webhooks.get_for_environment(project_id, environment_id)
+
+
+@router.put(
+    "/{environment_id}/webhook",
+    response_model=WebhookRead,
+    status_code=status.HTTP_200_OK,
+    summary="Create or update GitHub push webhook configuration (#249)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def upsert_environment_webhook(
+    project_id: uuid.UUID,
+    environment_id: uuid.UUID,
+    body: WebhookUpsertRequest,
+    webhooks: WebhookServiceDep,
+) -> WebhookRead:
+    return await webhooks.upsert_for_environment(project_id, environment_id, body)
+
+
+@router.delete(
+    "/{environment_id}/webhook",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete GitHub push webhook configuration (#249)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def delete_environment_webhook(
+    project_id: uuid.UUID,
+    environment_id: uuid.UUID,
+    webhooks: WebhookServiceDep,
+) -> None:
+    await webhooks.delete_for_environment(project_id, environment_id)

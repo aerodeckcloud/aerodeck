@@ -23,10 +23,12 @@ from app.api.v1.routers import (
     routes,
     sandbox_hosts,
     sandboxes,
+    webhooks,
 )
 
 api_v1_router = APIRouter(prefix="/api/v1")
 api_v1_router.include_router(auth.router)
+api_v1_router.include_router(webhooks.router)
 api_v1_router.include_router(console_users.router, dependencies=AUTH_GUARD)
 api_v1_router.include_router(console_sessions.router, dependencies=AUTH_GUARD)
 api_v1_router.include_router(projects.router, dependencies=AUTH_GUARD)
