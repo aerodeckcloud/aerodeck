@@ -248,3 +248,25 @@ export type EnvironmentVarUpsertItem = {
   value: string;
   is_secret?: boolean;
 };
+
+export type EnvironmentWebhook = {
+  id: string;
+  project_id: string;
+  environment_id: string;
+  repo_url: string;
+  branch: string;
+  addons: AddonType[];
+  enabled: boolean;
+  has_secret: boolean;
+  secret: string | null;
+  last_delivery_id: string | null;
+  last_triggered_at: string | null;
+};
+
+export type EnvironmentWebhookInput = {
+  repo_url: string;
+  branch: string;
+  addons?: AddonType[];
+  enabled?: boolean;
+  rotate_secret?: boolean;
+};

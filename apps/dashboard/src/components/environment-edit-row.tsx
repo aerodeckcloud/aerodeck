@@ -9,6 +9,7 @@ import {
   withCurrentOption,
 } from "@/components/environment-form-fields";
 import { EnvironmentVarsManager } from "@/components/environment-vars-manager";
+import { EnvironmentWebhookManager } from "@/components/environment-webhook-manager";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -204,6 +205,10 @@ export function EnvironmentEditRow({
         </p>
       ) : null}
       <EnvironmentVarsManager
+        projectId={environment.project_id}
+        environmentId={environment.id}
+      />
+      <EnvironmentWebhookManager
         projectId={environment.project_id}
         environmentId={environment.id}
       />

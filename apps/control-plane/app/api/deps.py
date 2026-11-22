@@ -51,6 +51,7 @@ from app.services.projects import ProjectService
 from app.services.routes import RouteService
 from app.services.sandbox_hosts import SandboxHostService
 from app.services.sandboxes import SandboxService
+from app.services.webhooks import WebhookRepository, WebhookService
 from app.tasks.deployment_status import (
     try_mark_deployment_failed_isolated,
     try_set_provision_job_id_isolated,
@@ -170,6 +171,21 @@ def get_environment_variable_service(
 EnvironmentVariableServiceDep = Annotated[
     EnvironmentVariableService, Depends(get_environment_variable_service)
 ]
+
+
+def get_webhook_service(
+    session: SessionDep,
+    environments: EnvironmentServiceDep,
+    settings: SettingsDep,
+) -> WebhookService:
+    return WebhookService(
+        WebhookRepository(session),
+        environments,
+        signing_key=settings.auth_signing_key.get_secret_value(),
+    )
+
+
+WebhookServiceDep = Annotated[WebhookService, Depends(get_webhook_service)]
 
 
 def get_deployment_terminal_service(

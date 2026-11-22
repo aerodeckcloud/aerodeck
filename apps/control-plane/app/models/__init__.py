@@ -11,6 +11,7 @@ from app.models.project import Environment, EnvironmentKind, Project
 from app.models.route import Route
 from app.models.sandbox import Sandbox, SandboxStatus
 from app.models.sandbox_host import SandboxHost, SandboxHostStatus
+from app.models.webhook import EnvironmentWebhook
 
 __all__ = [
     "Base",
@@ -26,6 +27,7 @@ __all__ = [
     "Environment",
     "EnvironmentKind",
     "EnvironmentVariable",
+    "EnvironmentWebhook",
     "Project",
     "Route",
     "Sandbox",

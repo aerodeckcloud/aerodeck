@@ -11,6 +11,8 @@ import type {
   EnvironmentOption,
   EnvironmentVarSummary,
   EnvironmentVarUpsertItem,
+  EnvironmentWebhook,
+  EnvironmentWebhookInput,
   JobKind,
   Project,
   ProjectRoute,
@@ -701,6 +703,97 @@ export async function deleteControlPlaneEnvironmentVar(
   if (!response.ok) {
     throw new ControlPlaneError(
       `control plane env var delete failed (${response.status})`,
+      response.status,
+    );
+  }
+}
+
+export async function getControlPlaneEnvironmentWebhook(
+  config: ControlPlaneConfig,
+  projectId: string,
+  environmentId: string,
+  options: ListOptions = {},
+): Promise<EnvironmentWebhook | null> {
+  if (!isControlPlaneUuid(projectId) || !isControlPlaneUuid(environmentId)) {
+    throw new ControlPlaneError("projectId and environmentId must be uuids");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/webhook`,
+    {
+      headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane webhook read failed (${response.status})`,
+      response.status,
+    );
+  }
+  return (await response.json()) as EnvironmentWebhook | null;
+}
+
+export async function upsertControlPlaneEnvironmentWebhook(
+  config: ControlPlaneConfig,
+  projectId: string,
+  environmentId: string,
+  input: EnvironmentWebhookInput,
+  options: ListOptions = {},
+): Promise<EnvironmentWebhook> {
+  if (!isControlPlaneUuid(projectId) || !isControlPlaneUuid(environmentId)) {
+    throw new ControlPlaneError("projectId and environmentId must be uuids");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/webhook`,
+    {
+      method: "PUT",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(input),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane webhook upsert failed (${response.status})`,
+      response.status,
+    );
+  }
+  return (await response.json()) as EnvironmentWebhook;
+}
+
+export async function deleteControlPlaneEnvironmentWebhook(
+  config: ControlPlaneConfig,
+  projectId: string,
+  environmentId: string,
+  options: ListOptions = {},
+): Promise<void> {
+  if (!isControlPlaneUuid(projectId) || !isControlPlaneUuid(environmentId)) {
+    throw new ControlPlaneError("projectId and environmentId must be uuids");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/webhook`,
+    {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane webhook delete failed (${response.status})`,
       response.status,
     );
   }

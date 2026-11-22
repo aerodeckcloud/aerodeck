@@ -6,6 +6,9 @@ open. Traefik's snapshot accepts that token or ``AERODECK_TRAEFIK_PROVIDER_TOKEN
 
 The auth router is the one exception: it has to accept the request that
 obtains a token in the first place. Its ``/me`` route protects itself.
+The webhooks router is also mounted without ``AUTH_GUARD`` because GitHub
+deliveries authenticate via constant-time ``X-Hub-Signature-256`` HMAC-SHA256
+verification against each environment's encrypted webhook secret.
 """
 
 from fastapi import APIRouter
@@ -23,10 +26,12 @@ from app.api.v1.routers import (
     routes,
     sandbox_hosts,
     sandboxes,
+    webhooks,
 )
 
 api_v1_router = APIRouter(prefix="/api/v1")
 api_v1_router.include_router(auth.router)
+api_v1_router.include_router(webhooks.router)
 api_v1_router.include_router(console_users.router, dependencies=AUTH_GUARD)
 api_v1_router.include_router(console_sessions.router, dependencies=AUTH_GUARD)
 api_v1_router.include_router(projects.router, dependencies=AUTH_GUARD)
