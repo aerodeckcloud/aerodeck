@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, History, Loader2, RefreshCw, RotateCcw, XCircle } from "lucide-react";
+import { CheckCircle2, GitCommitHorizontal, History, Loader2, RefreshCw, RotateCcw, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { fetchProjectDeployments, redeployDeployment, rollbackDeployment } from "@/lib/api";
+import { deployLatestDeployment, fetchProjectDeployments, redeployDeployment, rollbackDeployment } from "@/lib/api";
 import { formatDuration, formatInstant } from "@/lib/format";
 import type { Deployment, DeploymentStatus, EnvironmentOption, ProjectSource } from "@/lib/types";
 
@@ -79,14 +79,16 @@ export function ProjectDeploymentsSection({
 
   const envNameById = new Map(environments.map((env) => [env.id, env.slug]));
 
-  async function handleAction(deploymentId: string, action: "redeploy" | "rollback") {
+  async function handleAction(deploymentId: string, action: "redeploy" | "deploy-latest" | "rollback") {
     setError(null);
     setBusyId(`${deploymentId}:${action}`);
     try {
       const next =
         action === "redeploy"
           ? await redeployDeployment(deploymentId)
-          : await rollbackDeployment(deploymentId);
+          : action === "deploy-latest"
+            ? await deployLatestDeployment(deploymentId)
+            : await rollbackDeployment(deploymentId);
       router.push(`/deployments/${next.id}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : `Could not ${action} deployment.`);
@@ -172,7 +174,8 @@ export function ProjectDeploymentsSection({
                       type="button"
                       size="sm"
                       variant="outline"
-                      disabled={busyId !== null}
+                      disabled={busyId !== null || !dep.git_sha}
+                      title={dep.git_sha ? "Repeat this commit" : "Repeat needs a recorded commit"}
                       onClick={() => void handleAction(dep.id, "redeploy")}
                     >
                       {busyId === `${dep.id}:redeploy` ? (
@@ -181,6 +184,21 @@ export function ProjectDeploymentsSection({
                         <RefreshCw className="size-3.5" />
                       )}
                       Redeploy
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={busyId !== null}
+                      title="Deploy the repository default branch"
+                      onClick={() => void handleAction(dep.id, "deploy-latest")}
+                    >
+                      {busyId === `${dep.id}:deploy-latest` ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <GitCommitHorizontal className="size-3.5" />
+                      )}
+                      Deploy latest
                     </Button>
                     {dep.status === "succeeded" ? (
                       <Button

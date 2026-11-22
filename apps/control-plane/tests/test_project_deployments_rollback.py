@@ -9,8 +9,10 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.deps import get_job_dispatcher
+from app.models.deployment import Deployment
 from app.repositories.jobs import JobState
 from app.services.docker_policy import CommandResult, LogSink, deployment_image_tag_for
 from app.services.docker_provisioner import DockerProvisioner
@@ -172,16 +174,34 @@ async def test_project_deployments_redeploy_and_rollback_endpoints(
         bad_rb = await client.post(f"/api/v1/deployments/{dep['id']}/rollback", headers=auth)
         assert bad_rb.status_code == 422
 
-        # Mark succeeded, then redeploy and rollback both return 201
+        # Mark succeeded. Repeat without a recorded commit does not enqueue.
         assert (await client.post(f"/api/v1/deployments/{dep['id']}/succeeded", headers=auth)).status_code == 200
+        blocked = await client.post(f"/api/v1/deployments/{dep['id']}/redeploy", headers=auth)
+        assert blocked.status_code == 422
+        assert dispatcher.calls == []
+
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
+        async with sessions() as session:
+            row = await session.get(Deployment, uuid.UUID(dep["id"]))
+            assert row is not None
+            row.git_sha = sha
+            await session.commit()
 
         redeployed = await client.post(f"/api/v1/deployments/{dep['id']}/redeploy", headers=auth)
-        assert redeployed.status_code == 201
+        assert redeployed.status_code == 201, redeployed.text
         assert redeployed.json()["id"] != dep["id"]
+        assert redeployed.json()["trigger"] == "manual"
+        assert dispatcher.calls[0]["meta"]["git_ref"] == sha
         assert "rollback_from_deployment_id" not in dispatcher.calls[0]["meta"]
+
+        latest = await client.post(f"/api/v1/deployments/{dep['id']}/deploy-latest", headers=auth)
+        assert latest.status_code == 201, latest.text
+        assert latest.json()["trigger"] == "manual"
+        assert "git_ref" not in dispatcher.calls[1]["meta"]
 
         rolled_back = await client.post(f"/api/v1/deployments/{dep['id']}/rollback", headers=auth)
         assert rolled_back.status_code == 201
-        assert dispatcher.calls[1]["meta"]["rollback_from_deployment_id"] == dep["id"]
+        assert dispatcher.calls[2]["meta"]["rollback_from_deployment_id"] == dep["id"]
     finally:
         app.dependency_overrides.pop(get_job_dispatcher, None)

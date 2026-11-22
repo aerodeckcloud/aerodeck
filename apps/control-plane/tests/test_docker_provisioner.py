@@ -159,6 +159,30 @@ def test_provision_clones_builds_runs_and_streams_logs() -> None:
     assert any("Container aerodeck-app-f27ee337-bacbb040 running on 10.41.0.2:10420." in line for line in streamed)
 
 
+def test_provision_fetches_a_pinned_commit_instead_of_the_default_branch() -> None:
+    runner = FakeCommandRunner()
+    provisioner = _make_provisioner(runner)
+    sha = "abcdef0123456789abcdef0123456789abcdef01"
+    streamed: list[str] = []
+
+    provisioner.provision(
+        project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+        environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+        project_slug="payments",
+        environment_slug="dev",
+        repo_url="https://github.com/mangatohjunior/demo-app",
+        git_ref=sha,
+        on_log=streamed.append,
+    )
+
+    clone_cmd = runner.calls[0]
+    assert "--branch" not in clone_cmd
+    assert runner.calls[1][-1] == sha
+    assert "fetch" in runner.calls[1]
+    assert runner.calls[2][-2:] == ["--detach", "FETCH_HEAD"]
+    assert any(f"commit {sha[:7]}" in line for line in streamed)
+
+
 def test_provision_rejects_missing_dockerfile() -> None:
     runner = FakeCommandRunner(create_dockerfile=False)
     provisioner = _make_provisioner(runner)

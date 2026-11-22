@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { createDeployment, errorFromFailedCreate, ProvisionEnqueueFailed } from "./api";
+import { createDeployment, errorFromFailedCreate, fetchDeployments, ProvisionEnqueueFailed } from "./api";
 import { PROVISION_ENQUEUE_FAILED, type Deployment } from "./types";
 
 describe("errorFromFailedCreate", () => {
@@ -30,6 +30,27 @@ describe("errorFromFailedCreate", () => {
     );
     assert.equal(error instanceof ProvisionEnqueueFailed, false);
     assert.equal(error.message, "Control plane request failed.");
+  });
+});
+
+describe("fetchDeployments", () => {
+  it("uses the mock list and does not call the control plane", async () => {
+    const urls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const rows = await fetchDeployments(false);
+      assert.deepEqual(rows, []);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    assert.deepEqual(urls, ["/api/mock/v1/deployments"]);
   });
 });
 

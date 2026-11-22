@@ -50,6 +50,11 @@ or `promote`, plus `actor_user_id` when that header names a console user) and,
 after the worker checks out a commit, `git_sha`, `git_ref`, and `finished_at`.
 Project deployment history shows the short SHA, the trigger, and the duration.
 Rows created before that migration leave those fields empty.
+**Redeploy** repeats that recorded commit (`POST /api/v1/deployments/{id}/redeploy`
+passes `git_ref` set to `git_sha`). A row with no commit returns 422 and does not
+enqueue. **Deploy latest** (`POST .../deploy-latest`) enqueues with no pin, so the
+worker clones the repository default branch. Both stay on the console routes;
+the mock deployment list never calls the control plane.
 When the console client is set and a deployment has `provision_job_id`, detail
 shows a Provision job panel that polls `GET /api/console/jobs/{id}` (→
 `GET /api/v1/jobs/{id}`) about every 5s until succeeded/failed, a poll
