@@ -34,6 +34,8 @@ class JobDispatcher(Protocol):
 
     def state(self, job_id: str) -> JobState: ...
 
+    def revoke(self, job_id: str) -> None: ...
+
 
 class EnvironmentVarLoader(Protocol):
     async def load_decrypted_map(
@@ -162,3 +164,19 @@ class JobService:
 
     async def state(self, job_id: uuid.UUID) -> JobState:
         return await run_in_threadpool(self._dispatcher.state, str(job_id))
+
+    async def revoke(self, job_id: uuid.UUID) -> None:
+        await run_in_threadpool(self._dispatcher.revoke, str(job_id))
+
+    async def revoke_quietly(self, job_id: uuid.UUID | None) -> None:
+        """Revoke when a job id exists. A broker error is logged and does not undo cancel."""
+        if job_id is None:
+            return
+        try:
+            await self.revoke(job_id)
+        except Exception as revoke_exc:
+            logger.warning(
+                "event=deployment_revoke_skipped job_id=%s error_type=%s",
+                job_id,
+                type(revoke_exc).__name__,
+            )

@@ -91,6 +91,7 @@ class DockerProvisioner:
         addons_json: str = "", image_deployment_id: str = "", rollback_from_deployment_id: str = "",
         git_ref: str = "", on_log: LogSink | None = None,
         on_checkout: Callable[[str], None] | None = None,
+        on_swap: Callable[[], None] | None = None,
     ) -> JobOutcome:
         _ = (environment_kind, region)
         p_uuid, e_uuid = validate_uuid(project_id, "project_id"), validate_uuid(environment_id, "environment_id")
@@ -231,6 +232,12 @@ class DockerProvisioner:
                 self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)
                 raise
 
+        if on_swap is not None:
+            try:
+                on_swap()
+            except Exception:
+                self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)
+                raise
         self.runner.run([docker_bin, "rm", "-f", cname], env=docker_env, timeout=30)
         rename_res = self.runner.run([docker_bin, "rename", candidate, cname], env=docker_env, timeout=30)
         if rename_res.returncode != 0:

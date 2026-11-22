@@ -47,6 +47,10 @@ class CeleryJobDispatcher:
         )
         return job_id
 
+    def revoke(self, job_id: str) -> None:
+        """Ask workers to drop the task if it has not started. A running task checks status itself."""
+        self._app.control.revoke(job_id, terminate=False)
+
     def state(self, job_id: str) -> JobState:
         result = AsyncResult(job_id, app=self._app)
         status = _CELERY_STATE_TO_STATUS.get(result.state, "running")

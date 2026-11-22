@@ -1,4 +1,4 @@
-export type DeploymentStatus = "queued" | "running" | "succeeded" | "failed";
+export type DeploymentStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 export type Project = {
   id: string;
@@ -57,6 +57,7 @@ export type Deployment = {
   actor_user_id?: string | null;
   started_at: string;
   finished_at?: string | null;
+  swap_started_at?: string | null;
   status: DeploymentStatus;
 };
 

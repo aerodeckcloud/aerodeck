@@ -48,5 +48,6 @@ class DeploymentRead(BaseModel):
     status: DeploymentStatus
     started_at: datetime
     finished_at: datetime | None
+    swap_started_at: datetime | None
     created_at: datetime
     updated_at: datetime

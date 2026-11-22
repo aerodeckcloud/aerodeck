@@ -46,6 +46,11 @@ class ConflictError(AppError):
     code = "conflict"
 
 
+class UnprocessableError(AppError):
+    status_code = 422
+    code = "unprocessable"
+
+
 class DatabaseUnavailableError(AppError):
     status_code = 503
     code = "database_unavailable"

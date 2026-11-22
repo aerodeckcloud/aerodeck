@@ -897,7 +897,7 @@ export async function listControlPlaneProjectDeployments(
 async function triggerControlPlaneDeploymentAction(
   config: ControlPlaneConfig,
   deploymentId: string,
-  action: "redeploy" | "rollback" | "deploy-latest",
+  action: "redeploy" | "rollback" | "deploy-latest" | "cancel",
   options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   if (!isControlPlaneUuid(deploymentId)) {
@@ -936,6 +936,14 @@ export function redeployControlPlaneDeployment(
   options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   return triggerControlPlaneDeploymentAction(config, deploymentId, "redeploy", options);
+}
+
+export function cancelControlPlaneDeployment(
+  config: ControlPlaneConfig,
+  deploymentId: string,
+  options: ListOptions & { actorUserId?: string } = {},
+): Promise<Deployment> {
+  return triggerControlPlaneDeploymentAction(config, deploymentId, "cancel", options);
 }
 
 export function deployLatestControlPlaneDeployment(
@@ -1427,7 +1435,13 @@ export async function revokeControlPlaneSession(
   throw new ControlPlaneError(`control plane session logout failed (${response.status})`, response.status);
 }
 
-const DEPLOYMENT_STATUSES = new Set<DeploymentStatus>(["queued", "running", "succeeded", "failed"]);
+const DEPLOYMENT_STATUSES = new Set<DeploymentStatus>([
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
 
 export async function listControlPlaneDeployments(
   config: ControlPlaneConfig,
@@ -2770,6 +2784,7 @@ function parseDeployment(value: unknown): Deployment {
   const trigger = optionalTrigger(row.trigger);
   const actorUserId = optionalUuidField(row.actor_user_id);
   const finishedAt = optionalTimestamp(row.finished_at);
+  const swapStartedAt = optionalTimestamp(row.swap_started_at);
   return {
     id: row.id,
     repo_url: row.repo_url,
@@ -2783,6 +2798,7 @@ function parseDeployment(value: unknown): Deployment {
     ...(actorUserId !== undefined ? { actor_user_id: actorUserId } : {}),
     started_at: row.started_at,
     ...(finishedAt !== undefined ? { finished_at: finishedAt } : {}),
+    ...(swapStartedAt !== undefined ? { swap_started_at: swapStartedAt } : {}),
     status: row.status as DeploymentStatus,
   };
 }

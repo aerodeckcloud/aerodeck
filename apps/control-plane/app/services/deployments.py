@@ -126,6 +126,9 @@ class DeploymentService:
     async def mark_failed(self, deployment_id: uuid.UUID) -> Deployment:
         return await self._mark_terminal(deployment_id, DeploymentStatus.failed)
 
+    async def cancel(self, deployment_id: uuid.UUID) -> Deployment:
+        return await self._terminal.cancel(deployment_id)
+
     async def _mark_terminal(
         self, deployment_id: uuid.UUID, status: DeploymentStatus
     ) -> Deployment:

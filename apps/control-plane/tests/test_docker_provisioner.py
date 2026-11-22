@@ -18,7 +18,7 @@ from app.services.docker_provisioner import (
     image_tag_for,
     route_hostname_for,
 )
-from app.services.provisioning import JobKind, PermanentJobError, TransientJobError
+from app.services.provisioning import DeploymentCancelled, JobKind, PermanentJobError, TransientJobError
 from app.worker import select_provisioner
 
 
@@ -181,6 +181,29 @@ def test_provision_fetches_a_pinned_commit_instead_of_the_default_branch() -> No
     assert "fetch" in runner.calls[1]
     assert runner.calls[2][-2:] == ["--detach", "FETCH_HEAD"]
     assert any(f"commit {sha[:7]}" in line for line in streamed)
+
+
+def test_provision_stops_before_the_live_container_swap_when_cancelled() -> None:
+    runner = FakeCommandRunner()
+    provisioner = _make_provisioner(runner)
+
+    def _refuse() -> None:
+        raise DeploymentCancelled("cancelled before container swap")
+
+    with pytest.raises(DeploymentCancelled):
+        provisioner.provision(
+            project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+            environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+            project_slug="payments",
+            environment_slug="dev",
+            repo_url="https://github.com/mangatohjunior/demo-app",
+            on_swap=_refuse,
+        )
+
+    assert not any(call[:2] == ["docker", "rename"] for call in runner.calls)
+    removed = [call for call in runner.calls if call[:2] == ["docker", "rm"]]
+    assert removed
+    assert all("-new-" in call[-1] for call in removed)
 
 
 def test_provision_rejects_missing_dockerfile() -> None:

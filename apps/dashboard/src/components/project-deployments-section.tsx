@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, GitCommitHorizontal, History, Loader2, RefreshCw, RotateCcw, XCircle } from "lucide-react";
+import { Ban, CheckCircle2, GitCommitHorizontal, History, Loader2, RefreshCw, RotateCcw, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -18,6 +18,14 @@ function statusBadge(status: DeploymentStatus) {
       <Badge variant="default">
         <CheckCircle2 className="size-3" />
         Succeeded
+      </Badge>
+    );
+  }
+  if (status === "cancelled") {
+    return (
+      <Badge variant="secondary">
+        <Ban className="size-3" />
+        Cancelled
       </Badge>
     );
   }

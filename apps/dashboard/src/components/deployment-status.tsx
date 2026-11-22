@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, ExternalLink, Loader2, Rocket, XCircle } from "lucide-react";
+import { Ban, CheckCircle2, ExternalLink, Loader2, Rocket, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { DeploymentEnvironmentLink } from "@/components/deployment-environment-link";
@@ -9,7 +9,7 @@ import { ProvisionJobPanel } from "@/components/provision-job-panel";
 import { RuntimeLogsPanel } from "@/components/runtime-logs-panel";
 import { Terminal } from "@/components/terminal";
 import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { formatInstant } from "@/lib/format";
 import {
   Card,
@@ -19,6 +19,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  cancelDeployment,
   deploymentLogsUrl,
   fetchProjectDetail,
   markDeploymentFailed,
@@ -48,6 +49,14 @@ function logSourceCopy(source: ProjectSource): { sseLabel: string; targetLabel: 
 }
 
 function statusBadge(status: DeploymentStatus) {
+  if (status === "cancelled") {
+    return (
+      <Badge variant="secondary">
+        <Ban />
+        Cancelled
+      </Badge>
+    );
+  }
   if (status === "failed") {
     return (
       <Badge variant="destructive">
@@ -76,6 +85,7 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
   const [status, setStatus] = useState<DeploymentStatus>(deployment.status);
   const [liveHostname, setLiveHostname] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const hasLinkedEnv = Boolean(deployment.project_id && deployment.environment_id);
   const environments = useEnvironmentCatalog(logSource === "control-plane" && hasLinkedEnv);
   const copy = logSourceCopy(logSource);
@@ -104,7 +114,7 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
   }, [logSource, deployment.project_id, deployment.environment_id, status]);
 
   function recordOutcome(outcome: TerminalOutcome) {
-    if (status === "succeeded" || status === "failed") {
+    if (status === "succeeded" || status === "failed" || status === "cancelled") {
       return;
     }
     if (logSource !== "control-plane") {
@@ -152,6 +162,26 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
               Open Live App
               <ExternalLink data-icon="inline-end" />
             </a>
+          ) : null}
+          {logSource === "control-plane" && (status === "queued" || status === "running") ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={cancelling}
+              onClick={() => {
+                setCancelling(true);
+                setError(null);
+                void cancelDeployment(deployment.id)
+                  .then((stored) => setStatus(stored.status))
+                  .catch((cause: unknown) => {
+                    setError(cause instanceof Error ? cause.message : "Could not cancel the deployment.");
+                  })
+                  .finally(() => setCancelling(false));
+              }}
+            >
+              {cancelling ? <Loader2 className="animate-spin" /> : <Ban />}
+              Cancel
+            </Button>
           ) : null}
           <LinkButton href="/deploy" variant="outline">
             <Rocket data-icon="inline-start" />

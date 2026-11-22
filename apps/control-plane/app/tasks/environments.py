@@ -29,8 +29,20 @@ from app.services.container_ops import (
 )
 from app.services.notifications import notify_deployment_event_sync
 from app.services.docker_policy import validate_git_ref
-from app.services.provisioning import JobKind, NoopProvisioner, PermanentJobError, Provisioner, TransientJobError
-from app.tasks.deployment_status import try_mark_deployment_failed_sync, try_record_deployment_release_sync
+from app.services.provisioning import (
+    DeploymentCancelled,
+    JobKind,
+    NoopProvisioner,
+    PermanentJobError,
+    Provisioner,
+    TransientJobError,
+)
+from app.tasks.deployment_status import (
+    deployment_is_cancelled_sync,
+    try_begin_deployment_swap_sync,
+    try_mark_deployment_failed_sync,
+    try_record_deployment_release_sync,
+)
 
 logger = get_logger("tasks.environments")
 
@@ -97,6 +109,15 @@ def _run(
     deployment_id = linked if kind is JobKind.provision else None
     redis_url = get_settings().redis_url if deployment_id is not None else None
     logger.info("%s environment=%s project=%s attempt=%d", kind.value, environment_id, project_id, attempt)
+    if deployment_id is not None and deployment_is_cancelled_sync(deployment_id):
+        logger.info("event=deployment_cancelled_noop deployment=%s", deployment_id)
+        return {
+            "kind": kind.value,
+            "project_id": project_id,
+            "environment_id": environment_id,
+            "changed": False,
+            "detail": "cancelled",
+        }
     if deployment_id is not None and attempt == 1:
         publish_provision_lines_sync(redis_url, deployment_id, PROVISION_START_LINE)
     operation = _provisioner.provision if kind is JobKind.provision else _provisioner.reconcile
@@ -117,6 +138,12 @@ def _run(
             )
 
         call_kwargs["on_checkout"] = _remember_checkout
+
+        def _begin_swap() -> None:
+            if not try_begin_deployment_swap_sync(deployment_id):
+                raise DeploymentCancelled("cancelled before container swap")
+
+        call_kwargs["on_swap"] = _begin_swap
     if not accepts_var_kw:
         call_kwargs = {k: v for k, v in call_kwargs.items() if k in params}
     if deployment_id is not None and "on_log" in params:
@@ -125,6 +152,15 @@ def _run(
         call_kwargs["on_log"] = _publish_line
     try:
         outcome = operation(project_id=project_id, environment_id=environment_id, **call_kwargs)
+    except DeploymentCancelled:
+        logger.info("event=deployment_cancelled_noop deployment=%s", deployment_id)
+        return {
+            "kind": kind.value,
+            "project_id": project_id,
+            "environment_id": environment_id,
+            "changed": False,
+            "detail": "cancelled",
+        }
     except Exception as exc:
         if kind is JobKind.provision:
             logger.error("event=iac_apply_failed environment=%s project=%s", environment_id, project_id)

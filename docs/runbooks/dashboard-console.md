@@ -55,6 +55,14 @@ passes `git_ref` set to `git_sha`). A row with no commit returns 422 and does no
 enqueue. **Deploy latest** (`POST .../deploy-latest`) enqueues with no pin, so the
 worker clones the repository default branch. Both stay on the console routes;
 the mock deployment list never calls the control plane.
+`POST /api/v1/deployments/{id}/cancel` (console `POST /api/console/deployments/{id}/cancel`)
+marks a queued or running deployment `cancelled` and sets `finished_at` when the
+worker has not yet set `swap_started_at`. The Celery task is revoked if it has
+not finished; a revoke error is logged and the row stays `cancelled`, so a later
+job leaves the live container alone. After `swap_started_at` is set the API
+returns 409 and the swap continues. Succeeded, failed, and cancelled rows return
+422. Deployment detail shows Cancel only for queued and running control-plane
+rows.
 When the console client is set and a deployment has `provision_job_id`, detail
 shows a Provision job panel that polls `GET /api/console/jobs/{id}` (→
 `GET /api/v1/jobs/{id}`) about every 5s until succeeded/failed, a poll
