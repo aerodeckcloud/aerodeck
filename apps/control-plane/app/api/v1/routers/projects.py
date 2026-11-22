@@ -6,6 +6,7 @@ from app.api.deps import (
     ActorUserIdDep,
     AuditLogServiceDep,
     DeploymentServiceDep,
+    NotificationServiceDep,
     PaginationDep,
     ProjectMemberServiceDep,
     ProjectServiceDep,
@@ -16,6 +17,11 @@ from app.schemas.common import Page
 from app.schemas.deployment import DeploymentRead
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
 from app.services.audit_logs import AuditEventRead
+from app.services.notifications import (
+    NotificationChannelRead,
+    NotificationChannelUpsertRequest,
+    NotificationTestResult,
+)
 from app.services.project_members import ProjectMemberRead, ProjectMemberUpsertRequest
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -225,3 +231,73 @@ async def list_project_audit_logs(
 ) -> Page[AuditEventRead]:
     items, total = await audit.list_for_project(project_id, limit=page.limit, offset=page.offset)
     return Page(items=items, total=total, limit=page.limit, offset=page.offset)
+
+
+@router.get(
+    "/{project_id}/notifications",
+    response_model=NotificationChannelRead | None,
+    status_code=status.HTTP_200_OK,
+    summary="Get project deployment notification channel (#259)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def get_project_notifications(
+    project_id: uuid.UUID, notifications: NotificationServiceDep
+) -> NotificationChannelRead | None:
+    return await notifications.get_for_project(project_id)
+
+
+@router.put(
+    "/{project_id}/notifications",
+    response_model=NotificationChannelRead,
+    status_code=status.HTTP_200_OK,
+    summary="Create or update project deployment notification channel (#259)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def upsert_project_notifications(
+    project_id: uuid.UUID,
+    body: NotificationChannelUpsertRequest,
+    notifications: NotificationServiceDep,
+    members: ProjectMemberServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> NotificationChannelRead:
+    await members.require_role(project_id, actor_user_id, ProjectRole.developer)
+    try:
+        return await notifications.upsert_for_project(project_id, body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+
+
+@router.delete(
+    "/{project_id}/notifications",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete project deployment notification channel (#259)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def delete_project_notifications(
+    project_id: uuid.UUID,
+    notifications: NotificationServiceDep,
+    members: ProjectMemberServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> None:
+    await members.require_role(project_id, actor_user_id, ProjectRole.developer)
+    await notifications.delete_for_project(project_id)
+
+
+@router.post(
+    "/{project_id}/notifications/test",
+    response_model=NotificationTestResult,
+    status_code=status.HTTP_200_OK,
+    summary="Send a test notification to the project's configured channel (#259)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def test_project_notifications(
+    project_id: uuid.UUID,
+    notifications: NotificationServiceDep,
+    members: ProjectMemberServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> NotificationTestResult:
+    await members.require_role(project_id, actor_user_id, ProjectRole.developer)
+    return await notifications.send_test(project_id)

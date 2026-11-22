@@ -27,6 +27,7 @@ from app.services.container_ops import (
     remove_container_sync,
     run_container_action_sync,
 )
+from app.services.notifications import notify_deployment_event_sync
 from app.services.provisioning import JobKind, NoopProvisioner, Provisioner, TransientJobError
 from app.tasks.deployment_status import try_mark_deployment_failed_sync
 
@@ -117,10 +118,26 @@ def _run(
             # No Done: Terminal treats Done as success. Stream ends on follow-idle.
             publish_provision_lines_sync(redis_url, deployment_id, provision_failure_line(exc))
             try_mark_deployment_failed_sync(deployment_id)
+            notify_deployment_event_sync(
+                project_id=project_id,
+                project_slug=meta.get("project_slug", project_id[:8]),
+                environment_slug=meta.get("environment_slug", environment_id[:8]),
+                event="failed",
+                deployment_id=str(deployment_id),
+                detail=f"Deployment failed ({type(exc).__name__}).",
+            )
         raise
     if deployment_id is not None:
         # Fixed success line only — never publish outcome.detail (may grow unsafe).
         publish_provision_lines_sync(redis_url, deployment_id, PROVISION_SUCCESS_LINE, DONE_LINE)
+        notify_deployment_event_sync(
+            project_id=project_id,
+            project_slug=meta.get("project_slug", project_id[:8]),
+            environment_slug=meta.get("environment_slug", environment_id[:8]),
+            event="succeeded",
+            deployment_id=str(deployment_id),
+            detail="Deployment is live.",
+        )
     logger.info("%s environment=%s changed=%s", kind.value, environment_id, outcome.changed)
     return outcome.as_dict()
 

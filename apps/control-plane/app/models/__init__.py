@@ -8,6 +8,7 @@ from app.models.console_user import ConsoleUser
 from app.models.deployment import Deployment, DeploymentStatus
 from app.models.dns_record import DnsRecord, DnsRecordStatus, DnsRecordType
 from app.models.environment_var import EnvironmentVariable
+from app.models.notification_channel import NotificationChannel, NotificationProvider
 from app.models.project import Environment, EnvironmentKind, Project
 from app.models.project_member import ProjectMember, ProjectRole
 from app.models.route import Route
@@ -31,6 +32,8 @@ __all__ = [
     "EnvironmentKind",
     "EnvironmentVariable",
     "EnvironmentWebhook",
+    "NotificationChannel",
+    "NotificationProvider",
     "Project",
     "ProjectMember",
     "ProjectRole",

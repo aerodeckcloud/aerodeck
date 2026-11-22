@@ -12,6 +12,7 @@ import { ProjectAuditSection } from "@/components/project-audit-section";
 import { ProjectDeploymentsSection } from "@/components/project-deployments-section";
 import { ProjectEditPanel } from "@/components/project-edit-panel";
 import { ProjectMembersSection } from "@/components/project-members-section";
+import { ProjectNotificationsSection } from "@/components/project-notifications-section";
 import { ProjectRoutesSection } from "@/components/project-routes-section";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -273,6 +274,7 @@ export default function ProjectDetailPage() {
         source={detail?.source}
       />
       <ProjectMembersSection projectId={project?.id} source={detail?.source} />
+      <ProjectNotificationsSection projectId={project?.id} source={detail?.source} />
       <ProjectAuditSection projectId={project?.id} source={detail?.source} />
     </div>
   );

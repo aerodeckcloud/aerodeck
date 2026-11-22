@@ -321,3 +321,32 @@ export type AuditEvent = {
   summary: string;
   created_at: string;
 };
+
+export type NotificationProvider = "slack" | "discord" | "webhook";
+
+export type NotificationChannel = {
+  id: string;
+  project_id: string;
+  provider: NotificationProvider;
+  url_hint: string;
+  notify_on_started: boolean;
+  notify_on_succeeded: boolean;
+  notify_on_failed: boolean;
+  enabled: boolean;
+  updated_at: string;
+};
+
+export type NotificationChannelInput = {
+  provider: NotificationProvider;
+  webhook_url?: string;
+  notify_on_started: boolean;
+  notify_on_succeeded: boolean;
+  notify_on_failed: boolean;
+  enabled: boolean;
+};
+
+export type NotificationTestResult = {
+  ok: boolean;
+  status_code: number | null;
+  error: string | null;
+};
