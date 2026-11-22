@@ -8,7 +8,7 @@ import pytest
 
 from app.core.db import requires_disabled_statement_cache
 from app.services.docker_provisioner import CommandResult, DockerProvisioner, LogSink
-from app.services.dockerfile_detector import detect_dockerfile_template, ensure_dockerfile
+from app.services.dockerfile_detector import detect_dockerfile_template, detect_exposed_port, ensure_dockerfile
 from app.services.provisioning import PermanentJobError
 
 
@@ -135,3 +135,11 @@ def test_requires_disabled_statement_cache_detects_pgbouncer_port_and_query() ->
         )
         is False
     )
+
+
+def test_detect_exposed_port_parses_dockerfile_or_falls_back(tmp_path: Path) -> None:
+    df = tmp_path / "Dockerfile"
+    df.write_text("FROM alpine:3.20\nEXPOSE 3000/tcp\n", encoding="utf-8")
+    assert detect_exposed_port(df, default_port=8000) == 3000
+    df.write_text("FROM alpine:3.20\n", encoding="utf-8")
+    assert detect_exposed_port(df, default_port=8000) == 8000
