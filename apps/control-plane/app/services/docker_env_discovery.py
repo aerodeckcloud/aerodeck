@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import socket
@@ -25,17 +26,14 @@ def _parse_dotenv_lines(text: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for raw in text.splitlines():
         line = raw.strip()
-        if not line or line.startswith("#"):
+        if not line or line.startswith("#") or "=" not in line:
             continue
         if line.startswith("export "):
             line = line[7:].strip()
-        if "=" not in line:
-            continue
-        key, val = line.split("=", 1)
-        k = key.strip()
-        v = val.strip().strip("'\"")
-        if _ENV_KEY_RE.fullmatch(k) and k.upper() not in _FORBIDDEN_ENV_KEYS and "\n" not in v and "\x00" not in v:
-            result[k] = v
+        k, v = [p.strip() for p in line.split("=", 1)]
+        val = v.strip("'\"")
+        if _ENV_KEY_RE.fullmatch(k) and k.upper() not in _FORBIDDEN_ENV_KEYS and "\n" not in val and "\x00" not in val:
+            result[k] = val
     return result
 
 
@@ -49,37 +47,33 @@ def _parse_compose_build_service_env(text: str) -> dict[str, str]:
     current: dict[str, str] = {}
 
     for raw in text.splitlines():
-        stripped = raw.strip()
-        if not stripped or stripped.startswith("#"):
+        s = raw.strip()
+        if not s or s.startswith("#"):
             continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        if indent == 2 and stripped.endswith(":") and not stripped.startswith("-"):
+        ind = len(raw) - len(raw.lstrip(" "))
+        if ind == 2 and s.endswith(":") and not s.startswith("-"):
             if current or has_build:
                 services_env.append((has_build, current))
-            has_build, in_env, current, service_indent = False, False, {}, indent
+            has_build, in_env, current, service_indent = False, False, {}, ind
             continue
         if service_indent is None:
             continue
-        if indent == 4 and (stripped.startswith("build:") or stripped == "build:"):
-            has_build = True
-            in_env = False
+        if ind == 4 and s.startswith("build:"):
+            has_build, in_env = True, False
             continue
-        if indent == 4 and stripped == "environment:":
-            in_env = True
-            env_indent = indent
+        if ind == 4 and s == "environment:":
+            in_env, env_indent = True, ind
             continue
-        if in_env and indent <= env_indent:
+        if in_env and ind <= env_indent:
             in_env = False
-        if in_env and indent > env_indent:
-            item = stripped[1:].strip() if stripped.startswith("-") else stripped
+        if in_env and ind > env_indent:
+            item = s[1:].strip() if s.startswith("-") else s
             sep = "=" if "=" in item and (":" not in item or item.find("=") < item.find(":")) else (":" if ":" in item else "")
-            if not sep:
-                continue
-            k, v = item.split(sep, 1)
-            key = k.strip()
-            val = v.strip().strip("'\"")
-            if _ENV_KEY_RE.fullmatch(key) and key.upper() not in _FORBIDDEN_ENV_KEYS and "\x00" not in val:
-                current[key] = val
+            if sep:
+                k, v = item.split(sep, 1)
+                key, val = k.strip(), v.strip().strip("'\"")
+                if _ENV_KEY_RE.fullmatch(key) and key.upper() not in _FORBIDDEN_ENV_KEYS and "\x00" not in val:
+                    current[key] = val
 
     if current or has_build:
         services_env.append((has_build, current))
@@ -90,27 +84,51 @@ def _parse_compose_build_service_env(text: str) -> dict[str, str]:
     return merged
 
 
+def _discover_mock_secret_files(checkout: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    root = checkout.resolve()
+    for folder_name in ("mock-secrets", "secrets"):
+        folder = checkout / folder_name
+        if not folder.is_dir() or folder.is_symlink() or folder.resolve().parent != root:
+            continue
+        for entry in sorted(folder.iterdir()):
+            if not entry.is_file() or entry.is_symlink() or entry.stat().st_size > 4096:
+                continue
+            env_key = re.sub(r"[^A-Za-z0-9]+", "_", entry.stem).strip("_").upper()
+            val = entry.read_text(encoding="utf-8", errors="replace").strip()
+            if _ENV_KEY_RE.fullmatch(env_key) and env_key not in _FORBIDDEN_ENV_KEYS and val and "\n" not in val and "\x00" not in val:
+                out.setdefault(env_key, val)
+    return out
+
+
 def discover_repo_env_defaults(checkout: Path) -> dict[str, str]:
-    """Discover safe runtime env defaults from ``.env.example`` and ``docker-compose.yaml`` (#231)."""
-    defaults: dict[str, str] = {}
+    defaults = _discover_mock_secret_files(checkout)
     for name in (".env.example", ".env.sample", ".env.template", ".env.defaults"):
-        candidate = checkout / name
-        if candidate.is_file() and not candidate.is_symlink() and candidate.stat().st_size <= _MAX_DISCOVER_BYTES:
-            defaults.update(_parse_dotenv_lines(candidate.read_text(encoding="utf-8", errors="replace")))
+        c = checkout / name
+        if c.is_file() and not c.is_symlink() and c.stat().st_size <= _MAX_DISCOVER_BYTES:
+            defaults.update(_parse_dotenv_lines(c.read_text(encoding="utf-8", errors="replace")))
     for name in ("docker-compose.yaml", "docker-compose.yml", "compose.yaml", "compose.yml"):
-        candidate = checkout / name
-        if candidate.is_file() and not candidate.is_symlink() and candidate.stat().st_size <= _MAX_DISCOVER_BYTES:
-            defaults.update(_parse_compose_build_service_env(candidate.read_text(encoding="utf-8", errors="replace")))
+        c = checkout / name
+        if c.is_file() and not c.is_symlink() and c.stat().st_size <= _MAX_DISCOVER_BYTES:
+            defaults.update(_parse_compose_build_service_env(c.read_text(encoding="utf-8", errors="replace")))
     return defaults
 
 
+def parse_env_vars_json(raw: str | None) -> dict[str, str] | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    return {str(k): str(v) for k, v in parsed.items() if isinstance(k, str)} if isinstance(parsed, dict) else None
+
+
 def build_runtime_env_file(
-    checkout: Path,
-    target_port: int,
-    public_url: str | None = None,
-    on_log: LogSink | None = None,
+    checkout: Path, target_port: int, public_url: str | None = None,
+    on_log: LogSink | None = None, user_env: dict[str, str] | str | None = None,
 ) -> Path:
-    """Discover repo env defaults, merge platform variables, and write a ``0600`` ``--env-file`` (#231)."""
+    """Discover repo env defaults, merge platform + operator variables, and write a ``0600`` ``--env-file`` (#231, #233)."""
     env_vars = discover_repo_env_defaults(checkout)
     if env_vars and on_log is not None:
         keys = ", ".join(sorted(env_vars.keys()))
@@ -121,6 +139,17 @@ def build_runtime_env_file(
         env_vars["AERODECK_PUBLIC_URL"] = public_url
         env_vars.setdefault("PUBLIC_URL", public_url)
         env_vars["PORTAL_PUBLIC_URL"] = public_url
+    resolved_user_env = parse_env_vars_json(user_env) if isinstance(user_env, str) else user_env
+    if resolved_user_env:
+        applied: list[str] = []
+        for raw_k, raw_v in resolved_user_env.items():
+            k = raw_k.strip()
+            v = str(raw_v).strip()
+            if _ENV_KEY_RE.fullmatch(k) and k.upper() not in _FORBIDDEN_ENV_KEYS and "\n" not in v and "\r" not in v and "\x00" not in v:
+                env_vars[k] = v
+                applied.append(k)
+        if applied and on_log is not None:
+            on_log(f"Applied {len(applied)} operator-supplied env variable(s) ({', '.join(sorted(applied))}).")
     return write_secure_env_file(env_vars)
 
 
@@ -139,21 +168,9 @@ def write_secure_env_file(env_vars: dict[str, str]) -> Path:
 
 
 def build_docker_run_command(
-    *,
-    docker_bin: str,
-    candidate: str,
-    network: str,
-    memory_limit: str,
-    cpus_limit: str,
-    pids_limit: int,
-    project_id: object,
-    environment_id: object,
-    env_file: Path,
-    bind_host: str,
-    host_port: int,
-    target_port: int,
-    runtime: str | None,
-    tag: str,
+    *, docker_bin: str, candidate: str, network: str, memory_limit: str, cpus_limit: str, pids_limit: int,
+    project_id: object, environment_id: object, env_file: Path, bind_host: str, host_port: int, target_port: int,
+    runtime: str | None, tag: str,
 ) -> list[str]:
     """Assemble hardened ``docker run`` arguments for a tenant candidate container."""
     cmd = [
@@ -186,14 +203,8 @@ def ensure_default_docker_config(env: dict[str, str], docker_host: str | None = 
 
 
 def wait_for_container_or_fast_fail(
-    bind_host: str,
-    port: int,
-    timeout_seconds: int,
-    *,
-    runner: CommandRunner,
-    docker_bin: str,
-    container_name: str,
-    docker_env: dict[str, str],
+    bind_host: str, port: int, timeout_seconds: int, *,
+    runner: CommandRunner, docker_bin: str, container_name: str, docker_env: dict[str, str],
 ) -> bool:
     """Poll TCP connectivity while checking ``docker inspect`` so crashed containers fail immediately (#231)."""
     deadline = time.monotonic() + timeout_seconds

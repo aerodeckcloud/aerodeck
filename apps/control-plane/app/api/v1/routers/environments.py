@@ -94,8 +94,11 @@ async def _enqueue(
     jobs: JobServiceDep,
     *,
     deployment_id: uuid.UUID | None = None,
+    env_vars: dict[str, str] | None = None,
 ) -> JobAccepted:
-    ticket = await jobs.enqueue(kind, project_id, environment_id, deployment_id=deployment_id)
+    ticket = await jobs.enqueue(
+        kind, project_id, environment_id, deployment_id=deployment_id, env_vars=env_vars
+    )
     return JobAccepted(
         job_id=uuid.UUID(ticket.job_id),
         kind=ticket.kind,
@@ -123,7 +126,10 @@ async def provision_environment(
     body: ProvisionJobCreate | None = None,
 ) -> JobAccepted:
     deployment_id = body.deployment_id if body is not None else None
-    return await _enqueue(JobKind.provision, project_id, environment_id, jobs, deployment_id=deployment_id)
+    env_vars = body.env_vars if body is not None else None
+    return await _enqueue(
+        JobKind.provision, project_id, environment_id, jobs, deployment_id=deployment_id, env_vars=env_vars
+    )
 
 
 @router.post(

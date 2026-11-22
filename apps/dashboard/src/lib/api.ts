@@ -343,7 +343,7 @@ export async function createEnvironment(input: {
 export async function createDeployment(
   repoUrl: string,
   controlPlane: true,
-  target: { projectId: string; environmentId: string },
+  target: { projectId: string; environmentId: string; envVars?: Record<string, string> },
 ): Promise<Deployment>;
 export async function createDeployment(
   repoUrl: string,
@@ -353,16 +353,19 @@ export async function createDeployment(
 export async function createDeployment(
   repoUrl: string,
   controlPlane = false,
-  target?: { projectId: string; environmentId: string },
+  target?: { projectId: string; environmentId: string; envVars?: Record<string, string> },
 ): Promise<Deployment> {
   if (controlPlane && (!target?.projectId || !target?.environmentId)) {
     throw new Error("Select an environment to provision.");
   }
   const path = controlPlane ? "/api/console/deployments" : `${MOCK_API_PREFIX}/deployments`;
-  const body: Record<string, string> = { repo_url: repoUrl };
+  const body: Record<string, unknown> = { repo_url: repoUrl };
   if (controlPlane && target) {
     body.project_id = target.projectId;
     body.environment_id = target.environmentId;
+    if (target.envVars && Object.keys(target.envVars).length > 0) {
+      body.env_vars = target.envVars;
+    }
   }
   const response = await fetch(path, {
     method: "POST",

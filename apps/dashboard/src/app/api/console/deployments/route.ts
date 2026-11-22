@@ -51,12 +51,14 @@ export async function POST(request: Request) {
     repo_url?: unknown;
     project_id?: unknown;
     environment_id?: unknown;
+    env_vars?: unknown;
   };
   try {
     payload = (await request.json()) as {
       repo_url?: unknown;
       project_id?: unknown;
       environment_id?: unknown;
+      env_vars?: unknown;
     };
   } catch {
     return jsonError(400, "Request body must be JSON.", "invalid_json");
@@ -80,11 +82,25 @@ export async function POST(request: Request) {
     return jsonError(400, "project_id and environment_id must be UUIDs.", "invalid_target_ids");
   }
 
+  let envVars: Record<string, string> | undefined;
+  if (payload.env_vars && typeof payload.env_vars === "object" && !Array.isArray(payload.env_vars)) {
+    const parsed: Record<string, string> = {};
+    for (const [k, v] of Object.entries(payload.env_vars as Record<string, unknown>)) {
+      if (typeof v === "string" && k.trim().length > 0) {
+        parsed[k.trim()] = v;
+      }
+    }
+    if (Object.keys(parsed).length > 0) {
+      envVars = parsed;
+    }
+  }
+
   try {
     const deployment = await createControlPlaneDeploymentAndProvision(config, {
       repoUrl: payload.repo_url,
       projectId,
       environmentId,
+      envVars,
     });
     return NextResponse.json(deployment, { status: 201 });
   } catch (cause) {

@@ -1230,7 +1230,7 @@ export async function provisionControlPlaneEnvironment(
   projectId: string,
   environmentId: string,
   deploymentId: string,
-  options: ListOptions = {},
+  options: ListOptions & { envVars?: Record<string, string> } = {},
 ): Promise<void> {
   if (
     !isControlPlaneUuid(projectId) ||
@@ -1242,6 +1242,12 @@ export async function provisionControlPlaneEnvironment(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const body: { deployment_id: string; env_vars?: Record<string, string> } = {
+    deployment_id: deploymentId,
+  };
+  if (options.envVars && Object.keys(options.envVars).length > 0) {
+    body.env_vars = options.envVars;
+  }
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/provision`,
     {
@@ -1251,7 +1257,7 @@ export async function provisionControlPlaneEnvironment(
         authorization: `Bearer ${accessToken}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ deployment_id: deploymentId }),
+      body: JSON.stringify(body),
       cache: "no-store",
     },
   );
@@ -1347,7 +1353,12 @@ function parseAcceptedJob(
 
 export async function createControlPlaneDeploymentAndProvision(
   config: ControlPlaneConfig,
-  input: { repoUrl: string; projectId: string; environmentId: string },
+  input: {
+    repoUrl: string;
+    projectId: string;
+    environmentId: string;
+    envVars?: Record<string, string>;
+  },
   options: ListOptions = {},
 ): Promise<Deployment> {
   // Resolve the environment first so a bad target never creates a deployment row.
@@ -1363,7 +1374,7 @@ export async function createControlPlaneDeploymentAndProvision(
       input.projectId,
       input.environmentId,
       deployment.id,
-      options,
+      { ...options, envVars: input.envVars },
     );
   } catch (cause) {
     // Deployment exists; attach its id for the console error payload (do not navigate —
