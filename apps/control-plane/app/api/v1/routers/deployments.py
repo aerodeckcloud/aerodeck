@@ -14,7 +14,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from app.api.deps import ClientDep, DeploymentServiceDep, PaginationDep, SettingsDep
+from app.api.deps import ClientDep, DeploymentServiceDep, JobServiceDep, PaginationDep, SettingsDep
+from app.models.deployment import DeploymentStatus
 from app.schemas.auth import ErrorResponse
 from app.schemas.blueprint import DeploymentBlueprint, DeploymentInspectRequest
 from app.schemas.common import Page
@@ -22,6 +23,7 @@ from app.schemas.deployment import DeploymentCreate, DeploymentRead
 from app.services.blueprint_inspector import inspect_github_repository_sync
 from app.services.container_logs import ContainerLogsRead, dispatch_container_logs
 from app.services.deployment_logs import ensure_log_store_ready, iter_deployment_log_lines
+from app.services.provisioning import JobKind
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
 
@@ -186,3 +188,79 @@ async def get_deployment_runtime_logs(
         environment_id=deployment.environment_id,
         tail=tail,
     )
+
+
+@router.post(
+    "/{deployment_id}/redeploy",
+    response_model=DeploymentRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create and enqueue a 1-click redeploy from an existing deployment (#253)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _UNAVAILABLE,
+)
+async def redeploy_deployment(
+    deployment_id: uuid.UUID,
+    deployments: DeploymentServiceDep,
+    jobs: JobServiceDep,
+) -> DeploymentRead:
+    source = await deployments.get(deployment_id)
+    if source.project_id is None or source.environment_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Cannot redeploy a deployment that is not linked to an environment.",
+        )
+    created = await deployments.create(
+        DeploymentCreate(
+            repo_url=source.repo_url,
+            project_id=source.project_id,
+            environment_id=source.environment_id,
+        )
+    )
+    await jobs.enqueue(
+        JobKind.provision,
+        source.project_id,
+        source.environment_id,
+        deployment_id=created.id,
+    )
+    refreshed = await deployments.get(created.id)
+    return DeploymentRead.model_validate(refreshed)
+
+
+@router.post(
+    "/{deployment_id}/rollback",
+    response_model=DeploymentRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Roll back an environment to a previously succeeded deployment image (#253)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _UNAVAILABLE,
+)
+async def rollback_deployment(
+    deployment_id: uuid.UUID,
+    deployments: DeploymentServiceDep,
+    jobs: JobServiceDep,
+) -> DeploymentRead:
+    source = await deployments.get(deployment_id)
+    if source.project_id is None or source.environment_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Cannot roll back a deployment that is not linked to an environment.",
+        )
+    if source.status is not DeploymentStatus.succeeded:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Only succeeded deployments can be rolled back to.",
+        )
+    created = await deployments.create(
+        DeploymentCreate(
+            repo_url=source.repo_url,
+            project_id=source.project_id,
+            environment_id=source.environment_id,
+        )
+    )
+    await jobs.enqueue(
+        JobKind.provision,
+        source.project_id,
+        source.environment_id,
+        deployment_id=created.id,
+        rollback_from_deployment_id=source.id,
+    )
+    refreshed = await deployments.get(created.id)
+    return DeploymentRead.model_validate(refreshed)

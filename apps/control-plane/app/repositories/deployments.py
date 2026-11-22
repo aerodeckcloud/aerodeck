@@ -47,3 +47,20 @@ class DeploymentRepository:
             select(Deployment).order_by(Deployment.started_at.desc(), Deployment.id.desc()).limit(limit).offset(offset)
         )
         return rows.all(), int(total or 0)
+
+    async def list_for_project(
+        self,
+        project_id: uuid.UUID,
+        *,
+        environment_id: uuid.UUID | None = None,
+        limit: int,
+        offset: int,
+    ) -> tuple[Sequence[Deployment], int]:
+        base = select(Deployment).where(Deployment.project_id == project_id)
+        if environment_id is not None:
+            base = base.where(Deployment.environment_id == environment_id)
+        total = await self._session.scalar(select(func.count()).select_from(base.subquery()))
+        rows = await self._session.scalars(
+            base.order_by(Deployment.started_at.desc(), Deployment.id.desc()).limit(limit).offset(offset)
+        )
+        return rows.all(), int(total or 0)

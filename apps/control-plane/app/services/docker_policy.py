@@ -188,6 +188,20 @@ def image_tag_for(project_slug: str, environment_slug: str, project_id: str, env
     return f"aerodeck/{p_slug}-{e_slug}:latest"
 
 
+def deployment_image_tag_for(
+    project_slug: str,
+    environment_slug: str,
+    project_id: str,
+    environment_id: str,
+    deployment_id: str,
+) -> str:
+    """Immutable per-deployment local image tag used for 1-click rollbacks (#253)."""
+    d_uuid = validate_uuid(deployment_id, "deployment_id")
+    base = image_tag_for(project_slug, environment_slug, project_id, environment_id)
+    repo_name = base.rsplit(":", 1)[0]
+    return f"{repo_name}:{d_uuid.hex[:12]}"
+
+
 def route_hostname_for(
     project_slug: str,
     environment_slug: str,

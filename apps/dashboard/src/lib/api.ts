@@ -396,6 +396,34 @@ export async function fetchDeploymentRuntimeLogs(
   return readJson(response);
 }
 
+export async function fetchProjectDeployments(
+  projectId: string,
+  environmentId?: string,
+): Promise<Deployment[]> {
+  const qs = environmentId ? `?environment_id=${encodeURIComponent(environmentId)}` : "";
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/deployments${qs}`,
+    { credentials: "same-origin", cache: "no-store" },
+  );
+  return readJson(response);
+}
+
+export async function redeployDeployment(deploymentId: string): Promise<Deployment> {
+  const response = await fetch(
+    `/api/console/deployments/${encodeURIComponent(deploymentId)}/redeploy`,
+    { method: "POST", credentials: "same-origin" },
+  );
+  return readJson(response);
+}
+
+export async function rollbackDeployment(deploymentId: string): Promise<Deployment> {
+  const response = await fetch(
+    `/api/console/deployments/${encodeURIComponent(deploymentId)}/rollback`,
+    { method: "POST", credentials: "same-origin" },
+  );
+  return readJson(response);
+}
+
 /** Same-origin BFF to control-plane job status; mock path has no jobs API. */
 export async function fetchProvisionJob(jobId: string): Promise<ProvisionJob> {
   const response = await fetch(`/api/console/jobs/${encodeURIComponent(jobId)}`, {
