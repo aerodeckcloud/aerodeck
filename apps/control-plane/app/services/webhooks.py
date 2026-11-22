@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AppError, NotFoundError
 from app.core.github import canonical_github_repo_url, parse_github_repo
 from app.core.logging import get_logger
+from app.models.deployment import DeploymentTrigger
 from app.models.project import Environment
 from app.models.webhook import EnvironmentWebhook
 from app.schemas.deployment import DeploymentCreate
@@ -325,7 +326,8 @@ class WebhookService:
                     repo_url=webhook.repo_url,
                     project_id=webhook.project_id,
                     environment_id=webhook.environment_id,
-                )
+                ),
+                trigger=DeploymentTrigger.webhook,
             )
             addons = _parse_addons(webhook.addons_json) or None
             await jobs.enqueue(

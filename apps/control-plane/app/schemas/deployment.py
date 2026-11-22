@@ -5,7 +5,7 @@ from typing import Annotated, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.github import parse_github_repo
-from app.models.deployment import DeploymentStatus
+from app.models.deployment import DeploymentStatus, DeploymentTrigger
 
 RepoUrl = Annotated[str, Field(min_length=1, max_length=512)]
 
@@ -41,7 +41,12 @@ class DeploymentRead(BaseModel):
     project_id: uuid.UUID | None
     environment_id: uuid.UUID | None
     provision_job_id: uuid.UUID | None
+    git_sha: str | None
+    git_ref: str | None
+    trigger: DeploymentTrigger | None
+    actor_user_id: uuid.UUID | None
     status: DeploymentStatus
     started_at: datetime
+    finished_at: datetime | None
     created_at: datetime
     updated_at: datetime

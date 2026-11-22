@@ -127,6 +127,16 @@ def validate_binary(binary: str, label: str) -> str:
     return binary
 
 
+def normalize_git_sha(raw: str | None) -> str | None:
+    """Return a 40-char lowercase hex SHA, or None when the value is not one."""
+    if raw is None:
+        return None
+    cleaned = raw.strip().lower()
+    if len(cleaned) == 40 and all(character in "0123456789abcdef" for character in cleaned):
+        return cleaned
+    return None
+
+
 def validate_git_ref(git_ref: str | None) -> str | None:
     if not git_ref:
         return None

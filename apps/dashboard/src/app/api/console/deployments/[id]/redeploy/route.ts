@@ -26,7 +26,7 @@ export async function POST(
     return jsonError(400, "Deployment id must be a UUID.", "invalid_deployment_id");
   }
   try {
-    const deployment = await redeployControlPlaneDeployment(config, id);
+    const deployment = await redeployControlPlaneDeployment(config, id, { actorUserId: user.id });
     return NextResponse.json(deployment, { status: 201 });
   } catch (cause) {
     return jsonControlPlaneError(cause, "console_deployment_redeploy_failed");

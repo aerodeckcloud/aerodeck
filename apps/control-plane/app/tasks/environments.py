@@ -28,8 +28,9 @@ from app.services.container_ops import (
     run_container_action_sync,
 )
 from app.services.notifications import notify_deployment_event_sync
-from app.services.provisioning import JobKind, NoopProvisioner, Provisioner, TransientJobError
-from app.tasks.deployment_status import try_mark_deployment_failed_sync
+from app.services.docker_policy import validate_git_ref
+from app.services.provisioning import JobKind, NoopProvisioner, PermanentJobError, Provisioner, TransientJobError
+from app.tasks.deployment_status import try_mark_deployment_failed_sync, try_record_deployment_release_sync
 
 logger = get_logger("tasks.environments")
 
@@ -102,6 +103,20 @@ def _run(
     call_kwargs: dict[str, Any] = dict(meta)
     params = inspect.signature(operation).parameters
     accepts_var_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    requested_ref: str | None = None
+    raw_ref = meta.get("git_ref")
+    if raw_ref:
+        try:
+            requested_ref = validate_git_ref(raw_ref)
+        except PermanentJobError:
+            requested_ref = None
+    if deployment_id is not None and kind is JobKind.provision:
+        def _remember_checkout(sha: str) -> None:
+            try_record_deployment_release_sync(
+                deployment_id, git_sha=sha, git_ref=requested_ref
+            )
+
+        call_kwargs["on_checkout"] = _remember_checkout
     if not accepts_var_kw:
         call_kwargs = {k: v for k, v in call_kwargs.items() if k in params}
     if deployment_id is not None and "on_log" in params:
@@ -118,6 +133,7 @@ def _run(
             # No Done: Terminal treats Done as success. Stream ends on follow-idle.
             publish_provision_lines_sync(redis_url, deployment_id, provision_failure_line(exc))
             try_mark_deployment_failed_sync(deployment_id)
+            try_record_deployment_release_sync(deployment_id, git_ref=requested_ref, finished=True)
             notify_deployment_event_sync(
                 project_id=project_id,
                 project_slug=meta.get("project_slug", project_id[:8]),
@@ -130,6 +146,7 @@ def _run(
     if deployment_id is not None:
         # Fixed success line only — never publish outcome.detail (may grow unsafe).
         publish_provision_lines_sync(redis_url, deployment_id, PROVISION_SUCCESS_LINE, DONE_LINE)
+        try_record_deployment_release_sync(deployment_id, git_ref=requested_ref, finished=True)
         notify_deployment_event_sync(
             project_id=project_id,
             project_slug=meta.get("project_slug", project_id[:8]),

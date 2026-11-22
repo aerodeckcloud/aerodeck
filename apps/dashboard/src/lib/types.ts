@@ -39,6 +39,8 @@ export type SandboxPage = {
   source: ProjectSource;
 };
 
+export type DeploymentTrigger = "manual" | "webhook" | "rollback" | "promote";
+
 export type Deployment = {
   id: string;
   repo_url: string;
@@ -48,7 +50,13 @@ export type Deployment = {
   environment_id?: string | null;
   /** Last provision Celery job id when enqueue succeeded; omit/null on older rows. */
   provision_job_id?: string | null;
+  /** 40-char commit recorded after checkout. Null until then, and on older rows. */
+  git_sha?: string | null;
+  git_ref?: string | null;
+  trigger?: DeploymentTrigger | null;
+  actor_user_id?: string | null;
   started_at: string;
+  finished_at?: string | null;
   status: DeploymentStatus;
 };
 

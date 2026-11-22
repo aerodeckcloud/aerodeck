@@ -5,7 +5,7 @@ from app.models.base import Base
 from app.models.certificate import Certificate, CertificateStatus
 from app.models.console_session import ConsoleSession
 from app.models.console_user import ConsoleUser
-from app.models.deployment import Deployment, DeploymentStatus
+from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
 from app.models.dns_record import DnsRecord, DnsRecordStatus, DnsRecordType
 from app.models.environment_var import EnvironmentVariable
 from app.models.notification_channel import NotificationChannel, NotificationProvider
@@ -25,6 +25,7 @@ __all__ = [
     "ConsoleUser",
     "Deployment",
     "DeploymentStatus",
+    "DeploymentTrigger",
     "DnsRecord",
     "DnsRecordStatus",
     "DnsRecordType",

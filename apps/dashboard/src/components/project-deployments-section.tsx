@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { fetchProjectDeployments, redeployDeployment, rollbackDeployment } from "@/lib/api";
-import { formatInstant } from "@/lib/format";
+import { formatDuration, formatInstant } from "@/lib/format";
 import type { Deployment, DeploymentStatus, EnvironmentOption, ProjectSource } from "@/lib/types";
 
 function statusBadge(status: DeploymentStatus) {
@@ -141,6 +141,7 @@ export function ProjectDeploymentsSection({
           ) : (
             deployments.map((dep) => {
               const envSlug = dep.environment_id ? envNameById.get(dep.environment_id) : null;
+              const duration = formatDuration(dep.started_at, dep.finished_at);
               return (
                 <div
                   key={dep.id}
@@ -158,7 +159,11 @@ export function ProjectDeploymentsSection({
                       {envSlug ? <Badge variant="outline">{envSlug}</Badge> : null}
                     </div>
                     <p className="font-mono text-xs text-muted-foreground">
-                      {dep.owner}/{dep.repo} · {formatInstant(dep.started_at)}
+                      {dep.owner}/{dep.repo}
+                      {dep.git_sha ? ` · ${dep.git_sha.slice(0, 7)}` : ""}
+                      {dep.trigger ? ` · ${dep.trigger}` : ""}
+                      {` · ${formatInstant(dep.started_at)}`}
+                      {duration ? ` · ${duration}` : ""}
                     </p>
                   </div>
 

@@ -31,6 +31,7 @@ import {
   registerControlPlaneUser,
   type ControlPlaneConfig,
 } from "./control-plane";
+import { formatDuration } from "./format";
 
 const config: ControlPlaneConfig = {
   baseUrl: "http://127.0.0.1:8000",
@@ -1609,6 +1610,60 @@ describe("control plane deployments", () => {
     assert.equal(JSON.stringify(created).includes("secret"), false);
     assert.equal(JSON.stringify(created).includes("super-secret"), false);
     assert.equal(listed[0]?.id, deploymentRow.id);
+  });
+
+  it("keeps the commit, trigger, and duration from a release record", async () => {
+    clearControlPlaneTokenCache();
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const recorded = {
+      ...deploymentRow,
+      git_sha: sha,
+      git_ref: "main",
+      trigger: "manual",
+      actor_user_id: "11111111-1111-4111-8111-111111111111",
+      finished_at: "2026-10-18T00:01:05.000Z",
+    };
+    let actorHeader = "";
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      actorHeader = new Headers(init?.headers).get("x-aerodeck-user-id") ?? "";
+      return jsonResponse(recorded);
+    };
+    const found = await getControlPlaneDeployment(config, deploymentRow.id, { fetch: fetchImpl });
+    assert.equal(found.git_sha, sha);
+    assert.equal(found.trigger, "manual");
+    assert.equal(found.actor_user_id, "11111111-1111-4111-8111-111111111111");
+    assert.equal(formatDuration(found.started_at, found.finished_at), "1m 5s");
+    assert.equal(actorHeader, "");
+
+    const created = await createControlPlaneDeployment(config, "https://github.com/mangatohjunior/aerodeck", {
+      fetch: fetchImpl,
+      actorUserId: "11111111-1111-4111-8111-111111111111",
+    });
+    assert.equal(created.git_sha, sha);
+    assert.equal(actorHeader, "11111111-1111-4111-8111-111111111111");
+  });
+
+  it("rejects a commit that is not 40 hex characters", async () => {
+    clearControlPlaneTokenCache();
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse({ ...deploymentRow, git_sha: "https://user:token@github.com/acme/repo.git" });
+    };
+    await assert.rejects(
+      () => getControlPlaneDeployment(config, deploymentRow.id, { fetch: fetchImpl }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.equal(String(cause).includes("token"), false);
+        return true;
+      },
+    );
   });
 
   it("rejects a partial environment link on create", async () => {

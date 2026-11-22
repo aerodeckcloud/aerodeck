@@ -208,6 +208,110 @@ async def test_job_outcome_is_readable_afterwards(client: AsyncClient, auth: dic
     assert body["result"]["changed"] is False
 
 
+async def test_provision_reports_the_checked_out_commit(
+    client: AsyncClient, auth: dict[str, str], environment: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded: list[dict[str, object]] = []
+
+    def _capture(deployment_id, *, git_sha=None, git_ref=None, finished=False) -> None:
+        recorded.append(
+            {
+                "deployment_id": str(deployment_id),
+                "git_sha": git_sha,
+                "git_ref": git_ref,
+                "finished": finished,
+            }
+        )
+
+    monkeypatch.setattr(tasks, "try_record_deployment_release_sync", _capture)
+    monkeypatch.setattr(tasks, "get_settings", lambda: make_settings(database_url=None, redis_url=None))
+
+    class CheckingOut:
+        def provision(self, *, project_id: str, environment_id: str, on_checkout=None, **_: str) -> JobOutcome:
+            if on_checkout is not None:
+                on_checkout("abcdef0123456789abcdef0123456789abcdef01")
+            return JobOutcome(
+                kind=JobKind.provision,
+                project_id=project_id,
+                environment_id=environment_id,
+                changed=True,
+                detail="checked out",
+            )
+
+        def reconcile(self, *, project_id: str, environment_id: str, **_: str) -> JobOutcome:
+            raise PermanentJobError("unused")
+
+    created = await client.post(
+        "/api/v1/deployments",
+        headers=auth,
+        json={"repo_url": "https://github.com/acme/payments", "project_id": environment["project_id"], "environment_id": environment["id"]},
+    )
+    assert created.status_code == 201, created.text
+    deployment_id = created.json()["id"]
+    tasks.use_provisioner(CheckingOut())
+    try:
+        accepted = await client.post(
+            job_url(environment, "provision"),
+            headers=auth,
+            json={"deployment_id": deployment_id},
+        )
+    finally:
+        tasks.use_provisioner(NoopProvisioner())
+
+    assert accepted.status_code == 202, accepted.text
+    assert recorded[0]["deployment_id"] == deployment_id
+    assert recorded[0]["git_sha"] == "abcdef0123456789abcdef0123456789abcdef01"
+    assert recorded[0]["git_ref"] is None
+    assert recorded[-1]["finished"] is True
+    assert recorded[-1]["git_sha"] is None
+
+
+async def test_failed_provision_still_finishes_the_release_record(
+    client: AsyncClient, auth: dict[str, str], environment: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded: list[dict[str, object]] = []
+
+    def _capture(deployment_id, *, git_sha=None, git_ref=None, finished=False) -> None:
+        recorded.append({"git_sha": git_sha, "finished": finished, "deployment_id": str(deployment_id)})
+
+    monkeypatch.setattr(tasks, "try_record_deployment_release_sync", _capture)
+    monkeypatch.setattr(tasks, "get_settings", lambda: make_settings(database_url=None, redis_url=None))
+
+    class CheckingOutThenFailing:
+        def provision(self, *, project_id: str, environment_id: str, on_checkout=None, **_: str) -> JobOutcome:
+            if on_checkout is not None:
+                on_checkout("abcdef0123456789abcdef0123456789abcdef01")
+            raise PermanentJobError("build failed")
+
+        def reconcile(self, *, project_id: str, environment_id: str, **_: str) -> JobOutcome:
+            raise PermanentJobError("unused")
+
+    created = await client.post(
+        "/api/v1/deployments",
+        headers=auth,
+        json={
+            "repo_url": "https://github.com/acme/payments",
+            "project_id": environment["project_id"],
+            "environment_id": environment["id"],
+        },
+    )
+    assert created.status_code == 201, created.text
+    tasks.use_provisioner(CheckingOutThenFailing())
+    try:
+        accepted = await client.post(
+            job_url(environment, "provision"),
+            headers=auth,
+            json={"deployment_id": created.json()["id"]},
+        )
+        job = await client.get(f"/api/v1/jobs/{accepted.json()['job_id']}", headers=auth)
+    finally:
+        tasks.use_provisioner(NoopProvisioner())
+
+    assert job.json()["status"] == "failed"
+    assert recorded[0]["git_sha"] == "abcdef0123456789abcdef0123456789abcdef01"
+    assert recorded[-1]["finished"] is True
+
+
 async def test_failed_job_reports_the_error(client: AsyncClient, auth: dict[str, str], environment: dict) -> None:
     class Broken:
         def provision(self, *, project_id: str, environment_id: str, **_: str) -> JobOutcome:
