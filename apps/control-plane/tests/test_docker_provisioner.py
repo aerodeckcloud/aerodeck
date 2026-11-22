@@ -135,7 +135,9 @@ def test_provision_clones_builds_runs_and_streams_logs() -> None:
     assert runner.envs[0] is not None and runner.envs[0]["GIT_TERMINAL_PROMPT"] == "0"
 
     run_cmd = runner.calls[2]
+    assert "--network" in run_cmd and "bridge" in run_cmd
     assert "--cap-drop=ALL" in run_cmd
+    assert "--log-opt" in run_cmd and "max-size=10m" in run_cmd
     assert "--memory" in run_cmd and "512m" in run_cmd
     assert "--cpus" in run_cmd and "0.5" in run_cmd
     assert "--pids-limit" in run_cmd and "256" in run_cmd
@@ -244,23 +246,11 @@ def test_provision_enforces_owner_allowlist_and_passes_runtime_and_docker_host()
 def test_provision_rolls_back_candidate_when_health_check_fails() -> None:
     runner = FakeCommandRunner(create_dockerfile=True)
     registered: list[tuple[str, str, int]] = []
-
-    def fake_register(
-        *,
-        project_id: uuid.UUID,
-        environment_id: uuid.UUID,
-        hostname: str,
-        backend_host: str,
-        backend_port: int,
-    ) -> None:
-        _ = (project_id, environment_id)
-        registered.append((hostname, backend_host, backend_port))
-
     provisioner = _make_provisioner(
         runner,
         route_base_domain="dev.app.aero-deck.app",
         health_checker=lambda _h, _p, _t: False,
-        route_registrar=fake_register,
+        route_registrar=lambda **kw: registered.append((kw["hostname"], kw["backend_host"], kw["backend_port"])),
     )
 
     with pytest.raises(PermanentJobError, match="failed health check"):
@@ -272,12 +262,8 @@ def test_provision_rolls_back_candidate_when_health_check_fails() -> None:
             repo_url="https://github.com/mangatohjunior/demo-app",
         )
 
-    # Candidate was removed, old canonical container was NEVER touched, route was NEVER mutated.
     assert [c[:2] for c in runner.calls] == [
-        ["git", "clone"],
-        ["docker", "build"],
-        ["docker", "run"],
-        ["docker", "rm"],
+        ["git", "clone"], ["docker", "build"], ["docker", "run"], ["docker", "rm"],
     ]
     assert runner.calls[3][-1].startswith("aerodeck-app-f27ee337-bacbb040-new-")
     assert registered == []
@@ -286,23 +272,11 @@ def test_provision_rolls_back_candidate_when_health_check_fails() -> None:
 def test_provision_registers_traefik_route_after_health_check() -> None:
     runner = FakeCommandRunner(create_dockerfile=True)
     registered: list[tuple[str, str, int]] = []
-
-    def fake_register(
-        *,
-        project_id: uuid.UUID,
-        environment_id: uuid.UUID,
-        hostname: str,
-        backend_host: str,
-        backend_port: int,
-    ) -> None:
-        _ = (project_id, environment_id)
-        registered.append((hostname, backend_host, backend_port))
-
     provisioner = _make_provisioner(
         runner,
         port=10555,
         route_base_domain="dev.app.aero-deck.app",
-        route_registrar=fake_register,
+        route_registrar=lambda **kw: registered.append((kw["hostname"], kw["backend_host"], kw["backend_port"])),
     )
 
     outcome = provisioner.provision(
@@ -317,8 +291,7 @@ def test_provision_registers_traefik_route_after_health_check() -> None:
     assert "https://payments-dev.dev.app.aero-deck.app" in outcome.detail
     assert (
         route_hostname_for(
-            "payments",
-            "dev",
+            "payments", "dev",
             "f27ee337-a7d0-4d4d-8180-22579d6a2983",
             "bacbb040-41fa-4623-8e4b-02be2f7abf7b",
             "dev.app.aero-deck.app",
@@ -332,3 +305,40 @@ def test_select_provisioner_respects_backend_setting() -> None:
     assert select_provisioner(Settings(**base_kwargs)) is None
     docker_prov = select_provisioner(Settings(**base_kwargs, provisioner_backend="docker"))
     assert isinstance(docker_prov, DockerProvisioner)
+
+
+def test_provision_rejects_host_network_and_forbidden_dockerfile_directives() -> None:
+    base_kwargs = {"auth_signing_key": "a" * 32}
+    with pytest.raises(PermanentJobError, match="host networking is forbidden"):
+        DockerProvisioner.from_settings(
+            Settings(**base_kwargs, provisioner_backend="docker", docker_network="host")
+        )
+
+    class EvilDockerfileRunner(FakeCommandRunner):
+        def run(
+            self,
+            args: list[str],
+            *,
+            cwd: Path | None = None,
+            env: dict[str, str] | None = None,
+            timeout: int = 600,
+            on_line: LogSink | None = None,
+        ) -> CommandResult:
+            res = super().run(args, cwd=cwd, env=env, timeout=timeout, on_line=on_line)
+            if args[:2] == ["git", "clone"]:
+                target = Path(args[-1])
+                (target / "Dockerfile").write_text(
+                    "FROM alpine:3.20\nRUN --mount=type=ssh cat /root/.ssh/id_rsa\n",
+                    encoding="utf-8",
+                )
+            return res
+
+    runner = EvilDockerfileRunner()
+    provisioner = _make_provisioner(runner)
+    with pytest.raises(PermanentJobError, match="forbidden directive"):
+        provisioner.provision(
+            project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+            environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+            repo_url="https://github.com/mangatohjunior/evil-dockerfile",
+        )
+    assert [c[:2] for c in runner.calls] == [["git", "clone"]]

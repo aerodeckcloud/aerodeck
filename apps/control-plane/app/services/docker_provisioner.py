@@ -1,25 +1,9 @@
-"""Build and run tenant containers directly via Docker (#209, #210, #215).
-
-Dokploy-style deployment pipeline behind the ``Provisioner`` protocol:
-1. Validate UUID identifiers, optional GitHub owner allowlist, and canonical ``repo_url``.
-2. Shallow-clone the repository with ``GIT_TERMINAL_PROMPT=0`` and verify a root ``Dockerfile``.
-3. Build with BuildKit, streaming sanitized output lines to ``on_log`` (Redis SSE).
-4. Start an isolated container with ``--cap-drop=ALL``, ``no-new-privileges:true``,
-   memory/CPU/PID caps, optional OCI ``--runtime`` (e.g. ``runsc`` / ``sysbox-runc``),
-   and optional ``DOCKER_HOST`` (e.g. rootless Docker or dedicated build host).
-
-No shell interpolation is ever used; every external command runs with an
-explicit argument list via an injectable ``CommandRunner`` protocol.
-"""
+"""Build and run tenant containers directly via Docker (#209, #210, #212, #215)."""
 
 from __future__ import annotations
 
 import os
-import re
-import socket
-import subprocess
 import tempfile
-import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,216 +12,29 @@ from typing import Protocol
 
 from app.core.config import Settings
 from app.core.github import canonical_github_repo_url, parse_github_repo
+from app.services.docker_policy import (
+    CommandResult, CommandRunner, LogSink, SubprocessCommandRunner, classify_failure, container_name_for,
+    find_available_port, image_tag_for, route_hostname_for, validate_binary, validate_dockerfile,
+    validate_network, validate_runtime, validate_uuid, wait_for_tcp_health,
+)
 from app.services.docker_routes import upsert_environment_route_sync
-from app.services.provisioning import JobKind, JobOutcome, PermanentJobError, TransientJobError
+from app.services.provisioning import JobKind, JobOutcome, PermanentJobError
 
-LogSink = Callable[[str], None]
+__all__ = [
+    "CommandResult", "CommandRunner", "DockerProvisioner", "HealthChecker", "LogSink", "PortAllocator",
+    "RouteRegistrar", "SubprocessCommandRunner", "container_name_for", "find_available_port", "image_tag_for",
+    "route_hostname_for", "wait_for_tcp_health",
+]
+
 PortAllocator = Callable[[str, int, int], int]
 HealthChecker = Callable[[str, int, int], bool]
 
 
 class RouteRegistrar(Protocol):
     def __call__(
-        self,
-        *,
-        project_id: uuid.UUID,
-        environment_id: uuid.UUID,
-        hostname: str,
-        backend_host: str,
-        backend_port: int,
+        self, *, project_id: uuid.UUID, environment_id: uuid.UUID, hostname: str,
+        backend_host: str, backend_port: int,
     ) -> None: ...
-
-
-_SAFE_SEGMENT_RE = re.compile(r"[^a-z0-9-]+")
-_SAFE_BIN_RE = re.compile(r"^[A-Za-z0-9_./:-]+$")
-_SAFE_RUNTIME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-_SAFE_DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
-_MAX_LOG_LINE_LEN = 400
-_MAX_ERROR_TAIL_LEN = 2000
-_TRANSIENT_MARKERS = (
-    "could not resolve host",
-    "temporary failure",
-    "connection reset",
-    "timed out",
-    "toomanyrequests",
-    "429 too many requests",
-    "cannot connect to the docker daemon",
-)
-
-
-@dataclass(frozen=True, slots=True)
-class CommandResult:
-    returncode: int
-    stdout: str
-    stderr: str
-
-
-class CommandRunner(Protocol):
-    def run(
-        self,
-        args: list[str],
-        *,
-        cwd: Path | None = None,
-        env: dict[str, str] | None = None,
-        timeout: int = 600,
-        on_line: LogSink | None = None,
-    ) -> CommandResult: ...
-
-
-class SubprocessCommandRunner:
-    """Execute commands without a shell, optionally streaming merged output lines."""
-
-    def run(
-        self,
-        args: list[str],
-        *,
-        cwd: Path | None = None,
-        env: dict[str, str] | None = None,
-        timeout: int = 600,
-        on_line: LogSink | None = None,
-    ) -> CommandResult:
-        try:
-            if on_line is None:
-                completed = subprocess.run(
-                    args,
-                    cwd=cwd,
-                    env=env,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                )
-                return CommandResult(completed.returncode, completed.stdout, completed.stderr)
-
-            collected: list[str] = []
-            proc = subprocess.Popen(
-                args,
-                cwd=cwd,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-            try:
-                assert proc.stdout is not None
-                for raw_line in proc.stdout:
-                    line = raw_line.rstrip("\r\n")
-                    collected.append(line)
-                    if line:
-                        on_line(_sanitize_log_line(line))
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired as exc:
-                proc.kill()
-                proc.wait()
-                raise TransientJobError(f"command timed out after {timeout}s: {args[0]}") from exc
-            return CommandResult(proc.returncode, "\n".join(collected), "")
-        except subprocess.TimeoutExpired as exc:
-            raise TransientJobError(f"command timed out after {timeout}s: {args[0]}") from exc
-        except OSError as exc:
-            raise PermanentJobError(f"failed to execute {args[0]}: {exc}") from exc
-
-
-def _sanitize_log_line(line: str) -> str:
-    cleaned = line.replace("\x00", "").strip()
-    if len(cleaned) > _MAX_LOG_LINE_LEN:
-        return f"{cleaned[:_MAX_LOG_LINE_LEN]}..."
-    return cleaned
-
-
-def _validate_uuid(value: str, label: str) -> uuid.UUID:
-    try:
-        return uuid.UUID(value)
-    except ValueError as exc:
-        raise PermanentJobError(f"invalid UUID for {label}") from exc
-
-
-def _validate_binary(binary: str, label: str) -> str:
-    if not binary or not _SAFE_BIN_RE.fullmatch(binary):
-        raise PermanentJobError(f"unsafe executable path for {label}")
-    return binary
-
-
-def _validate_runtime(runtime: str | None) -> str | None:
-    if runtime is None:
-        return None
-    stripped = runtime.strip()
-    if not stripped:
-        return None
-    if not _SAFE_RUNTIME_RE.fullmatch(stripped):
-        raise PermanentJobError("invalid docker_runtime name")
-    return stripped
-
-
-def _slug_prefix(value: str, fallback: str) -> str:
-    lowered = _SAFE_SEGMENT_RE.sub("-", value.lower()).strip("-")
-    return (lowered or fallback)[:16].strip("-") or fallback
-
-
-def container_name_for(project_id: str, environment_id: str) -> str:
-    p_uuid = _validate_uuid(project_id, "project_id")
-    e_uuid = _validate_uuid(environment_id, "environment_id")
-    return f"aerodeck-app-{p_uuid.hex[:8]}-{e_uuid.hex[:8]}"
-
-
-def image_tag_for(project_slug: str, environment_slug: str, project_id: str, environment_id: str) -> str:
-    p_uuid = _validate_uuid(project_id, "project_id")
-    e_uuid = _validate_uuid(environment_id, "environment_id")
-    p_slug = _slug_prefix(project_slug, p_uuid.hex[:8])
-    e_slug = _slug_prefix(environment_slug, e_uuid.hex[:8])
-    return f"aerodeck/{p_slug}-{e_slug}:latest"
-
-
-def route_hostname_for(
-    project_slug: str,
-    environment_slug: str,
-    project_id: str,
-    environment_id: str,
-    base_domain: str,
-) -> str:
-    domain = base_domain.strip().lower().strip(".")
-    if not _SAFE_DOMAIN_RE.fullmatch(domain):
-        raise PermanentJobError("invalid AERODECK_DOCKER_ROUTE_BASE_DOMAIN")
-    p_uuid = _validate_uuid(project_id, "project_id")
-    e_uuid = _validate_uuid(environment_id, "environment_id")
-    p_slug = _slug_prefix(project_slug, p_uuid.hex[:8])
-    e_slug = _slug_prefix(environment_slug, e_uuid.hex[:8])
-    label = f"{p_slug}-{e_slug}"[:63].strip("-")
-    return f"{label}.{domain}"
-
-
-def wait_for_tcp_health(bind_host: str, port: int, timeout_seconds: int) -> bool:
-    """Poll TCP connectivity on ``bind_host:port`` until open or ``timeout_seconds`` elapses."""
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((bind_host, port), timeout=1.0):
-                return True
-        except OSError:
-            time.sleep(0.5)
-    return False
-
-
-def _classify_failure(step: str, result: CommandResult) -> PermanentJobError | TransientJobError:
-    blob = f"{result.stdout}\n{result.stderr}".strip()
-    tail = blob[-_MAX_ERROR_TAIL_LEN:] if len(blob) > _MAX_ERROR_TAIL_LEN else blob
-    lower = tail.lower()
-    if any(marker in lower for marker in _TRANSIENT_MARKERS):
-        return TransientJobError(f"{step} failed (exit {result.returncode}): {tail}")
-    return PermanentJobError(f"{step} failed (exit {result.returncode}): {tail}")
-
-
-def find_available_port(bind_host: str, start: int, end: int) -> int:
-    """Return the first free TCP port on ``bind_host`` within ``[start, end]``."""
-    for port in range(start, end + 1):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                sock.bind((bind_host, port))
-            except OSError:
-                continue
-            return port
-    raise TransientJobError(f"no free host port available in range {start}-{end}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +54,7 @@ class DockerProvisioner:
     runner: CommandRunner
     docker_host: str | None = None
     docker_runtime: str | None = None
+    docker_network: str = "bridge"
     allowed_owners: tuple[str, ...] = ()
     health_timeout_seconds: int = 30
     route_base_domain: str | None = None
@@ -266,16 +64,12 @@ class DockerProvisioner:
 
     @classmethod
     def from_settings(
-        cls,
-        settings: Settings,
-        runner: CommandRunner | None = None,
-        port_allocator: PortAllocator | None = None,
-        health_checker: HealthChecker | None = None,
-        route_registrar: RouteRegistrar | None = upsert_environment_route_sync,
+        cls, settings: Settings, runner: CommandRunner | None = None, port_allocator: PortAllocator | None = None,
+        health_checker: HealthChecker | None = None, route_registrar: RouteRegistrar | None = upsert_environment_route_sync,
     ) -> DockerProvisioner:
         return cls(
-            docker_bin=_validate_binary(settings.docker_bin, "docker_bin"),
-            git_bin=_validate_binary(settings.git_bin, "git_bin"),
+            docker_bin=validate_binary(settings.docker_bin, "docker_bin"),
+            git_bin=validate_binary(settings.git_bin, "git_bin"),
             bind_host=settings.docker_bind_host,
             port_range_start=settings.docker_port_range_start,
             port_range_end=settings.docker_port_range_end,
@@ -286,7 +80,8 @@ class DockerProvisioner:
             build_timeout_seconds=settings.docker_build_timeout_seconds,
             runner=runner or SubprocessCommandRunner(),
             docker_host=settings.docker_host,
-            docker_runtime=_validate_runtime(settings.docker_runtime),
+            docker_runtime=validate_runtime(settings.docker_runtime),
+            docker_network=validate_network(settings.docker_network),
             allowed_owners=tuple(o.strip().lower() for o in settings.docker_allowed_owners if o.strip()),
             health_timeout_seconds=settings.docker_health_timeout_seconds,
             route_base_domain=settings.docker_route_base_domain,
@@ -304,20 +99,12 @@ class DockerProvisioner:
         return env
 
     def provision(
-        self,
-        *,
-        project_id: str,
-        environment_id: str,
-        project_slug: str = "",
-        environment_slug: str = "",
-        environment_kind: str = "dev",
-        region: str = "ams3",
-        repo_url: str = "",
-        on_log: LogSink | None = None,
+        self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",
+        environment_kind: str = "dev", region: str = "ams3", repo_url: str = "", on_log: LogSink | None = None,
     ) -> JobOutcome:
         _ = (environment_kind, region)
-        p_uuid = _validate_uuid(project_id, "project_id")
-        e_uuid = _validate_uuid(environment_id, "environment_id")
+        p_uuid = validate_uuid(project_id, "project_id")
+        e_uuid = validate_uuid(environment_id, "environment_id")
         parsed = parse_github_repo(repo_url)
         if parsed is None:
             raise PermanentJobError("A valid GitHub repo_url is required for Docker provisioning")
@@ -329,9 +116,10 @@ class DockerProvisioner:
         clone_url = f"{canonical_github_repo_url(owner, repo)}.git"
         cname = container_name_for(str(p_uuid), str(e_uuid))
         tag = image_tag_for(project_slug, environment_slug, str(p_uuid), str(e_uuid))
-        docker_bin = _validate_binary(self.docker_bin, "docker_bin")
-        git_bin = _validate_binary(self.git_bin, "git_bin")
-        runtime = _validate_runtime(self.docker_runtime)
+        docker_bin = validate_binary(self.docker_bin, "docker_bin")
+        git_bin = validate_binary(self.git_bin, "git_bin")
+        runtime = validate_runtime(self.docker_runtime)
+        network = validate_network(self.docker_network)
 
         def emit(msg: str) -> None:
             if on_log is not None:
@@ -342,59 +130,32 @@ class DockerProvisioner:
             emit(f"Cloning {owner}/{repo} (shallow)...")
             clone_res = self.runner.run(
                 [git_bin, "clone", "--depth=1", "--single-branch", "--", clone_url, str(checkout)],
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-                timeout=120,
-                on_line=on_log,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=120, on_line=on_log,
             )
             if clone_res.returncode != 0:
-                raise _classify_failure("git clone", clone_res)
-
-            dockerfile = checkout / "Dockerfile"
-            if not dockerfile.is_file():
-                raise PermanentJobError(
-                    f"Repository {owner}/{repo} does not contain a root Dockerfile"
-                )
-
+                raise classify_failure("git clone", clone_res)
+            validate_dockerfile(checkout, owner, repo)
             emit(f"Building Docker image {tag}...")
             build_res = self.runner.run(
                 [docker_bin, "build", "--progress=plain", "--tag", tag, str(checkout)],
-                cwd=checkout,
-                env=self._docker_env({"DOCKER_BUILDKIT": "1"}),
-                timeout=self.build_timeout_seconds,
-                on_line=on_log,
+                cwd=checkout, env=self._docker_env({"DOCKER_BUILDKIT": "1"}),
+                timeout=self.build_timeout_seconds, on_line=on_log,
             )
             if build_res.returncode != 0:
-                raise _classify_failure("docker build", build_res)
+                raise classify_failure("docker build", build_res)
 
         docker_env = self._docker_env()
         host_port = self.port_allocator(self.bind_host, self.port_range_start, self.port_range_end)
         candidate = f"{cname}-new-{uuid.uuid4().hex[:6]}"
-
         run_cmd = [
-            docker_bin,
-            "run",
-            "-d",
-            "--name",
-            candidate,
-            "--restart",
-            "unless-stopped",
-            "--cap-drop=ALL",
-            "--security-opt",
-            "no-new-privileges:true",
-            "--memory",
-            self.memory_limit,
-            "--cpus",
-            self.cpus_limit,
-            "--pids-limit",
-            str(self.pids_limit),
-            "--label",
-            "aerodeck.managed=true",
-            "--label",
-            f"aerodeck.project_id={p_uuid}",
-            "--label",
-            f"aerodeck.environment_id={e_uuid}",
-            "-p",
-            f"{self.bind_host}:{host_port}:{self.container_port}",
+            docker_bin, "run", "-d", "--name", candidate, "--restart", "unless-stopped",
+            "--network", network, "--cap-drop=ALL", "--security-opt", "no-new-privileges:true",
+            "--memory", self.memory_limit, "--cpus", self.cpus_limit, "--pids-limit", str(self.pids_limit),
+            "--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
+            "--label", "aerodeck.managed=true",
+            "--label", f"aerodeck.project_id={p_uuid}",
+            "--label", f"aerodeck.environment_id={e_uuid}",
+            "-p", f"{self.bind_host}:{host_port}:{self.container_port}",
         ]
         if runtime is not None:
             run_cmd.extend(["--runtime", runtime])
@@ -403,7 +164,7 @@ class DockerProvisioner:
         emit(f"Starting candidate container {candidate} on {self.bind_host}:{host_port}...")
         run_res = self.runner.run(run_cmd, env=docker_env, timeout=60)
         if run_res.returncode != 0:
-            raise _classify_failure("docker run", run_res)
+            raise classify_failure("docker run", run_res)
 
         emit(f"Waiting for health check on {self.bind_host}:{host_port} (timeout {self.health_timeout_seconds}s)...")
         if not self.health_checker(self.bind_host, host_port, self.health_timeout_seconds):
@@ -421,21 +182,17 @@ class DockerProvisioner:
             emit(f"Registering Traefik route https://{route_hostname} -> {self.bind_host}:{host_port}...")
             try:
                 self.route_registrar(
-                    project_id=p_uuid,
-                    environment_id=e_uuid,
-                    hostname=route_hostname,
-                    backend_host=self.bind_host,
-                    backend_port=host_port,
+                    project_id=p_uuid, environment_id=e_uuid, hostname=route_hostname,
+                    backend_host=self.bind_host, backend_port=host_port,
                 )
             except Exception:
                 self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)
                 raise
 
-        # Cutover complete: remove previous container and promote candidate to canonical name.
         self.runner.run([docker_bin, "rm", "-f", cname], env=docker_env, timeout=30)
         rename_res = self.runner.run([docker_bin, "rename", candidate, cname], env=docker_env, timeout=30)
         if rename_res.returncode != 0:
-            raise _classify_failure("docker rename", rename_res)
+            raise classify_failure("docker rename", rename_res)
 
         if route_hostname:
             emit(f"Container {cname} live at https://{route_hostname} ({self.bind_host}:{host_port}).")
@@ -444,53 +201,34 @@ class DockerProvisioner:
             emit(f"Container {cname} running on {self.bind_host}:{host_port}.")
             detail = f"deployed {tag} as {cname} on {self.bind_host}:{host_port}"
         return JobOutcome(
-            kind=JobKind.provision,
-            project_id=str(p_uuid),
-            environment_id=str(e_uuid),
-            changed=True,
-            detail=detail,
+            kind=JobKind.provision, project_id=str(p_uuid), environment_id=str(e_uuid),
+            changed=True, detail=detail,
         )
 
     def reconcile(
-        self,
-        *,
-        project_id: str,
-        environment_id: str,
-        project_slug: str = "",
-        environment_slug: str = "",
-        environment_kind: str = "dev",
-        region: str = "ams3",
-        repo_url: str = "",
-        on_log: LogSink | None = None,
+        self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",
+        environment_kind: str = "dev", region: str = "ams3", repo_url: str = "", on_log: LogSink | None = None,
     ) -> JobOutcome:
         _ = (project_slug, environment_slug, environment_kind, region, repo_url, on_log)
-        p_uuid = _validate_uuid(project_id, "project_id")
-        e_uuid = _validate_uuid(environment_id, "environment_id")
+        p_uuid = validate_uuid(project_id, "project_id")
+        e_uuid = validate_uuid(environment_id, "environment_id")
         cname = container_name_for(str(p_uuid), str(e_uuid))
-        docker_bin = _validate_binary(self.docker_bin, "docker_bin")
+        docker_bin = validate_binary(self.docker_bin, "docker_bin")
         docker_env = self._docker_env()
         inspect_res = self.runner.run(
-            [docker_bin, "inspect", "-f", "{{.State.Running}}", cname],
-            env=docker_env,
-            timeout=30,
+            [docker_bin, "inspect", "-f", "{{.State.Running}}", cname], env=docker_env, timeout=30
         )
         if inspect_res.returncode != 0:
             raise PermanentJobError(f"container {cname} does not exist; deploy first")
         if inspect_res.stdout.strip().lower() == "true":
             return JobOutcome(
-                kind=JobKind.reconcile,
-                project_id=str(p_uuid),
-                environment_id=str(e_uuid),
-                changed=False,
-                detail=f"container {cname} is already running",
+                kind=JobKind.reconcile, project_id=str(p_uuid), environment_id=str(e_uuid),
+                changed=False, detail=f"container {cname} is already running",
             )
         start_res = self.runner.run([docker_bin, "start", cname], env=docker_env, timeout=60)
         if start_res.returncode != 0:
-            raise _classify_failure("docker start", start_res)
+            raise classify_failure("docker start", start_res)
         return JobOutcome(
-            kind=JobKind.reconcile,
-            project_id=str(p_uuid),
-            environment_id=str(e_uuid),
-            changed=True,
-            detail=f"restarted stopped container {cname}",
+            kind=JobKind.reconcile, project_id=str(p_uuid), environment_id=str(e_uuid),
+            changed=True, detail=f"restarted stopped container {cname}",
         )
