@@ -17,32 +17,44 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.logging import get_logger
 from app.models.certificate import Certificate, CertificateStatus
-from app.models.dns_record import DnsRecordType
+from app.models.dns_record import DnsRecordStatus, DnsRecordType
 from app.models.route import Route
 from app.repositories.certificates import CertificateRepository
 from app.repositories.dns_records import DnsRecordRepository
 from app.repositories.routes import RouteRepository
-from app.services.dns_records import DnsRecordService
+from app.services.dns_records import DnsRecordService, provider_record_data
 from app.services.provisioning import PermanentJobError
 
 logger = get_logger("services.docker_routes")
 
 
 async def _ensure_dns_and_tls(session: AsyncSession, route: Route, cert: Certificate) -> None:
-    """Best-effort publish DigitalOcean DNS record and issue ACME TLS certificate (#240)."""
+    """Best-effort publish DigitalOcean DNS record and issue ACME TLS certificate (#240, #247)."""
     settings = get_settings()
-    try:
-        publisher = get_dns_record_publisher(settings)
-        dns_service = DnsRecordService(
-            DnsRecordRepository(session),
-            publisher,
-            record_type=DnsRecordType(settings.dns_record_type),
-            data=settings.dns_record_target,
-            ttl=settings.dns_record_ttl,
-        )
-        await dns_service.publish(route)
-    except Exception as exc:
-        logger.warning("auto DNS publish skipped for %s: %s", route.hostname, type(exc).__name__)
+    dns_repo = DnsRecordRepository(session)
+    desired_type = DnsRecordType(settings.dns_record_type)
+    desired_data = provider_record_data(desired_type.value, settings.dns_record_target)
+    existing_dns = await dns_repo.get_for_route(route.id)
+    already_published = (
+        existing_dns is not None
+        and existing_dns.status is DnsRecordStatus.published
+        and existing_dns.hostname == route.hostname
+        and existing_dns.record_type is desired_type
+        and existing_dns.data in {settings.dns_record_target, desired_data}
+    )
+    if not already_published:
+        try:
+            publisher = get_dns_record_publisher(settings)
+            dns_service = DnsRecordService(
+                dns_repo,
+                publisher,
+                record_type=desired_type,
+                data=settings.dns_record_target,
+                ttl=settings.dns_record_ttl,
+            )
+            await dns_service.publish(route)
+        except Exception as exc:
+            logger.warning("auto DNS publish skipped for %s: %s", route.hostname, type(exc).__name__)
 
     keys = get_certificate_key_store(settings)
     if cert.status is CertificateStatus.issued and keys.get(cert.id) is not None:

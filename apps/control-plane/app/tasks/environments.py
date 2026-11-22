@@ -18,6 +18,7 @@ from celery import Task, shared_task
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.metrics import record_iac_apply_failure
+from app.services.container_logs import CONTAINER_LOGS_TASK, fetch_container_logs_sync
 from app.services.provisioning import JobKind, NoopProvisioner, Provisioner, TransientJobError
 from app.tasks.deployment_status import try_mark_deployment_failed_sync
 
@@ -138,3 +139,17 @@ def provision_environment(self: Task, *, project_id: str, environment_id: str, *
 )
 def reconcile_environment(self: Task, *, project_id: str, environment_id: str, **meta: str) -> dict[str, str | bool]:
     return _run(self, JobKind.reconcile, project_id, environment_id, **meta)
+
+
+@shared_task(name=CONTAINER_LOGS_TASK)
+def fetch_environment_container_logs(
+    *, project_id: str, environment_id: str, tail: int = 200
+) -> dict[str, Any]:
+    settings = get_settings()
+    return fetch_container_logs_sync(
+        project_id=project_id,
+        environment_id=environment_id,
+        docker_bin=settings.docker_bin,
+        docker_host=settings.docker_host,
+        tail=tail,
+    )

@@ -4,6 +4,7 @@ import {
   type AcceptedJob,
   type AddonType,
   type ApiError,
+  type ContainerRuntimeLogs,
   type Deployment,
   type DeploymentBlueprint,
   type EnvironmentOption,
@@ -294,6 +295,17 @@ export async function fetchDeployment(id: string, controlPlane = false): Promise
     ? `/api/console/deployments/${deploymentId}`
     : `${MOCK_API_PREFIX}/deployments/${deploymentId}`;
   const response = await fetch(path, { credentials: "same-origin", cache: "no-store" });
+  return readJson(response);
+}
+
+export async function fetchDeploymentRuntimeLogs(
+  id: string,
+  tail = 200,
+): Promise<ContainerRuntimeLogs> {
+  const response = await fetch(
+    `/api/console/deployments/${encodeURIComponent(id)}/runtime-logs?tail=${encodeURIComponent(String(tail))}`,
+    { credentials: "same-origin", cache: "no-store" },
+  );
   return readJson(response);
 }
 
