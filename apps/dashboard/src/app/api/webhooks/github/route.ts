@@ -3,10 +3,12 @@ import { connection, NextResponse } from "next/server";
 import { readControlPlaneConfig } from "@/lib/control-plane";
 import { jsonError } from "@/lib/mock-http";
 
+const UPSTREAM_TIMEOUT_MS = 15_000;
+
 /**
  * Public GitHub webhook proxy (#249).
  * Streams the raw request body and GitHub signature headers directly to the
- * control-plane `/api/v1/webhooks/github` endpoint without buffering into memory.
+ * control-plane `/api/v1/webhooks/github` endpoint with an explicit upstream timeout.
  */
 export async function POST(request: Request) {
   await connection();
@@ -25,12 +27,15 @@ export async function POST(request: Request) {
     }
   }
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
   try {
     const init: RequestInit & { duplex?: "half" } = {
       method: "POST",
       headers,
       body: request.body,
       duplex: "half",
+      signal: controller.signal,
       cache: "no-store",
     };
     const upstream = await fetch(`${config.baseUrl}/api/v1/webhooks/github`, init);
@@ -39,7 +44,12 @@ export async function POST(request: Request) {
       status: upstream.status,
       headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" },
     });
-  } catch {
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === "AbortError") {
+      return jsonError(504, "Control plane webhook receiver timed out.", "webhook_proxy_timeout");
+    }
     return jsonError(502, "Could not reach control plane webhook receiver.", "webhook_proxy_failed");
+  } finally {
+    clearTimeout(timer);
   }
 }

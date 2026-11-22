@@ -2,13 +2,35 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, Request, Response, status
+import time
+from collections import defaultdict, deque
+
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
 from app.api.deps import DeploymentServiceDep, JobServiceDep, WebhookServiceDep
 from app.schemas.auth import ErrorResponse
-from app.services.webhooks import WebhookDeliveryResult
+from app.services.webhooks import _MAX_WEBHOOK_BODY_BYTES, WebhookDeliveryResult
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
+
+_RATE_LIMIT_MAX_REQUESTS = 60
+_RATE_LIMIT_WINDOW_SECONDS = 60.0
+_ip_windows: dict[str, deque[float]] = defaultdict(deque)
+
+
+def _enforce_rate_limit(client_ip: str) -> None:
+    """Sliding-window per-IP throttle for the public webhook endpoint."""
+    now = time.monotonic()
+    window = _ip_windows[client_ip]
+    cutoff = now - _RATE_LIMIT_WINDOW_SECONDS
+    while window and window[0] < cutoff:
+        window.popleft()
+    if len(window) >= _RATE_LIMIT_MAX_REQUESTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many webhook requests; please retry shortly.",
+        )
+    window.append(now)
 
 
 @router.post(
@@ -18,6 +40,8 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
     summary="Receive GitHub push webhooks for automatic blue/green redeploys (#249)",
     responses={
         status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_413_CONTENT_TOO_LARGE: {"model": ErrorResponse},
+        status.HTTP_429_TOO_MANY_REQUESTS: {"model": ErrorResponse},
         status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ErrorResponse},
     },
 )
@@ -31,7 +55,29 @@ async def receive_github_webhook(
     x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
     x_github_delivery: str | None = Header(default=None, alias="X-GitHub-Delivery"),
 ) -> WebhookDeliveryResult:
+    client_ip = request.client.host if request.client else "unknown"
+    _enforce_rate_limit(client_ip)
+
+    if not x_hub_signature_256 or not x_hub_signature_256.startswith("sha256="):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or malformed X-Hub-Signature-256 header.",
+        )
+
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > _MAX_WEBHOOK_BODY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="Webhook payload exceeds 1 MiB limit.",
+        )
+
     raw_body = await request.body()
+    if len(raw_body) > _MAX_WEBHOOK_BODY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="Webhook payload exceeds 1 MiB limit.",
+        )
+
     result = await webhooks.handle_github_event(
         raw_body=raw_body,
         event=x_github_event.strip().lower(),

@@ -121,6 +121,7 @@ def _parse_addons(raw: str | None) -> list[str]:
     try:
         items = json.loads(raw)
     except ValueError:
+        logger.warning("ignored malformed addons_json on webhook record")
         return []
     if not isinstance(items, list):
         return []
