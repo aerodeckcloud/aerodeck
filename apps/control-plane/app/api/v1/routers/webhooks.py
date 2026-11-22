@@ -1,20 +1,11 @@
-"""Public GitHub webhook receiver verified via X-Hub-Signature-256 (#249)."""
+"""Public GitHub webhook receiver verified via X-Hub-Signature-256 (#249, #258)."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
-from app.api.deps import (
-    DeploymentServiceDep,
-    EnvironmentServiceDep,
-    EnvironmentVariableServiceDep,
-    JobServiceDep,
-    SessionDep,
-    SettingsDep,
-    WebhookServiceDep,
-)
+from app.api.deps import DeploymentServiceDep, JobServiceDep, SettingsDep, WebhookServiceDep
 from app.schemas.auth import ErrorResponse
-from app.services.pr_previews import handle_pull_request_event
 from app.services.webhook_rate_limit import enforce_webhook_rate_limit
 from app.services.webhooks import _MAX_WEBHOOK_BODY_BYTES, WebhookDeliveryResult
 
@@ -25,7 +16,7 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
     "/github",
     response_model=WebhookDeliveryResult,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Receive GitHub push webhooks for automatic blue/green redeploys (#249)",
+    summary="Receive GitHub push and pull_request webhooks (#249, #258)",
     responses={
         status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
         status.HTTP_413_CONTENT_TOO_LARGE: {"model": ErrorResponse},
@@ -36,10 +27,7 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 async def receive_github_webhook(
     request: Request,
     response: Response,
-    session: SessionDep,
     webhooks: WebhookServiceDep,
-    environments: EnvironmentServiceDep,
-    env_vars: EnvironmentVariableServiceDep,
     deployments: DeploymentServiceDep,
     jobs: JobServiceDep,
     settings: SettingsDep,
@@ -47,7 +35,7 @@ async def receive_github_webhook(
     x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
     x_github_delivery: str | None = Header(default=None, alias="X-GitHub-Delivery"),
 ) -> WebhookDeliveryResult:
-    """Validate rate limit, payload size, and HMAC-SHA256 signature, then dispatch redeploys."""
+    """Validate rate limit, payload size, and HMAC-SHA256 signature, then dispatch."""
     client_ip = request.client.host if request.client else "unknown"
     await enforce_webhook_rate_limit(client_ip, settings.redis_url)
 
@@ -71,21 +59,6 @@ async def receive_github_webhook(
             detail="Webhook payload exceeds 1 MiB limit.",
         )
 
-    async def _handle_pr(
-        *, payload: dict[str, object], verified_webhooks: object, parse_addons: object
-    ) -> tuple[str, str | None, list[object]]:
-        return await handle_pull_request_event(
-            session=session,
-            settings=settings,
-            payload=payload,
-            verified_webhooks=verified_webhooks,  # type: ignore[arg-type]
-            environments=environments,
-            env_vars=env_vars,
-            deployments=deployments,
-            jobs=jobs,
-            parse_addons=parse_addons,
-        )
-
     result = await webhooks.handle_github_event(
         raw_body=raw_body,
         event=x_github_event.strip().lower(),
@@ -93,7 +66,6 @@ async def receive_github_webhook(
         delivery_id=x_github_delivery.strip() if x_github_delivery else None,
         deployments=deployments,
         jobs=jobs,
-        pr_preview_handler=_handle_pr,
     )
     if result.status != "triggered":
         response.status_code = status.HTTP_200_OK

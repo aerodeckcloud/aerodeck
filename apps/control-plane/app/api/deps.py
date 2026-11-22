@@ -49,6 +49,7 @@ from app.services.environment_vars import EnvironmentVariableRepository, Environ
 from app.services.hypervisor import FirecrackerHypervisor, Hypervisor, MemoryHypervisor, SandboxUnavailableError
 from app.services.jobs import DeploymentEnqueueHooks, JobDispatcher, JobService
 from app.services.letsencrypt import LetsEncryptIssuer
+from app.services.pr_previews import PrPreviewService
 from app.services.projects import ProjectService
 from app.services.project_members import ProjectMemberRepository, ProjectMemberService
 from app.services.routes import RouteService
@@ -219,12 +220,20 @@ EnvironmentVariableServiceDep = Annotated[
 def get_webhook_service(
     session: SessionDep,
     environments: EnvironmentServiceDep,
+    env_vars: EnvironmentVariableServiceDep,
     settings: SettingsDep,
 ) -> WebhookService:
+    pr_previews = PrPreviewService(
+        EnvironmentRepository(session),
+        environments,
+        env_vars,
+        settings,
+    )
     return WebhookService(
         WebhookRepository(session),
         environments,
         signing_key=settings.auth_signing_key.get_secret_value(),
+        pr_previews=pr_previews,
     )
 
 

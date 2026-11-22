@@ -190,10 +190,12 @@ class WebhookService:
         environments: EnvironmentLookup,
         *,
         signing_key: str,
+        pr_previews: Any = None,
     ) -> None:
         self._repo = repo
         self._environments = environments
         self._signing_key = signing_key
+        self._pr_previews = pr_previews
 
     async def get_for_environment(
         self, project_id: uuid.UUID, environment_id: uuid.UUID
@@ -253,7 +255,6 @@ class WebhookService:
         delivery_id: str | None,
         deployments: DeploymentCreator,
         jobs: JobEnqueuer,
-        pr_preview_handler: Any = None,
     ) -> WebhookDeliveryResult:
         if len(raw_body) > _MAX_WEBHOOK_BODY_BYTES:
             raise WebhookSignatureError("Webhook payload exceeds maximum allowed size")
@@ -290,10 +291,12 @@ class WebhookService:
 
         if event == "ping":
             return WebhookDeliveryResult(status="pong")
-        if event == "pull_request" and pr_preview_handler is not None:
-            pr_status, pr_reason, pr_ids = await pr_preview_handler(
+        if event == "pull_request" and self._pr_previews is not None:
+            pr_status, pr_reason, pr_ids = await self._pr_previews.handle_event(
                 payload=payload,
                 verified_webhooks=verified,
+                deployments=deployments,
+                jobs=jobs,
                 parse_addons=_parse_addons,
             )
             return WebhookDeliveryResult(
