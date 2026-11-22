@@ -7,10 +7,13 @@ prefer this module for any deployment mutation that must not pull environments.
 """
 
 import uuid
+from datetime import UTC, datetime
 from typing import Protocol
 
 from app.core.logging import get_logger
 from app.models.deployment import Deployment, DeploymentStatus
+from app.services.docker_policy import normalize_git_sha, validate_git_ref
+from app.services.provisioning import PermanentJobError
 
 logger = get_logger("services.deployment_terminal")
 
@@ -42,8 +45,38 @@ class DeploymentTerminalService:
             )
             return deployment
         deployment.status = status
+        if deployment.finished_at is None:
+            deployment.finished_at = datetime.now(UTC)
         stored = await self._deployments.save(deployment)
         logger.info("deployment %s %s", stored.id, status.value)
+        return stored
+
+    async def record_release(
+        self,
+        deployment_id: uuid.UUID,
+        *,
+        git_sha: str | None = None,
+        git_ref: str | None = None,
+        finished: bool = False,
+    ) -> Deployment | None:
+        """Store checkout identity and finish time. Ignores a SHA that is not 40 hex chars."""
+        deployment = await self._deployments.get(deployment_id)
+        if deployment is None:
+            return None
+        sha = normalize_git_sha(git_sha)
+        if sha is not None and deployment.git_sha is None:
+            deployment.git_sha = sha
+        if git_ref and deployment.git_ref is None:
+            try:
+                cleaned_ref = validate_git_ref(git_ref)
+            except PermanentJobError:
+                cleaned_ref = None
+            if cleaned_ref is not None:
+                deployment.git_ref = cleaned_ref
+        if finished and deployment.finished_at is None:
+            deployment.finished_at = datetime.now(UTC)
+        stored = await self._deployments.save(deployment)
+        logger.info("deployment %s release recorded", stored.id)
         return stored
 
     async def set_provision_job_id(

@@ -15,7 +15,8 @@ from app.core.github import canonical_github_repo_url, parse_github_repo
 from app.services.docker_policy import (
     CommandResult, CommandRunner, LogSink, SubprocessCommandRunner, classify_failure, container_name_for,
     deployment_image_tag_for, find_available_port, image_tag_for, route_hostname_for, validate_binary,
-    validate_dockerfile, validate_git_ref, validate_network, validate_runtime, validate_uuid, wait_for_tcp_health,
+    normalize_git_sha, validate_dockerfile, validate_git_ref, validate_network, validate_runtime, validate_uuid,
+    wait_for_tcp_health,
 )
 from app.services.docker_addons import parse_addons_json, provision_environment_addons
 from app.services.docker_env_discovery import build_docker_run_command, ensure_default_docker_config
@@ -89,6 +90,7 @@ class DockerProvisioner:
         environment_kind: str = "dev", region: str = "ams3", repo_url: str = "", env_vars_json: str = "",
         addons_json: str = "", image_deployment_id: str = "", rollback_from_deployment_id: str = "",
         git_ref: str = "", on_log: LogSink | None = None,
+        on_checkout: Callable[[str], None] | None = None,
     ) -> JobOutcome:
         _ = (environment_kind, region)
         p_uuid, e_uuid = validate_uuid(project_id, "project_id"), validate_uuid(environment_id, "environment_id")
@@ -145,6 +147,16 @@ class DockerProvisioner:
                 )
                 if clone_res.returncode != 0:
                     raise classify_failure("git clone", clone_res)
+                rev = self.runner.run(
+                    [git_bin, "-C", str(checkout), "rev-parse", "HEAD"],
+                    env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                    timeout=30,
+                )
+                sha = normalize_git_sha(rev.stdout if rev.returncode == 0 else None)
+                if sha is not None:
+                    emit(f"Checked out {sha[:7]}")
+                    if on_checkout is not None:
+                        on_checkout(sha)
                 df = ensure_dockerfile(checkout, owner, repo, container_port=self.container_port, on_log=on_log)
                 target_port = detect_exposed_port(df, default_port=self.container_port)
                 env_file = build_runtime_env_file(checkout, target_port, f"https://{route_hostname}" if route_hostname else None, on_log, env_vars_json, addon_env)

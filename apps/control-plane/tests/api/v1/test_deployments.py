@@ -368,6 +368,70 @@ async def test_missing_deployment_is_not_found(client: AsyncClient, auth: dict[s
     assert response.json()["code"] == "not_found"
 
 
+async def test_create_records_a_known_actor_and_ignores_a_spoofed_trigger(
+    client: AsyncClient, auth: dict[str, str]
+) -> None:
+    user = await client.post(
+        "/api/v1/console-users",
+        json={"email": "release@aerodeck.test", "password": "correct-horse-battery-staple"},
+        headers=auth,
+    )
+    assert user.status_code == 201, user.text
+    user_id = user.json()["id"]
+
+    created = await client.post(
+        DEPLOYMENTS,
+        json={"repo_url": REPO, "trigger": "webhook", "actor_user_id": user_id},
+        headers={**auth, "X-AeroDeck-User-Id": user_id},
+    )
+    assert created.status_code == 422
+
+    created = await client.post(
+        DEPLOYMENTS,
+        json={"repo_url": REPO},
+        headers={**auth, "X-AeroDeck-User-Id": user_id},
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["trigger"] == "manual"
+    assert body["actor_user_id"] == user_id
+    assert body["git_sha"] is None
+    assert body["finished_at"] is None
+    assert "token" not in created.text
+
+    unknown = await client.post(
+        DEPLOYMENTS,
+        json={"repo_url": REPO},
+        headers={**auth, "X-AeroDeck-User-Id": str(uuid4())},
+    )
+    assert unknown.status_code == 201, unknown.text
+    assert unknown.json()["actor_user_id"] is None
+    assert unknown.json()["trigger"] == "manual"
+
+
+async def test_terminal_status_sets_finished_at_once(client: AsyncClient, auth: dict[str, str]) -> None:
+    created = await client.post(DEPLOYMENTS, json={"repo_url": REPO}, headers=auth)
+    assert created.status_code == 201, created.text
+    deployment_id = created.json()["id"]
+
+    finished = await client.post(f"{DEPLOYMENTS}/{deployment_id}/succeeded", headers=auth)
+    assert finished.status_code == 200, finished.text
+    finished_at = finished.json()["finished_at"]
+    assert finished_at is not None
+
+    again = await client.post(f"{DEPLOYMENTS}/{deployment_id}/succeeded", headers=auth)
+    assert again.status_code == 200, again.text
+    assert again.json()["finished_at"] == finished_at
+
+    failed = await client.post(DEPLOYMENTS, json={"repo_url": REPO}, headers=auth)
+    failed_id = failed.json()["id"]
+    marked = await client.post(f"{DEPLOYMENTS}/{failed_id}/failed", headers=auth)
+    assert marked.status_code == 200, marked.text
+    assert marked.json()["status"] == "failed"
+    assert marked.json()["finished_at"] is not None
+    assert marked.json()["git_sha"] is None
+
+
 async def test_deployment_routes_require_a_token(client: AsyncClient) -> None:
     created = await client.post(DEPLOYMENTS, json={"repo_url": REPO})
     listed = await client.get(DEPLOYMENTS)

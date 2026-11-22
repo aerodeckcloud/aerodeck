@@ -95,7 +95,7 @@ def test_provision_tags_immutable_deployment_image_and_supports_rollback() -> No
         repo_url="https://github.com/mangatohjunior/dev-portal",
         image_deployment_id=d_id,
     )
-    build_cmd = build_runner.calls[1]
+    build_cmd = build_runner.calls[2]
     assert build_cmd[:2] == ["docker", "build"]
     assert expected_tag in build_cmd
 

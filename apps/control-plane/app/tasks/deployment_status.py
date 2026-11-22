@@ -10,6 +10,7 @@ import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
@@ -104,6 +105,74 @@ def mark_deployment_failed_sync(deployment_id: uuid.UUID) -> None:
                 await engine.dispose()
 
     asyncio.run(_run())
+
+
+async def _record_release_on_private_engine(
+    database_url: str,
+    deployment_id: uuid.UUID,
+    *,
+    git_sha: str | None,
+    git_ref: str | None,
+    finished: bool,
+) -> None:
+    """Write release fields on an engine owned by this loop.
+
+    Celery calls this through ``asyncio.run`` on a worker thread. Reusing
+    ``SessionLocal`` from that nested loop poisons asyncpg connections that
+    still belong to the API loop.
+    """
+    engine = create_engine(database_url, poolclass=NullPool)
+    sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    try:
+        async with sessions() as session:
+            try:
+                stored = await DeploymentTerminalService(DeploymentRepository(session)).record_release(
+                    deployment_id,
+                    git_sha=git_sha,
+                    git_ref=git_ref,
+                    finished=finished,
+                )
+                if stored is None:
+                    logger.info(
+                        "event=deployment_release_record_skipped deployment=%s error_type=LookupError",
+                        deployment_id,
+                    )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+    finally:
+        await engine.dispose()
+
+
+def try_record_deployment_release_sync(
+    deployment_id: uuid.UUID,
+    *,
+    git_sha: str | None = None,
+    git_ref: str | None = None,
+    finished: bool = False,
+) -> None:
+    """Best-effort worker write of checkout identity and finish time. Never raises."""
+    settings = get_settings()
+    if not settings.database_url:
+        logger.info("deployment release record skipped: AERODECK_DATABASE_URL is unset")
+        return
+    try:
+        asyncio.run(
+            _record_release_on_private_engine(
+                settings.database_url,
+                deployment_id,
+                git_sha=git_sha,
+                git_ref=git_ref,
+                finished=finished,
+            )
+        )
+    except Exception as record_exc:
+        logger.warning(
+            "event=deployment_release_record_skipped deployment=%s error_type=%s",
+            deployment_id,
+            type(record_exc).__name__,
+        )
 
 
 def try_mark_deployment_failed_sync(deployment_id: uuid.UUID) -> None:

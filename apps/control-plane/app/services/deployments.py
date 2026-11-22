@@ -8,7 +8,12 @@ from sqlalchemy.exc import IntegrityError
 from app.core.errors import NotFoundError
 from app.core.github import canonical_github_repo_url, parse_github_repo
 from app.core.logging import get_logger
-from app.models.deployment import DEPLOYMENT_ENVIRONMENT_FK, Deployment, DeploymentStatus
+from app.models.deployment import (
+    DEPLOYMENT_ENVIRONMENT_FK,
+    Deployment,
+    DeploymentStatus,
+    DeploymentTrigger,
+)
 from app.models.project import Environment
 from app.repositories.deployments import DeploymentRepository
 from app.schemas.deployment import DeploymentCreate
@@ -51,7 +56,13 @@ class DeploymentService:
         self._environments = environments
         self._terminal = terminal
 
-    async def create(self, data: DeploymentCreate) -> Deployment:
+    async def create(
+        self,
+        data: DeploymentCreate,
+        *,
+        trigger: DeploymentTrigger | None = None,
+        actor_user_id: uuid.UUID | None = None,
+    ) -> Deployment:
         parsed = parse_github_repo(data.repo_url)
         if parsed is None:
             raise ValueError("repo_url must be a GitHub repository URL")
@@ -70,6 +81,8 @@ class DeploymentService:
                     environment_id=environment_id,
                     status=DeploymentStatus.running,
                     started_at=datetime.now(UTC),
+                    trigger=trigger.value if trigger is not None else None,
+                    actor_user_id=actor_user_id,
                 )
             )
         except IntegrityError as exc:

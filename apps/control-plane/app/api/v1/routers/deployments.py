@@ -18,12 +18,14 @@ from app.api.deps import (
     ActorUserIdDep,
     AuditLogServiceDep,
     ClientDep,
+    ConsoleUserServiceDep,
     DeploymentServiceDep,
     JobServiceDep,
     PaginationDep,
     SettingsDep,
 )
-from app.models.deployment import DeploymentStatus
+from app.models.deployment import DeploymentStatus, DeploymentTrigger
+from app.services.console_users import ConsoleUserService
 from app.schemas.auth import ErrorResponse
 from app.schemas.blueprint import DeploymentBlueprint, DeploymentInspectRequest
 from app.schemas.common import Page
@@ -38,6 +40,14 @@ router = APIRouter(prefix="/deployments", tags=["deployments"])
 _NOT_FOUND = {status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}}
 _UNAUTHENTICATED = {status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse}}
 _UNAVAILABLE = {status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ErrorResponse}}
+
+
+async def _known_actor(users: ConsoleUserService, actor_user_id: uuid.UUID | None) -> uuid.UUID | None:
+    """Keep the header only when it names a stored console user."""
+    if actor_user_id is None:
+        return None
+    user = await users.get(actor_user_id)
+    return user.id if user is not None else None
 
 
 def _sse_frame(line: str) -> bytes:
@@ -104,9 +114,14 @@ async def create_deployment(
     body: DeploymentCreate,
     deployments: DeploymentServiceDep,
     audit: AuditLogServiceDep,
+    users: ConsoleUserServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
-    created = await deployments.create(body)
+    created = await deployments.create(
+        body,
+        trigger=DeploymentTrigger.manual,
+        actor_user_id=await _known_actor(users, actor_user_id),
+    )
     payload = DeploymentRead.model_validate(created)
     if payload.project_id is not None:
         await audit.record(
@@ -226,6 +241,8 @@ async def redeploy_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
     jobs: JobServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
     source = await deployments.get(deployment_id)
     if source.project_id is None or source.environment_id is None:
@@ -238,7 +255,9 @@ async def redeploy_deployment(
             repo_url=source.repo_url,
             project_id=source.project_id,
             environment_id=source.environment_id,
-        )
+        ),
+        trigger=DeploymentTrigger.manual,
+        actor_user_id=await _known_actor(users, actor_user_id),
     )
     await jobs.enqueue(
         JobKind.provision,
@@ -261,6 +280,8 @@ async def rollback_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
     jobs: JobServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
     source = await deployments.get(deployment_id)
     if source.project_id is None or source.environment_id is None:
@@ -278,7 +299,9 @@ async def rollback_deployment(
             repo_url=source.repo_url,
             project_id=source.project_id,
             environment_id=source.environment_id,
-        )
+        ),
+        trigger=DeploymentTrigger.rollback,
+        actor_user_id=await _known_actor(users, actor_user_id),
     )
     await jobs.enqueue(
         JobKind.provision,

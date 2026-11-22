@@ -116,7 +116,7 @@ def test_provisioner_auto_generates_dockerfile_and_uses_buildkit_cache() -> None
         repo_url="https://github.com/mangatohjunior/node-only-app",
         on_log=streamed.append,
     )
-    build_cmd = calls[1]
+    build_cmd = calls[2]
     assert "--progress=plain" in build_cmd
     assert "--cache-from" not in build_cmd
     assert any("auto-generating Dockerfile for Node.js" in line for line in streamed)

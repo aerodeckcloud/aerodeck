@@ -1,3 +1,5 @@
+import uuid
+
 from sqlalchemy.exc import IntegrityError
 
 from app.core.errors import ConflictError, InvalidCredentialsError
@@ -13,6 +15,9 @@ logger = get_logger("services.console_users")
 class ConsoleUserService:
     def __init__(self, users: ConsoleUserRepository) -> None:
         self._users = users
+
+    async def get(self, user_id: uuid.UUID) -> ConsoleUser | None:
+        return await self._users.get(user_id)
 
     async def register(self, data: ConsoleUserCreate) -> ConsoleUser:
         if await self._users.get_by_email(data.email) is not None:

@@ -45,6 +45,11 @@ link after a restart) then queues `POST .../environments/{id}/provision` with
 the new `deployment_id` so the terminal can follow worker lines. A successful
 provision enqueue also stores `provision_job_id` on the deployment so list/detail
 can reload that Celery job later; older rows and enqueue failures leave it null.
+A deployment also stores who started it (`trigger` of `manual`, `webhook`, `rollback`,
+or `promote`, plus `actor_user_id` when that header names a console user) and,
+after the worker checks out a commit, `git_sha`, `git_ref`, and `finished_at`.
+Project deployment history shows the short SHA, the trigger, and the duration.
+Rows created before that migration leave those fields empty.
 When the console client is set and a deployment has `provision_job_id`, detail
 shows a Provision job panel that polls `GET /api/console/jobs/{id}` (→
 `GET /api/v1/jobs/{id}`) about every 5s until succeeded/failed, a poll

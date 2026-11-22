@@ -52,6 +52,8 @@ class FakeCommandRunner:
             if on_line:
                 on_line("Cloning into 'repo'...")
             return CommandResult(0, "", "")
+        if args[:2] == ["git", "-C"] and "rev-parse" in args:
+            return CommandResult(0, "0123456789abcdef0123456789abcdef01234567\n", "")
         if args[:2] == ["docker", "build"]:
             if on_line:
                 on_line("#1 [internal] load build definition from Dockerfile")
@@ -106,6 +108,7 @@ def test_provision_clones_builds_runs_and_streams_logs() -> None:
     runner = FakeCommandRunner(create_dockerfile=True)
     provisioner = _make_provisioner(runner, port=10420)
     streamed: list[str] = []
+    checked_out: list[str] = []
 
     outcome = provisioner.provision(
         project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
@@ -114,6 +117,7 @@ def test_provision_clones_builds_runs_and_streams_logs() -> None:
         environment_slug="dev",
         repo_url="https://github.com/mangatohjunior/demo-app",
         on_log=streamed.append,
+        on_checkout=checked_out.append,
     )
 
     assert outcome.kind is JobKind.provision
@@ -124,6 +128,7 @@ def test_provision_clones_builds_runs_and_streams_logs() -> None:
     # Verify blue/green swap order: run candidate -> health check -> remove old -> rename candidate.
     assert [c[:2] for c in runner.calls] == [
         ["git", "clone"],
+        ["git", "-C"],
         ["docker", "build"],
         ["docker", "run"],
         ["docker", "rm"],
@@ -133,8 +138,9 @@ def test_provision_clones_builds_runs_and_streams_logs() -> None:
     assert "--depth=1" in clone_cmd
     assert "https://github.com/mangatohjunior/demo-app.git" in clone_cmd
     assert runner.envs[0] is not None and runner.envs[0]["GIT_TERMINAL_PROMPT"] == "0"
+    assert checked_out == ["0123456789abcdef0123456789abcdef01234567"]
 
-    run_cmd = runner.calls[2]
+    run_cmd = runner.calls[3]
     assert "--network" in run_cmd and "bridge" in run_cmd
     assert "--cap-drop=ALL" in run_cmd
     assert "--log-opt" in run_cmd and "max-size=10m" in run_cmd
@@ -143,10 +149,11 @@ def test_provision_clones_builds_runs_and_streams_logs() -> None:
     assert "--pids-limit" in run_cmd and "256" in run_cmd
     assert "no-new-privileges:true" in run_cmd
     assert "10.41.0.2:10420:8000" in run_cmd
-    assert runner.calls[3] == ["docker", "rm", "-f", "aerodeck-app-f27ee337-bacbb040"]
-    assert runner.calls[4][-1] == "aerodeck-app-f27ee337-bacbb040"
+    assert runner.calls[4] == ["docker", "rm", "-f", "aerodeck-app-f27ee337-bacbb040"]
+    assert runner.calls[5][-1] == "aerodeck-app-f27ee337-bacbb040"
 
     # Verify streamed SSE lines include clone, build, and start steps.
+    assert any("Checked out 0123456" in line for line in streamed)
     assert any("Cloning mangatohjunior/demo-app" in line for line in streamed)
     assert any("#1 [internal] load build definition" in line for line in streamed)
     assert any("Container aerodeck-app-f27ee337-bacbb040 running on 10.41.0.2:10420." in line for line in streamed)
@@ -162,7 +169,7 @@ def test_provision_rejects_missing_dockerfile() -> None:
             environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
             repo_url="https://github.com/mangatohjunior/no-docker",
         )
-    assert [c[:2] for c in runner.calls] == [["git", "clone"]]
+    assert [c[:2] for c in runner.calls] == [["git", "clone"], ["git", "-C"]]
 
 
 def test_provision_rejects_invalid_repo_url_without_running_commands() -> None:
@@ -238,9 +245,9 @@ def test_provision_enforces_owner_allowlist_and_passes_runtime_and_docker_host()
         environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
         repo_url="https://github.com/mangatohjunior/demo-app",
     )
-    assert runner.envs[1] is not None and runner.envs[1]["DOCKER_HOST"] == "unix:///run/user/1000/docker.sock"
-    assert runner.envs[1].get("DOCKER_CONFIG")
-    run_cmd = runner.calls[2]
+    assert runner.envs[2] is not None and runner.envs[2]["DOCKER_HOST"] == "unix:///run/user/1000/docker.sock"
+    assert runner.envs[2].get("DOCKER_CONFIG")
+    run_cmd = runner.calls[3]
     assert "--runtime" in run_cmd and "runsc" in run_cmd
 
 
@@ -264,9 +271,9 @@ def test_provision_rolls_back_candidate_when_health_check_fails() -> None:
         )
 
     assert [c[:2] for c in runner.calls] == [
-        ["git", "clone"], ["docker", "build"], ["docker", "run"], ["docker", "logs"], ["docker", "rm"],
+        ["git", "clone"], ["git", "-C"], ["docker", "build"], ["docker", "run"], ["docker", "logs"], ["docker", "rm"],
     ]
-    assert runner.calls[4][-1].startswith("aerodeck-app-f27ee337-bacbb040-new-")
+    assert runner.calls[5][-1].startswith("aerodeck-app-f27ee337-bacbb040-new-")
     assert registered == []
 
 
@@ -342,4 +349,4 @@ def test_provision_rejects_host_network_and_forbidden_dockerfile_directives() ->
             environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
             repo_url="https://github.com/mangatohjunior/evil-dockerfile",
         )
-    assert [c[:2] for c in runner.calls] == [["git", "clone"]]
+    assert [c[:2] for c in runner.calls] == [["git", "clone"], ["git", "-C"]]

@@ -18,6 +18,15 @@ class DeploymentStatus(enum.StrEnum):
     failed = "failed"
 
 
+class DeploymentTrigger(enum.StrEnum):
+    """How a deployment row was requested. Stored as text, not a DB enum."""
+
+    manual = "manual"
+    webhook = "webhook"
+    rollback = "rollback"
+    promote = "promote"
+
+
 class Deployment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """A console deployment request. Creating one does not call DigitalOcean."""
 
@@ -43,6 +52,12 @@ class Deployment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     environment_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
     # Last Celery provision task id when enqueue succeeded with this deployment linked.
     provision_job_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    # Resolved commit after checkout. Null until git rev-parse succeeds (#268).
+    git_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    git_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    trigger: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[DeploymentStatus] = mapped_column(
         Enum(DeploymentStatus, name="deployment_status", native_enum=False, length=16),
         nullable=False,

@@ -115,6 +115,7 @@ export async function POST(request: Request) {
       environmentId,
       envVars,
       addons,
+      actorUserId: user.id,
     });
     return NextResponse.json(deployment, { status: 201 });
   } catch (cause) {

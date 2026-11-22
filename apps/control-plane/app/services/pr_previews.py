@@ -8,6 +8,7 @@ from typing import Any
 
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.models.deployment import DeploymentTrigger
 from app.models.project import Environment, EnvironmentKind
 from app.models.webhook import EnvironmentWebhook
 from app.repositories.environments import EnvironmentRepository
@@ -121,7 +122,8 @@ class PrPreviewService:
                 repo_url=primary.repo_url,
                 project_id=primary.project_id,
                 environment_id=preview_env.id,
-            )
+            ),
+            trigger=DeploymentTrigger.webhook,
         )
         addons = parse_addons(primary.addons_json) or None
         await jobs.enqueue(

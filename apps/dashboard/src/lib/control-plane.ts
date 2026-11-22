@@ -10,6 +10,7 @@ import type {
   Deployment,
   DeploymentBlueprint,
   DeploymentStatus,
+  DeploymentTrigger,
   DnsRecordStatus,
   DnsRecordType,
   EnvironmentOption,
@@ -897,7 +898,7 @@ async function triggerControlPlaneDeploymentAction(
   config: ControlPlaneConfig,
   deploymentId: string,
   action: "redeploy" | "rollback",
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   if (!isControlPlaneUuid(deploymentId)) {
     throw new ControlPlaneError("deploymentId must be a uuid");
@@ -905,11 +906,18 @@ async function triggerControlPlaneDeploymentAction(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${accessToken}`,
+  };
+  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
+    headers["x-aerodeck-user-id"] = options.actorUserId;
+  }
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/${action}`,
     {
       method: "POST",
-      headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+      headers,
       cache: "no-store",
     },
   );
@@ -925,7 +933,7 @@ async function triggerControlPlaneDeploymentAction(
 export function redeployControlPlaneDeployment(
   config: ControlPlaneConfig,
   deploymentId: string,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   return triggerControlPlaneDeploymentAction(config, deploymentId, "redeploy", options);
 }
@@ -933,7 +941,7 @@ export function redeployControlPlaneDeployment(
 export function rollbackControlPlaneDeployment(
   config: ControlPlaneConfig,
   deploymentId: string,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   return triggerControlPlaneDeploymentAction(config, deploymentId, "rollback", options);
 }
@@ -1456,7 +1464,11 @@ export async function listControlPlaneDeployments(
 export async function createControlPlaneDeployment(
   config: ControlPlaneConfig,
   repoUrl: string,
-  options: ListOptions & { projectId?: string; environmentId?: string } = {},
+  options: ListOptions & {
+    projectId?: string;
+    environmentId?: string;
+    actorUserId?: string;
+  } = {},
 ): Promise<Deployment> {
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
@@ -1475,13 +1487,17 @@ export async function createControlPlaneDeployment(
     body.project_id = projectId;
     body.environment_id = environmentId;
   }
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${accessToken}`,
+    "content-type": "application/json",
+  };
+  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
+    headers["x-aerodeck-user-id"] = options.actorUserId;
+  }
   const response = await fetchImpl(`${config.baseUrl}/api/v1/deployments`, {
     method: "POST",
-    headers: {
-      accept: "application/json",
-      authorization: `Bearer ${accessToken}`,
-      "content-type": "application/json",
-    },
+    headers,
     body: JSON.stringify(body),
     cache: "no-store",
   });
@@ -2112,6 +2128,7 @@ export async function createControlPlaneDeploymentAndProvision(
     environmentId: string;
     envVars?: Record<string, string>;
     addons?: AddonType[];
+    actorUserId?: string;
   },
   options: ListOptions = {},
 ): Promise<Deployment> {
@@ -2121,6 +2138,7 @@ export async function createControlPlaneDeploymentAndProvision(
     ...options,
     projectId: input.projectId,
     environmentId: input.environmentId,
+    actorUserId: input.actorUserId,
   });
   try {
     await provisionControlPlaneEnvironment(
@@ -2668,6 +2686,61 @@ function deploymentProvisionJobField(
   return { provision_job_id: value };
 }
 
+const DEPLOYMENT_TRIGGERS = new Set<DeploymentTrigger>(["manual", "webhook", "rollback", "promote"]);
+const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
+
+function optionalGitSha(value: unknown): string | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === "string" && GIT_SHA_PATTERN.test(value)) {
+    return value;
+  }
+  throw new ControlPlaneError("control plane deployment response was not a deployment");
+}
+
+function optionalGitRef(value: unknown): string | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === "string" && value.length > 0 && value.length <= 255 && !value.includes("://")) {
+    return value;
+  }
+  throw new ControlPlaneError("control plane deployment response was not a deployment");
+}
+
+function optionalTrigger(value: unknown): DeploymentTrigger | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === "string" && DEPLOYMENT_TRIGGERS.has(value as DeploymentTrigger)) {
+    return value as DeploymentTrigger;
+  }
+  throw new ControlPlaneError("control plane deployment response was not a deployment");
+}
+
+function optionalTimestamp(value: unknown): string | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === "string" && value.length > 0 && !value.includes("://")) {
+    return value;
+  }
+  throw new ControlPlaneError("control plane deployment response was not a deployment");
+}
+
 function parseDeployment(value: unknown): Deployment {
   if (!value || typeof value !== "object") {
     throw new ControlPlaneError("control plane deployment response was not a deployment");
@@ -2684,6 +2757,11 @@ function parseDeployment(value: unknown): Deployment {
   ) {
     throw new ControlPlaneError("control plane deployment response was not a deployment");
   }
+  const gitSha = optionalGitSha(row.git_sha);
+  const gitRef = optionalGitRef(row.git_ref);
+  const trigger = optionalTrigger(row.trigger);
+  const actorUserId = optionalUuidField(row.actor_user_id);
+  const finishedAt = optionalTimestamp(row.finished_at);
   return {
     id: row.id,
     repo_url: row.repo_url,
@@ -2691,7 +2769,12 @@ function parseDeployment(value: unknown): Deployment {
     repo: row.repo,
     ...deploymentLinkFields(optionalUuidField(row.project_id), optionalUuidField(row.environment_id)),
     ...deploymentProvisionJobField(optionalUuidField(row.provision_job_id)),
+    ...(gitSha !== undefined ? { git_sha: gitSha } : {}),
+    ...(gitRef !== undefined ? { git_ref: gitRef } : {}),
+    ...(trigger !== undefined ? { trigger } : {}),
+    ...(actorUserId !== undefined ? { actor_user_id: actorUserId } : {}),
     started_at: row.started_at,
+    ...(finishedAt !== undefined ? { finished_at: finishedAt } : {}),
     status: row.status as DeploymentStatus,
   };
 }
