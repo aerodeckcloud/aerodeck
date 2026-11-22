@@ -18,6 +18,7 @@ from app.services.docker_policy import (
     validate_network, validate_runtime, validate_uuid, wait_for_tcp_health,
 )
 from app.services.docker_routes import upsert_environment_route_sync
+from app.services.dockerfile_detector import ensure_dockerfile
 from app.services.provisioning import JobKind, JobOutcome, PermanentJobError
 
 __all__ = [
@@ -134,10 +135,15 @@ class DockerProvisioner:
             )
             if clone_res.returncode != 0:
                 raise classify_failure("git clone", clone_res)
-            validate_dockerfile(checkout, owner, repo)
+            ensure_dockerfile(checkout, owner, repo, container_port=self.container_port, on_log=on_log)
             emit(f"Building Docker image {tag}...")
             build_res = self.runner.run(
-                [docker_bin, "build", "--progress=plain", "--tag", tag, str(checkout)],
+                [
+                    docker_bin, "build", "--progress=plain",
+                    "--build-arg", "BUILDKIT_INLINE_CACHE=1",
+                    "--cache-from", tag,
+                    "--tag", tag, str(checkout),
+                ],
                 cwd=checkout, env=self._docker_env({"DOCKER_BUILDKIT": "1"}),
                 timeout=self.build_timeout_seconds, on_line=on_log,
             )

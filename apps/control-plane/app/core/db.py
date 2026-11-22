@@ -6,6 +6,7 @@ routes and services receive it through ``SessionDep`` in ``app/api/deps.py``.
 """
 
 from collections.abc import AsyncIterator
+from urllib.parse import parse_qsl, urlparse
 
 from sqlalchemy import event, text
 from sqlalchemy.engine.interfaces import DBAPIConnection
@@ -15,6 +16,16 @@ from sqlalchemy.pool import StaticPool
 from app.core.errors import DatabaseUnavailableError
 
 SessionLocal = async_sessionmaker(expire_on_commit=False, autoflush=False)
+_PGBOUNCER_PORT = 25061
+
+
+def requires_disabled_statement_cache(database_url: str) -> bool:
+    """Return True when ``database_url`` targets a transaction-mode PgBouncer pooler (#214)."""
+    parsed = urlparse(database_url)
+    if parsed.port == _PGBOUNCER_PORT:
+        return True
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    return query.get("statement_cache_size") == "0" or query.get("pgbouncer", "").lower() in ("1", "true")
 
 
 def create_engine(database_url: str, *, poolclass: type | None = None) -> AsyncEngine:
@@ -37,6 +48,8 @@ def create_engine(database_url: str, *, poolclass: type | None = None) -> AsyncE
 
         return engine
     kwargs: dict[str, object] = {"pool_pre_ping": True}
+    if requires_disabled_statement_cache(database_url):
+        kwargs["connect_args"] = {"statement_cache_size": 0}
     if poolclass is not None:
         kwargs["poolclass"] = poolclass
     else:
