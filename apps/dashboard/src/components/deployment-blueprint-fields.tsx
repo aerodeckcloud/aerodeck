@@ -49,6 +49,7 @@ type DeploymentBlueprintFieldsProps = {
   onToggleAddon: (addon: AddonType) => void;
   extraEnvText: string;
   onExtraEnvTextChange: (value: string) => void;
+  savedEnvKeys?: Set<string>;
   disabled: boolean;
 };
 
@@ -60,6 +61,7 @@ export function DeploymentBlueprintFields({
   onToggleAddon,
   extraEnvText,
   onExtraEnvTextChange,
+  savedEnvKeys,
   disabled,
 }: DeploymentBlueprintFieldsProps) {
   return (
@@ -153,16 +155,24 @@ export function DeploymentBlueprintFields({
           <div className="grid gap-3">
             {blueprint.env.map((item) => {
               const val = fieldValues[item.key] ?? "";
-              const missingRequired = item.required && val.trim().length === 0;
+              const isSaved = savedEnvKeys?.has(item.key) ?? false;
+              const missingRequired = item.required && !isSaved && val.trim().length === 0;
               return (
                 <div key={item.key} className="flex flex-col gap-1">
                   <div className="flex items-center justify-between gap-2">
-                    <Label htmlFor={`bp-env-${item.key}`} className="font-mono text-xs">
-                      {item.key}
-                      {item.required ? (
-                        <span className="ml-1 text-destructive">*</span>
+                    <div className="flex items-center gap-1.5">
+                      <Label htmlFor={`bp-env-${item.key}`} className="font-mono text-xs">
+                        {item.key}
+                        {item.required && !isSaved ? (
+                          <span className="ml-1 text-destructive">*</span>
+                        ) : null}
+                      </Label>
+                      {isSaved ? (
+                        <Badge variant="secondary" className="text-[10px]">
+                          Saved
+                        </Badge>
                       ) : null}
-                    </Label>
+                    </div>
                     {item.generate === "hex32" || item.secret ? (
                       <Button
                         type="button"
@@ -183,7 +193,11 @@ export function DeploymentBlueprintFields({
                     value={val}
                     disabled={disabled}
                     aria-invalid={missingRequired ? true : undefined}
-                    placeholder={item.default ?? (item.required ? "Required value" : "Optional")}
+                    placeholder={
+                      isSaved
+                        ? "Using saved encrypted value (enter new value to override)"
+                        : (item.default ?? (item.required ? "Required value" : "Optional"))
+                    }
                     onValueChange={(next) => onFieldChange(item.key, next)}
                     className="h-9 font-mono text-xs"
                   />

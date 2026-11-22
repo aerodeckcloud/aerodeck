@@ -35,6 +35,12 @@ class JobDispatcher(Protocol):
     def state(self, job_id: str) -> JobState: ...
 
 
+class EnvironmentVarLoader(Protocol):
+    async def load_decrypted_map(
+        self, project_id: uuid.UUID, environment_id: uuid.UUID
+    ) -> dict[str, str]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class JobTicket:
     job_id: str
@@ -60,12 +66,14 @@ class JobService:
         *,
         redis_url: str | None,
         deployment_hooks: DeploymentEnqueueHooks,
+        env_var_loader: EnvironmentVarLoader | None = None,
     ) -> None:
         self._dispatcher = dispatcher
         self._environments = environments
         self._deployments = deployments
         self._redis_url = redis_url
         self._deployment_hooks = deployment_hooks
+        self._env_var_loader = env_var_loader
 
     async def enqueue(
         self,
@@ -84,8 +92,13 @@ class JobService:
             "environment_kind": environment.kind.value,
             "region": environment.region,
         }
+        merged_env: dict[str, str] = {}
+        if kind is JobKind.provision and self._env_var_loader is not None:
+            merged_env.update(await self._env_var_loader.load_decrypted_map(project_id, environment_id))
         if env_vars:
-            meta["env_vars_json"] = json.dumps(env_vars)
+            merged_env.update(env_vars)
+        if merged_env:
+            meta["env_vars_json"] = json.dumps(merged_env)
         if addons:
             meta["addons_json"] = json.dumps(addons)
         linked_deployment_id: uuid.UUID | None = None

@@ -2,11 +2,17 @@ import uuid
 
 from fastapi import APIRouter, status
 
-from app.api.deps import EnvironmentServiceDep, JobServiceDep, PaginationDep
+from app.api.deps import (
+    EnvironmentServiceDep,
+    EnvironmentVariableServiceDep,
+    JobServiceDep,
+    PaginationDep,
+)
 from app.schemas.auth import ErrorResponse
 from app.schemas.common import Page
 from app.schemas.environment import EnvironmentCreate, EnvironmentRead, EnvironmentUpdate
 from app.schemas.job import JobAccepted, ProvisionJobCreate
+from app.services.environment_vars import EnvironmentVarRead, EnvironmentVarUpsertRequest
 from app.services.provisioning import JobKind
 
 router = APIRouter(prefix="/projects/{project_id}/environments", tags=["environments"])
@@ -152,3 +158,49 @@ async def reconcile_environment(
     project_id: uuid.UUID, environment_id: uuid.UUID, jobs: JobServiceDep
 ) -> JobAccepted:
     return await _enqueue(JobKind.reconcile, project_id, environment_id, jobs)
+
+
+@router.get(
+    "/{environment_id}/env-vars",
+    response_model=list[EnvironmentVarRead],
+    status_code=status.HTTP_200_OK,
+    summary="List saved environment variable keys (masked) (#248)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def list_environment_vars(
+    project_id: uuid.UUID,
+    environment_id: uuid.UUID,
+    env_vars: EnvironmentVariableServiceDep,
+) -> list[EnvironmentVarRead]:
+    return await env_vars.list_masked(project_id, environment_id)
+
+
+@router.put(
+    "/{environment_id}/env-vars",
+    response_model=list[EnvironmentVarRead],
+    status_code=status.HTTP_200_OK,
+    summary="Upsert encrypted environment variables (#248)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def upsert_environment_vars(
+    project_id: uuid.UUID,
+    environment_id: uuid.UUID,
+    body: EnvironmentVarUpsertRequest,
+    env_vars: EnvironmentVariableServiceDep,
+) -> list[EnvironmentVarRead]:
+    return await env_vars.upsert_many(project_id, environment_id, body.items)
+
+
+@router.delete(
+    "/{environment_id}/env-vars/{key}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a saved environment variable (#248)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def delete_environment_var(
+    project_id: uuid.UUID,
+    environment_id: uuid.UUID,
+    key: str,
+    env_vars: EnvironmentVariableServiceDep,
+) -> None:
+    await env_vars.delete_key(project_id, environment_id, key)

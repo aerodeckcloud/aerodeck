@@ -236,3 +236,15 @@ export type ContainerRuntimeLogs = {
   lines: string[];
   error: string | null;
 };
+
+export type EnvironmentVarSummary = {
+  key: string;
+  is_secret: boolean;
+  updated_at: string;
+};
+
+export type EnvironmentVarUpsertItem = {
+  key: string;
+  value: string;
+  is_secret?: boolean;
+};

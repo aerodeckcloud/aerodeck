@@ -9,6 +9,8 @@ import type {
   DnsRecordStatus,
   DnsRecordType,
   EnvironmentOption,
+  EnvironmentVarSummary,
+  EnvironmentVarUpsertItem,
   JobKind,
   Project,
   ProjectRoute,
@@ -590,6 +592,118 @@ export async function getControlPlaneDeploymentRuntimeLogs(
     lines: Array.isArray(body.lines) ? body.lines.filter((line): line is string => typeof line === "string") : [],
     error: typeof body.error === "string" ? body.error : null,
   };
+}
+
+function parseEnvironmentVarList(body: unknown): EnvironmentVarSummary[] {
+  if (!Array.isArray(body)) {
+    throw new ControlPlaneError("control plane env vars response was not a list");
+  }
+  return body.map((raw) => {
+    if (!raw || typeof raw !== "object") {
+      throw new ControlPlaneError("control plane env var entry was invalid");
+    }
+    const row = raw as Record<string, unknown>;
+    if (
+      typeof row.key !== "string" ||
+      typeof row.is_secret !== "boolean" ||
+      typeof row.updated_at !== "string"
+    ) {
+      throw new ControlPlaneError("control plane env var entry was invalid");
+    }
+    return { key: row.key, is_secret: row.is_secret, updated_at: row.updated_at };
+  });
+}
+
+export async function listControlPlaneEnvironmentVars(
+  config: ControlPlaneConfig,
+  projectId: string,
+  environmentId: string,
+  options: ListOptions = {},
+): Promise<EnvironmentVarSummary[]> {
+  if (!isControlPlaneUuid(projectId) || !isControlPlaneUuid(environmentId)) {
+    throw new ControlPlaneError("projectId and environmentId must be uuids");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/env-vars`,
+    {
+      headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane env vars request failed (${response.status})`,
+      response.status,
+    );
+  }
+  return parseEnvironmentVarList(await response.json());
+}
+
+export async function upsertControlPlaneEnvironmentVars(
+  config: ControlPlaneConfig,
+  projectId: string,
+  environmentId: string,
+  items: EnvironmentVarUpsertItem[],
+  options: ListOptions = {},
+): Promise<EnvironmentVarSummary[]> {
+  if (!isControlPlaneUuid(projectId) || !isControlPlaneUuid(environmentId)) {
+    throw new ControlPlaneError("projectId and environmentId must be uuids");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/env-vars`,
+    {
+      method: "PUT",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ items }),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane env vars upsert failed (${response.status})`,
+      response.status,
+    );
+  }
+  return parseEnvironmentVarList(await response.json());
+}
+
+export async function deleteControlPlaneEnvironmentVar(
+  config: ControlPlaneConfig,
+  projectId: string,
+  environmentId: string,
+  key: string,
+  options: ListOptions = {},
+): Promise<void> {
+  if (!isControlPlaneUuid(projectId) || !isControlPlaneUuid(environmentId)) {
+    throw new ControlPlaneError("projectId and environmentId must be uuids");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/env-vars/${encodeURIComponent(key)}`,
+    {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane env var delete failed (${response.status})`,
+      response.status,
+    );
+  }
 }
 
 async function postDeploymentStatus(

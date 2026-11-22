@@ -43,6 +43,7 @@ from app.services.dns_records import (
     MemoryDnsRecords,
 )
 from app.services.environments import EnvironmentService
+from app.services.environment_vars import EnvironmentVariableRepository, EnvironmentVariableService
 from app.services.hypervisor import FirecrackerHypervisor, Hypervisor, MemoryHypervisor, SandboxUnavailableError
 from app.services.jobs import DeploymentEnqueueHooks, JobDispatcher, JobService
 from app.services.letsencrypt import LetsEncryptIssuer
@@ -152,6 +153,23 @@ def get_environment_service(
 
 
 EnvironmentServiceDep = Annotated[EnvironmentService, Depends(get_environment_service)]
+
+
+def get_environment_variable_service(
+    session: SessionDep,
+    environments: EnvironmentServiceDep,
+    settings: SettingsDep,
+) -> EnvironmentVariableService:
+    return EnvironmentVariableService(
+        EnvironmentVariableRepository(session),
+        environments,
+        signing_key=settings.auth_signing_key.get_secret_value(),
+    )
+
+
+EnvironmentVariableServiceDep = Annotated[
+    EnvironmentVariableService, Depends(get_environment_variable_service)
+]
 
 
 def get_deployment_terminal_service(
@@ -287,6 +305,7 @@ def get_job_service(
     dispatcher: JobDispatcherDep,
     environments: EnvironmentServiceDep,
     deployments: DeploymentServiceDep,
+    env_vars: EnvironmentVariableServiceDep,
     settings: SettingsDep,
 ) -> JobService:
     return JobService(
@@ -298,6 +317,7 @@ def get_job_service(
             mark_failed=try_mark_deployment_failed_isolated,
             set_provision_job_id=try_set_provision_job_id_isolated,
         ),
+        env_var_loader=env_vars,
     )
 
 
