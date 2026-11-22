@@ -21,6 +21,7 @@ from app.api.deps import (
     ConsoleUserServiceDep,
     DeploymentServiceDep,
     JobServiceDep,
+    ReleaseJobServiceDep,
     PaginationDep,
     SettingsDep,
 )
@@ -154,8 +155,15 @@ async def get_deployment(deployment_id: uuid.UUID, deployments: DeploymentServic
     summary="Record that a deployment finished",
     responses=_NOT_FOUND | _UNAUTHENTICATED,
 )
-async def succeed_deployment(deployment_id: uuid.UUID, deployments: DeploymentServiceDep) -> DeploymentRead:
-    return DeploymentRead.model_validate(await deployments.mark_succeeded(deployment_id))
+async def succeed_deployment(
+    deployment_id: uuid.UUID,
+    deployments: DeploymentServiceDep,
+    jobs: ReleaseJobServiceDep,
+) -> DeploymentRead:
+    stored = await deployments.mark_succeeded(deployment_id)
+    if jobs is not None:
+        await jobs.release_waiting(stored)
+    return DeploymentRead.model_validate(stored)
 
 
 @router.post(
@@ -165,8 +173,15 @@ async def succeed_deployment(deployment_id: uuid.UUID, deployments: DeploymentSe
     summary="Record that a deployment failed",
     responses=_NOT_FOUND | _UNAUTHENTICATED,
 )
-async def fail_deployment(deployment_id: uuid.UUID, deployments: DeploymentServiceDep) -> DeploymentRead:
-    return DeploymentRead.model_validate(await deployments.mark_failed(deployment_id))
+async def fail_deployment(
+    deployment_id: uuid.UUID,
+    deployments: DeploymentServiceDep,
+    jobs: ReleaseJobServiceDep,
+) -> DeploymentRead:
+    stored = await deployments.mark_failed(deployment_id)
+    if jobs is not None:
+        await jobs.release_waiting(stored)
+    return DeploymentRead.model_validate(stored)
 
 
 @router.get(
@@ -267,6 +282,7 @@ async def _enqueue_copy(
         git_ref=git_ref,
     )
     refreshed = await deployments.get(created.id)
+    await deployments.refresh(refreshed)
     return DeploymentRead.model_validate(refreshed)
 
 
@@ -331,6 +347,7 @@ async def cancel_deployment(
 ) -> DeploymentRead:
     stored = await deployments.cancel(deployment_id)
     await jobs.revoke_quietly(stored.provision_job_id)
+    await jobs.release_waiting(stored)
     return DeploymentRead.model_validate(stored)
 
 
@@ -376,4 +393,5 @@ async def rollback_deployment(
         rollback_from_deployment_id=source.id,
     )
     refreshed = await deployments.get(created.id)
+    await deployments.refresh(refreshed)
     return DeploymentRead.model_validate(refreshed)

@@ -183,6 +183,26 @@ async def test_github_webhook_crud_and_push_dispatch(
         assert dup_res.json()["reason"] == "duplicate delivery"
         assert len(dispatcher.calls) == 1
 
+        # A second push waits behind the first instead of starting another job (#271).
+        second = await client.post(
+            "/api/v1/webhooks/github",
+            content=bad_payload,
+            headers={
+                "X-GitHub-Event": "push",
+                "X-Hub-Signature-256": _sign(bad_payload, secret),
+                "X-GitHub-Delivery": "del-2",
+            },
+        )
+        assert second.status_code == 202
+        assert second.json()["status"] == "triggered"
+        assert len(dispatcher.calls) == 1
+        held = await client.get(
+            f"/api/v1/deployments/{second.json()['deployment_ids'][0]}", headers=auth
+        )
+        assert held.status_code == 200
+        assert held.json()["status"] == "queued"
+        assert held.json()["held_for_deployment_id"] == push_res.json()["deployment_ids"][0]
+
         # Delete webhook
         assert (await client.delete(wh_url, headers=auth)).status_code == 204
     finally:

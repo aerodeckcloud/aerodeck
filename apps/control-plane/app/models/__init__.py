@@ -9,7 +9,7 @@ from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigge
 from app.models.dns_record import DnsRecord, DnsRecordStatus, DnsRecordType
 from app.models.environment_var import EnvironmentVariable
 from app.models.notification_channel import NotificationChannel, NotificationProvider
-from app.models.project import Environment, EnvironmentKind, Project
+from app.models.project import DeployOverlap, Environment, EnvironmentKind, Project
 from app.models.project_member import ProjectMember, ProjectRole
 from app.models.route import Route
 from app.models.sandbox import Sandbox, SandboxStatus
@@ -23,6 +23,7 @@ __all__ = [
     "CertificateStatus",
     "ConsoleSession",
     "ConsoleUser",
+    "DeployOverlap",
     "Deployment",
     "DeploymentStatus",
     "DeploymentTrigger",

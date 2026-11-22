@@ -46,6 +46,7 @@ def _job_service(
 
     deployments = AsyncMock()
     deployments.get.return_value = deployment
+    deployments.list_blocking.return_value = []
 
     environments = AsyncMock()
     environments.get.return_value = environment

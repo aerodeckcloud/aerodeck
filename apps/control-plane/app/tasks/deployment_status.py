@@ -7,6 +7,7 @@ session so a flush failure cannot poison the request session and turn 202 into
 """
 
 import asyncio
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -17,8 +18,11 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal, bind_engine, create_engine, unbind_engine
 from app.core.logging import get_logger
 from app.models.deployment import Deployment, DeploymentStatus
+from app.models.project import Environment, Project
 from app.repositories.deployments import DeploymentRepository
 from app.services.deployment_terminal import DeploymentTerminalService
+from app.services.environment_vars import EnvironmentVariableRepository, decrypt_env_value
+from app.services.provision_replay import parse_provision_replay
 
 logger = get_logger("tasks.deployment_status")
 
@@ -247,3 +251,144 @@ def try_mark_deployment_failed_sync(deployment_id: uuid.UUID) -> None:
             type(status_exc).__name__,
             exc_info=status_exc,
         )
+        return
+    try_release_waiting_sync(deployment_id)
+
+
+def try_release_waiting_sync(finished_id: uuid.UUID) -> None:
+    """Start the newest deployment waiting on a failed row. Never raises.
+
+    Uses a private engine, same as the other worker writers. No-ops when the
+    database or Redis URL is unset so a test without a broker does not promote
+    a row it cannot start.
+    """
+    settings = get_settings()
+    if not settings.database_url or not settings.redis_url:
+        return
+    try:
+        spec = asyncio.run(
+            _claim_waiting_on_private_engine(
+                settings.database_url, settings.auth_signing_key, finished_id
+            )
+        )
+    except Exception as release_exc:
+        logger.warning(
+            "event=deployment_wait_release_skipped deployment=%s error_type=%s",
+            finished_id,
+            type(release_exc).__name__,
+        )
+        return
+    if spec is None:
+        return
+    try:
+        from app.core.queue import create_celery_app
+        from app.repositories.jobs import CeleryJobDispatcher
+        from app.services.provisioning import JobKind
+
+        job_id = CeleryJobDispatcher(create_celery_app(settings)).dispatch(
+            JobKind.provision,
+            project_id=spec.pop("project_id"),
+            environment_id=spec.pop("environment_id"),
+            **spec,
+        )
+        asyncio.run(
+            _remember_job_on_private_engine(
+                settings.database_url, uuid.UUID(spec["deployment_id"]), uuid.UUID(job_id)
+            )
+        )
+    except Exception as dispatch_exc:
+        logger.warning(
+            "event=deployment_wait_release_skipped deployment=%s error_type=%s",
+            finished_id,
+            type(dispatch_exc).__name__,
+        )
+
+
+async def _claim_waiting_on_private_engine(
+    database_url: str, signing_key: str, finished_id: uuid.UUID
+) -> dict[str, str] | None:
+    from cryptography.fernet import InvalidToken
+
+    engine = create_engine(database_url, poolclass=NullPool)
+    sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    try:
+        async with sessions() as session:
+            try:
+                finished = await DeploymentRepository(session).get(finished_id)
+                if (
+                    finished is None
+                    or finished.environment_id is None
+                    or finished.project_id is None
+                    or finished.status is not DeploymentStatus.failed
+                ):
+                    return None
+                claimed = await DeploymentRepository(session).claim_newest_waiter(
+                    finished.environment_id, finished.id, finished.finished_at or finished.started_at
+                )
+                if claimed is None or claimed.environment_id is None or claimed.project_id is None:
+                    await session.commit()
+                    return None
+                environment = await session.get(Environment, claimed.environment_id)
+                project = await session.get(Project, claimed.project_id)
+                if environment is None or project is None:
+                    await session.commit()
+                    return None
+                decrypted: dict[str, str] = {}
+                for row in await EnvironmentVariableRepository(session).list_for_environment(
+                    claimed.project_id, claimed.environment_id
+                ):
+                    try:
+                        decrypted[row.key] = decrypt_env_value(row.encrypted_value, signing_key)
+                    except InvalidToken:
+                        logger.warning(
+                            "skipped unreadable encrypted env var %s for environment %s",
+                            row.key,
+                            claimed.environment_id,
+                        )
+                git_ref, rollback_from, addons = parse_provision_replay(claimed.provision_replay_json)
+                kind = environment.kind.value if hasattr(environment.kind, "value") else str(environment.kind)
+                spec: dict[str, str] = {
+                    "project_id": str(claimed.project_id),
+                    "environment_id": str(claimed.environment_id),
+                    "project_slug": project.slug,
+                    "environment_slug": environment.slug,
+                    "environment_kind": kind,
+                    "region": environment.region,
+                    "deployment_id": str(claimed.id),
+                    "image_deployment_id": str(claimed.id),
+                    "repo_url": claimed.repo_url,
+                }
+                if git_ref:
+                    spec["git_ref"] = git_ref
+                if rollback_from is not None:
+                    spec["rollback_from_deployment_id"] = str(rollback_from)
+                if addons:
+                    spec["addons_json"] = json.dumps(addons)
+                if decrypted:
+                    spec["env_vars_json"] = json.dumps(decrypted)
+                await session.commit()
+                return spec
+            except Exception:
+                await session.rollback()
+                raise
+    finally:
+        await engine.dispose()
+
+
+async def _remember_job_on_private_engine(
+    database_url: str, deployment_id: uuid.UUID, job_id: uuid.UUID
+) -> None:
+    engine = create_engine(database_url, poolclass=NullPool)
+    sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    try:
+        async with sessions() as session:
+            try:
+                await DeploymentTerminalService(DeploymentRepository(session)).set_provision_job_id(
+                    deployment_id, job_id
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+    finally:
+        await engine.dispose()

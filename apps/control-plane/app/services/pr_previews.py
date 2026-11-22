@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from app.core.config import Settings
+from app.core.errors import ConflictError
 from app.core.logging import get_logger
 from app.models.deployment import DeploymentTrigger
 from app.models.project import Environment, EnvironmentKind
@@ -126,14 +127,17 @@ class PrPreviewService:
             trigger=DeploymentTrigger.webhook,
         )
         addons = parse_addons(primary.addons_json) or None
-        await jobs.enqueue(
-            JobKind.provision,
-            primary.project_id,
-            preview_env.id,
-            deployment_id=deployment.id,
-            addons=addons,
-            git_ref=head_ref,
-        )
+        try:
+            await jobs.enqueue(
+                JobKind.provision,
+                primary.project_id,
+                preview_env.id,
+                deployment_id=deployment.id,
+                addons=addons,
+                git_ref=head_ref,
+            )
+        except ConflictError:
+            return ("ignored", "container swap already started", [])
         logger.info(
             "triggered PR #%d preview deployment %s for branch %s",
             pr_number,

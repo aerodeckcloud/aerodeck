@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKeyConstraint, String, Uuid
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKeyConstraint, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -61,6 +61,10 @@ class Deployment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Set immediately before the live container is removed. Cancel is refused after this (#270).
     swap_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set while this row waits behind another deploy. Status stays queued (#271).
+    held_for_deployment_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    # git ref, rollback source, and addon names needed to start a held provision. No secret values.
+    provision_replay_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[DeploymentStatus] = mapped_column(
         Enum(DeploymentStatus, name="deployment_status", native_enum=False, length=16),
         nullable=False,

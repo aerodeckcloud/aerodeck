@@ -12,6 +12,7 @@ from typing import Protocol
 
 from starlette.concurrency import run_in_threadpool
 
+from app.core.errors import ConflictError
 from app.core.logging import get_logger
 from app.repositories.jobs import JobState
 from app.services.deployment_logs import (
@@ -19,8 +20,11 @@ from app.services.deployment_logs import (
     PROVISION_QUEUED_LINE,
     publish_line,
 )
+from app.models.deployment import Deployment, DeploymentStatus
+from app.models.project import Environment
 from app.services.deployments import DeploymentService
 from app.services.environments import EnvironmentService
+from app.services.provision_replay import parse_provision_replay, provision_replay_json
 from app.services.provisioning import JobKind
 
 logger = get_logger("services.jobs")
@@ -45,10 +49,11 @@ class EnvironmentVarLoader(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class JobTicket:
-    job_id: str
+    job_id: str | None
     kind: JobKind
     project_id: uuid.UUID
     environment_id: uuid.UUID
+    active_deployment_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +81,7 @@ class JobService:
         self._redis_url = redis_url
         self._deployment_hooks = deployment_hooks
         self._env_var_loader = env_var_loader
+        self._releasing = False
 
     async def enqueue(
         self,
@@ -117,6 +123,17 @@ class JobService:
             meta["deployment_id"] = str(linked_deployment_id)
             meta["image_deployment_id"] = str(linked_deployment_id)
             meta["repo_url"] = linked.repo_url
+            replay_json = provision_replay_json(
+                git_ref=git_ref,
+                rollback_from_deployment_id=rollback_from_deployment_id,
+                addons=addons,
+            )
+            await self._deployments.record_provision_replay(
+                linked_deployment_id, git_ref=git_ref, replay_json=replay_json
+            )
+            waiting = await self._wait_or_override(environment, linked_deployment_id)
+            if waiting is not None:
+                return waiting
             # Seed a non-Done line before the worker runs so SSE cannot stub Done
             # while the job is still queued (Terminal would mark succeeded).
             await publish_line(self._redis_url, linked_deployment_id, PROVISION_QUEUED_LINE)
@@ -143,6 +160,10 @@ class JobService:
                     )
                 # Own session+commit: the request that raised will roll back.
                 await self._deployment_hooks.mark_failed(linked_deployment_id)
+                if not self._releasing:
+                    failed = await self._deployments.get(linked_deployment_id)
+                    failed.status = DeploymentStatus.failed
+                    await self.release_waiting(failed)
             raise
         if linked_deployment_id is not None:
             await self._remember_provision_job_id(linked_deployment_id, job_id)
@@ -180,3 +201,82 @@ class JobService:
                 job_id,
                 type(revoke_exc).__name__,
             )
+
+    async def release_waiting(self, finished: Deployment) -> None:
+        """Start the newest deployment that was waiting on ``finished``.
+
+        Older waiting rows are cancelled. A second caller finds nothing to claim.
+        """
+        if self._releasing:
+            return
+        if finished.environment_id is None or finished.project_id is None:
+            return
+        if finished.status not in (
+            DeploymentStatus.succeeded,
+            DeploymentStatus.failed,
+            DeploymentStatus.cancelled,
+        ):
+            return
+        self._releasing = True
+        try:
+            claimed = await self._deployments.claim_newest_waiter(
+                finished.environment_id, finished.id
+            )
+            if claimed is None or claimed.project_id is None or claimed.environment_id is None:
+                return
+            git_ref, rollback_from, replay_addons = parse_provision_replay(claimed.provision_replay_json)
+            try:
+                await self.enqueue(
+                    JobKind.provision,
+                    claimed.project_id,
+                    claimed.environment_id,
+                    deployment_id=claimed.id,
+                    git_ref=git_ref,
+                    rollback_from_deployment_id=rollback_from,
+                    addons=replay_addons,
+                )
+                await self._deployments.commit()
+            except ConflictError:
+                logger.info("event=deployment_wait_release_blocked deployment=%s", claimed.id)
+            except Exception as release_exc:
+                logger.warning(
+                    "event=deployment_wait_release_skipped deployment=%s error_type=%s",
+                    claimed.id,
+                    type(release_exc).__name__,
+                )
+        finally:
+            self._releasing = False
+
+    async def _wait_or_override(
+        self, environment: Environment, deployment_id: uuid.UUID
+    ) -> JobTicket | None:
+        """Hold, preempt, or return None so the caller dispatches."""
+        blockers = list(await self._deployments.list_blocking(environment.id, deployment_id))
+        if not blockers:
+            return None
+        policy = environment.deploy_overlap if environment.deploy_overlap in ("wait", "override") else "wait"
+        if policy == "override":
+            if any(row.swap_started_at is not None for row in blockers):
+                await self._deployments.cancel(deployment_id)
+                await self._deployments.commit()
+                raise ConflictError("Container swap already started.")
+            for row in blockers:
+                cancelled = await self._deployments.cancel(row.id)
+                await self.revoke_quietly(cancelled.provision_job_id)
+            await self._deployments.cancel_held(environment.id, keep_id=None)
+            return None
+        active = blockers[0]
+        await self._deployments.cancel_held(environment.id, keep_id=deployment_id)
+        await self._deployments.mark_waiting(deployment_id, active.id)
+        logger.info(
+            "event=deployment_waiting deployment=%s active=%s",
+            deployment_id,
+            active.id,
+        )
+        return JobTicket(
+            job_id=None,
+            kind=JobKind.provision,
+            project_id=environment.project_id,
+            environment_id=environment.id,
+            active_deployment_id=active.id,
+        )

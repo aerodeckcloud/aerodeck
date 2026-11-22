@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Annotated
 
-from fastapi import Depends, Header, Query
+from fastapi import Depends, Header, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -374,6 +374,22 @@ def get_certificate_service(
 CertificateServiceDep = Annotated[CertificateService, Depends(get_certificate_service)]
 
 
+class _UnconfiguredDispatcher:
+    """Dispatch fails when Redis is unset. Holding a deployment never calls it."""
+
+    def dispatch(self, kind: object, *, project_id: str, environment_id: str, **meta: str) -> str:
+        _ = (kind, project_id, environment_id, meta)
+        raise QueueUnavailableError("Job queue is not configured (AERODECK_REDIS_URL is unset)")
+
+    def state(self, job_id: str) -> object:
+        _ = job_id
+        raise QueueUnavailableError("Job queue is not configured (AERODECK_REDIS_URL is unset)")
+
+    def revoke(self, job_id: str) -> None:
+        _ = job_id
+        raise QueueUnavailableError("Job queue is not configured (AERODECK_REDIS_URL is unset)")
+
+
 def get_job_dispatcher(settings: SettingsDep) -> JobDispatcher:
     if settings.redis_url is None:
         raise QueueUnavailableError("Job queue is not configured (AERODECK_REDIS_URL is unset)")
@@ -383,12 +399,21 @@ def get_job_dispatcher(settings: SettingsDep) -> JobDispatcher:
 JobDispatcherDep = Annotated[JobDispatcher, Depends(get_job_dispatcher)]
 
 
-def get_job_service(
-    dispatcher: JobDispatcherDep,
-    environments: EnvironmentServiceDep,
-    deployments: DeploymentServiceDep,
-    env_vars: EnvironmentVariableServiceDep,
-    settings: SettingsDep,
+def _dispatcher_for(request: Request, settings: Settings) -> JobDispatcher:
+    override = request.app.dependency_overrides.get(get_job_dispatcher)
+    if override is not None:
+        return override()
+    if settings.redis_url is None:
+        return _UnconfiguredDispatcher()
+    return CeleryJobDispatcher(create_celery_app(settings))
+
+
+def _build_job_service(
+    dispatcher: JobDispatcher,
+    environments: EnvironmentService,
+    deployments: DeploymentService,
+    env_vars: EnvironmentVariableService,
+    settings: Settings,
 ) -> JobService:
     return JobService(
         dispatcher,
@@ -403,7 +428,37 @@ def get_job_service(
     )
 
 
+def get_job_service(
+    request: Request,
+    environments: EnvironmentServiceDep,
+    deployments: DeploymentServiceDep,
+    env_vars: EnvironmentVariableServiceDep,
+    settings: SettingsDep,
+) -> JobService:
+    return _build_job_service(
+        _dispatcher_for(request, settings), environments, deployments, env_vars, settings
+    )
+
+
 JobServiceDep = Annotated[JobService, Depends(get_job_service)]
+
+
+def get_release_job_service(
+    request: Request,
+    environments: EnvironmentServiceDep,
+    deployments: DeploymentServiceDep,
+    env_vars: EnvironmentVariableServiceDep,
+    settings: SettingsDep,
+) -> JobService | None:
+    """Release a waiting deploy only when a queue (or a test double) can start it."""
+    if settings.redis_url is None and get_job_dispatcher not in request.app.dependency_overrides:
+        return None
+    return _build_job_service(
+        _dispatcher_for(request, settings), environments, deployments, env_vars, settings
+    )
+
+
+ReleaseJobServiceDep = Annotated[JobService | None, Depends(get_release_job_service)]
 
 # auto_error=False so a missing header becomes our {"detail", "code"} 401, not FastAPI's 403.
 _bearer = HTTPBearer(auto_error=False, description="Access token from POST /api/v1/auth/token")

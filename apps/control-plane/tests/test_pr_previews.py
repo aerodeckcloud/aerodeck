@@ -189,7 +189,8 @@ async def test_pull_request_preview_open_sync_fork_and_close_lifecycle(
             headers={"X-GitHub-Event": "pull_request", "X-Hub-Signature-256": _sign(sync_payload, secret)},
         )
         assert sync_res.status_code == 202
-        assert len(dispatcher.calls) == 2
+        # The open deploy is still running, so synchronize waits instead of starting a second job.
+        assert len(dispatcher.calls) == 1
 
         # 4. PR closed -> cleans up pr-42 environment
         close_payload = json.dumps(

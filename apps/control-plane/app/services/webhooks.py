@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import AppError, ConflictError, NotFoundError
 from app.core.github import canonical_github_repo_url, parse_github_repo
 from app.core.logging import get_logger
 from app.models.deployment import DeploymentTrigger
@@ -330,13 +330,17 @@ class WebhookService:
                 trigger=DeploymentTrigger.webhook,
             )
             addons = _parse_addons(webhook.addons_json) or None
-            await jobs.enqueue(
-                JobKind.provision,
-                webhook.project_id,
-                webhook.environment_id,
-                deployment_id=deployment.id,
-                addons=addons,
-            )
+            try:
+                await jobs.enqueue(
+                    JobKind.provision,
+                    webhook.project_id,
+                    webhook.environment_id,
+                    deployment_id=deployment.id,
+                    addons=addons,
+                )
+            except ConflictError:
+                skipped_reason = "container swap already started"
+                continue
             webhook.last_delivery_id = delivery_id
             webhook.last_triggered_at = datetime.now(UTC)
             triggered_ids.append(deployment.id)

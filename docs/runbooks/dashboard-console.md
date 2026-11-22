@@ -63,6 +63,15 @@ job leaves the live container alone. After `swap_started_at` is set the API
 returns 409 and the swap continues. Succeeded, failed, and cancelled rows return
 422. Deployment detail shows Cancel only for queued and running control-plane
 rows.
+Each environment row can set what happens when a deploy is already queued or
+running. **Wait for the current deploy** (the default) keeps the new row
+`queued` with `held_for_deployment_id` and does not start a job. Older waiting
+rows are cancelled so only the newest starts after the active deploy finishes.
+**Replace the current deploy** cancels the active row when `swap_started_at`
+is still empty, and returns 409 once the swap has started. Push webhooks use
+the same setting. The browser PATCHes
+`/api/console/projects/{id}/environments/{environmentId}` and does not call
+FastAPI.
 When the console client is set and a deployment has `provision_job_id`, detail
 shows a Provision job panel that polls `GET /api/console/jobs/{id}` (→
 `GET /api/v1/jobs/{id}`) about every 5s until succeeded/failed, a poll

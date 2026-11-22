@@ -20,8 +20,9 @@ import {
   ENVIRONMENT_REGIONS,
   parseEnvironmentUpdateFields,
 } from "@/lib/environment-input";
+import { nativeSelectClassName } from "@/lib/native-select";
 import { PROJECT_NAME_MAX } from "@/lib/project-input";
-import type { EnvironmentOption } from "@/lib/types";
+import type { DeployOverlap, EnvironmentOption } from "@/lib/types";
 
 type EnvironmentEditRowProps = {
   environment: EnvironmentOption;
@@ -39,6 +40,7 @@ export function EnvironmentEditRow({
   const [name, setName] = useState(environment.name);
   const [kind, setKind] = useState(environment.kind);
   const [region, setRegion] = useState(environment.region);
+  const [overlap, setOverlap] = useState<DeployOverlap>(environment.deploy_overlap ?? "wait");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -56,7 +58,8 @@ export function EnvironmentEditRow({
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    const fields: { name?: string; kind?: string; region?: string } = {};
+    const fields: { name?: string; kind?: string; region?: string; deploy_overlap?: DeployOverlap } =
+      {};
     if (name.trim() !== environment.name) {
       fields.name = name;
     }
@@ -65,6 +68,9 @@ export function EnvironmentEditRow({
     }
     if (region !== environment.region) {
       fields.region = region;
+    }
+    if (overlap !== (environment.deploy_overlap ?? "wait")) {
+      fields.deploy_overlap = overlap;
     }
     const parsed = parseEnvironmentUpdateFields(fields);
     if (!parsed.ok) {
@@ -82,6 +88,7 @@ export function EnvironmentEditRow({
       setName(updated.name);
       setKind(updated.kind);
       setRegion(updated.region);
+      setOverlap(updated.deploy_overlap ?? "wait");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Update failed.");
     } finally {
@@ -158,6 +165,25 @@ export function EnvironmentEditRow({
         onRegionChange={setRegion}
         onClearError={clearError}
       />
+      <div className="grid gap-2 sm:col-span-2">
+        <Label htmlFor={`${idPrefix}-overlap`}>When a deploy is already running</Label>
+        <select
+          id={`${idPrefix}-overlap`}
+          className={nativeSelectClassName()}
+          value={overlap}
+          disabled={busy}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (next === "wait" || next === "override") {
+              setOverlap(next);
+              clearError();
+            }
+          }}
+        >
+          <option value="wait">Wait for the current deploy</option>
+          <option value="override">Replace the current deploy</option>
+        </select>
+      </div>
       <div className="flex flex-wrap items-end gap-2">
         <Button type="submit" size="sm" disabled={busy}>
           {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}

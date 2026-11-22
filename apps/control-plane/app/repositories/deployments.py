@@ -102,3 +102,93 @@ class DeploymentRepository:
             base.order_by(Deployment.started_at.desc(), Deployment.id.desc()).limit(limit).offset(offset)
         )
         return rows.all(), int(total or 0)
+
+    async def list_blocking(
+        self, environment_id: uuid.UUID, exclude_id: uuid.UUID
+    ) -> Sequence[Deployment]:
+        """Queued or running deploys that are not themselves waiting."""
+        rows = await self._session.scalars(
+            select(Deployment)
+            .where(
+                Deployment.environment_id == environment_id,
+                Deployment.status.in_((DeploymentStatus.queued, DeploymentStatus.running)),
+                Deployment.held_for_deployment_id.is_(None),
+                Deployment.id != exclude_id,
+            )
+            .order_by(Deployment.started_at.asc(), Deployment.id.asc())
+        )
+        return rows.all()
+
+    async def cancel_held(
+        self, environment_id: uuid.UUID, finished_at: datetime, *, keep_id: uuid.UUID | None
+    ) -> None:
+        """Cancel queued rows that are waiting, except ``keep_id`` when it is set."""
+        statement = update(Deployment).where(
+            Deployment.environment_id == environment_id,
+            Deployment.held_for_deployment_id.is_not(None),
+            Deployment.status == DeploymentStatus.queued,
+        )
+        if keep_id is not None:
+            statement = statement.where(Deployment.id != keep_id)
+        await self._session.execute(
+            statement.values(status=DeploymentStatus.cancelled, finished_at=finished_at)
+        )
+
+    async def mark_waiting(self, deployment_id: uuid.UUID, active_id: uuid.UUID) -> None:
+        stored = await self._session.get(Deployment, deployment_id)
+        if stored is None:
+            return
+        stored.status = DeploymentStatus.queued
+        stored.held_for_deployment_id = active_id
+        await self._session.flush()
+        await self._session.refresh(stored)
+
+    async def record_provision_replay(
+        self, deployment_id: uuid.UUID, *, git_ref: str | None, replay_json: str | None
+    ) -> None:
+        if not git_ref and replay_json is None:
+            return
+        stored = await self._session.get(Deployment, deployment_id)
+        if stored is None:
+            return
+        if git_ref:
+            stored.git_ref = git_ref
+        if replay_json is not None:
+            stored.provision_replay_json = replay_json
+        await self._session.flush()
+        await self._session.refresh(stored)
+
+    async def claim_newest_waiter(
+        self, environment_id: uuid.UUID, finished_id: uuid.UUID, finished_at: datetime
+    ) -> Deployment | None:
+        """Start the newest row waiting on ``finished_id`` and cancel the older ones."""
+        rows = list(
+            (
+                await self._session.scalars(
+                    select(Deployment)
+                    .where(
+                        Deployment.environment_id == environment_id,
+                        Deployment.held_for_deployment_id == finished_id,
+                        Deployment.status == DeploymentStatus.queued,
+                    )
+                    .order_by(Deployment.started_at.desc(), Deployment.id.desc())
+                )
+            ).all()
+        )
+        if not rows:
+            return None
+        newest = rows[0]
+        for row in rows[1:]:
+            row.status = DeploymentStatus.cancelled
+            row.finished_at = finished_at
+        newest.status = DeploymentStatus.running
+        newest.held_for_deployment_id = None
+        await self._session.flush()
+        await self._session.refresh(newest)
+        return newest
+
+    async def commit(self) -> None:
+        await self._session.commit()
+
+    async def refresh(self, deployment: Deployment) -> None:
+        await self._session.refresh(deployment)

@@ -129,6 +129,41 @@ class DeploymentService:
     async def cancel(self, deployment_id: uuid.UUID) -> Deployment:
         return await self._terminal.cancel(deployment_id)
 
+    async def list_blocking(
+        self, environment_id: uuid.UUID, exclude_id: uuid.UUID
+    ) -> Sequence[Deployment]:
+        return await self._deployments.list_blocking(environment_id, exclude_id)
+
+    async def cancel_held(
+        self, environment_id: uuid.UUID, *, keep_id: uuid.UUID | None
+    ) -> None:
+        await self._deployments.cancel_held(
+            environment_id, datetime.now(UTC), keep_id=keep_id
+        )
+
+    async def mark_waiting(self, deployment_id: uuid.UUID, active_id: uuid.UUID) -> None:
+        await self._deployments.mark_waiting(deployment_id, active_id)
+
+    async def record_provision_replay(
+        self, deployment_id: uuid.UUID, *, git_ref: str | None, replay_json: str | None
+    ) -> None:
+        await self._deployments.record_provision_replay(
+            deployment_id, git_ref=git_ref, replay_json=replay_json
+        )
+
+    async def claim_newest_waiter(
+        self, environment_id: uuid.UUID, finished_id: uuid.UUID
+    ) -> Deployment | None:
+        return await self._deployments.claim_newest_waiter(
+            environment_id, finished_id, datetime.now(UTC)
+        )
+
+    async def commit(self) -> None:
+        await self._deployments.commit()
+
+    async def refresh(self, deployment: Deployment) -> None:
+        await self._deployments.refresh(deployment)
+
     async def _mark_terminal(
         self, deployment_id: uuid.UUID, status: DeploymentStatus
     ) -> Deployment:
