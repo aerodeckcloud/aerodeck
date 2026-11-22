@@ -1,18 +1,27 @@
 import uuid
 
 from fastapi import APIRouter, status
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import (
     EnvironmentServiceDep,
     EnvironmentVariableServiceDep,
     JobServiceDep,
     PaginationDep,
+    SettingsDep,
     WebhookServiceDep,
 )
 from app.schemas.auth import ErrorResponse
 from app.schemas.common import Page
 from app.schemas.environment import EnvironmentCreate, EnvironmentRead, EnvironmentUpdate
 from app.schemas.job import JobAccepted, ProvisionJobCreate
+from app.services.container_ops import (
+    ContainerActionRequest,
+    ContainerActionResult,
+    ContainerMetricsRead,
+    dispatch_container_action,
+    dispatch_container_metrics,
+)
 from app.services.environment_vars import EnvironmentVarRead, EnvironmentVarUpsertRequest
 from app.services.provisioning import JobKind
 from app.services.webhooks import WebhookRead, WebhookUpsertRequest
@@ -251,3 +260,49 @@ async def delete_environment_webhook(
     webhooks: WebhookServiceDep,
 ) -> None:
     await webhooks.delete_for_environment(project_id, environment_id)
+
+
+@router.post(
+    "/{environment_id}/actions",
+    response_model=ContainerActionResult,
+    status_code=status.HTTP_200_OK,
+    summary="Start, stop, or restart an environment's active container (#254)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def run_environment_container_action(
+    project_id: uuid.UUID,
+    environment_id: uuid.UUID,
+    body: ContainerActionRequest,
+    environments: EnvironmentServiceDep,
+    settings: SettingsDep,
+) -> ContainerActionResult:
+    await environments.get(project_id, environment_id)
+    return await run_in_threadpool(
+        dispatch_container_action,
+        settings,
+        project_id=project_id,
+        environment_id=environment_id,
+        action=body.action,
+    )
+
+
+@router.get(
+    "/{environment_id}/metrics",
+    response_model=ContainerMetricsRead,
+    status_code=status.HTTP_200_OK,
+    summary="Fetch live CPU, memory, and uptime metrics for an environment container (#254)",
+    responses=_UNAUTHENTICATED | _NOT_FOUND,
+)
+async def get_environment_container_metrics(
+    project_id: uuid.UUID,
+    environment_id: uuid.UUID,
+    environments: EnvironmentServiceDep,
+    settings: SettingsDep,
+) -> ContainerMetricsRead:
+    await environments.get(project_id, environment_id)
+    return await run_in_threadpool(
+        dispatch_container_metrics,
+        settings,
+        project_id=project_id,
+        environment_id=environment_id,
+    )

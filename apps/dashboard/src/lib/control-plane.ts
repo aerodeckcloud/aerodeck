@@ -2,6 +2,9 @@ import { isControlPlaneUuid } from "./control-plane-uuid";
 import type {
   AcceptedJob,
   AddonType,
+  ContainerAction,
+  ContainerActionResult,
+  ContainerMetrics,
   ContainerRuntimeLogs,
   Deployment,
   DeploymentBlueprint,
@@ -877,6 +880,69 @@ export function rollbackControlPlaneDeployment(
   options: ListOptions = {},
 ): Promise<Deployment> {
   return triggerControlPlaneDeploymentAction(config, deploymentId, "rollback", options);
+}
+
+export async function runControlPlaneContainerAction(
+  config: ControlPlaneConfig,
+  projectId: string,
+  environmentId: string,
+  action: ContainerAction,
+  options: ListOptions = {},
+): Promise<ContainerActionResult> {
+  if (!isControlPlaneUuid(projectId) || !isControlPlaneUuid(environmentId)) {
+    throw new ControlPlaneError("projectId and environmentId must be uuids");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/actions`,
+    {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ action }),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane container action failed (${response.status})`,
+      response.status,
+    );
+  }
+  return (await response.json()) as ContainerActionResult;
+}
+
+export async function getControlPlaneContainerMetrics(
+  config: ControlPlaneConfig,
+  projectId: string,
+  environmentId: string,
+  options: ListOptions = {},
+): Promise<ContainerMetrics> {
+  if (!isControlPlaneUuid(projectId) || !isControlPlaneUuid(environmentId)) {
+    throw new ControlPlaneError("projectId and environmentId must be uuids");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/metrics`,
+    {
+      headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane container metrics failed (${response.status})`,
+      response.status,
+    );
+  }
+  return (await response.json()) as ContainerMetrics;
 }
 
 async function postDeploymentStatus(

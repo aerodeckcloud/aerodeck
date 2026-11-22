@@ -8,6 +8,7 @@ import {
   EnvironmentRegionField,
   withCurrentOption,
 } from "@/components/environment-form-fields";
+import { EnvironmentRuntimePanel } from "@/components/environment-runtime-panel";
 import { EnvironmentVarsManager } from "@/components/environment-vars-manager";
 import { EnvironmentWebhookManager } from "@/components/environment-webhook-manager";
 import { Button } from "@/components/ui/button";
@@ -204,6 +205,10 @@ export function EnvironmentEditRow({
           {error}
         </p>
       ) : null}
+      <EnvironmentRuntimePanel
+        projectId={environment.project_id}
+        environmentId={environment.id}
+      />
       <EnvironmentVarsManager
         projectId={environment.project_id}
         environmentId={environment.id}
