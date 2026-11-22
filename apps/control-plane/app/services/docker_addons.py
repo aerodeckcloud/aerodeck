@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
+import secrets
 import time
 import uuid
 from collections.abc import Callable
@@ -14,6 +17,14 @@ from app.services.provisioning import PermanentJobError, TransientJobError
 LogSink = Callable[[str], None]
 _ALLOWED_ADDONS = frozenset({"postgres", "redis"})
 _ADDON_READY_TIMEOUT_SECONDS = 30
+_FALLBACK_EPHEMERAL_KEY = secrets.token_bytes(32)
+
+
+def _addon_password(project_id: uuid.UUID, environment_id: uuid.UUID, addon_type: str) -> str:
+    """Derive a per-environment addon password via HMAC-SHA256 keyed by AERODECK_AUTH_SIGNING_KEY."""
+    secret = os.environ.get("AERODECK_AUTH_SIGNING_KEY", "").encode("utf-8") or _FALLBACK_EPHEMERAL_KEY
+    msg = f"{project_id}:{environment_id}:{addon_type}".encode("utf-8")
+    return hmac.new(secret, msg, hashlib.sha256).hexdigest()[:32]
 
 
 def _wait_for_addon_ready(
@@ -55,11 +66,6 @@ def tenant_network_name(project_id: str, environment_id: str) -> str:
     p_uuid = validate_uuid(project_id, "project_id")
     e_uuid = validate_uuid(environment_id, "environment_id")
     return f"aerodeck-net-{p_uuid.hex[:8]}-{e_uuid.hex[:8]}"
-
-
-def _addon_password(project_id: uuid.UUID, environment_id: uuid.UUID, addon_type: str, signing_seed: str = "") -> str:
-    material = f"{project_id}:{environment_id}:{addon_type}:{signing_seed or 'aerodeck-addon-v1'}".encode("utf-8")
-    return hashlib.sha256(material).hexdigest()[:28]
 
 
 def ensure_tenant_network(

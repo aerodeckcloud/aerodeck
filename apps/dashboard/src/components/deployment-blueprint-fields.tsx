@@ -33,14 +33,11 @@ export function parseDotenvText(raw: string): Record<string, string> {
 }
 
 function generateHex32(): string {
-  const bytes = new Uint8Array(24);
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    crypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < bytes.length; i += 1) {
-      bytes[i] = Math.floor(Math.random() * 256);
-    }
+  if (typeof crypto === "undefined" || typeof crypto.getRandomValues !== "function") {
+    throw new Error("Web Crypto API is unavailable in this browser context.");
   }
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 

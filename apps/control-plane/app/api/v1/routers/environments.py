@@ -128,7 +128,7 @@ async def provision_environment(
 ) -> JobAccepted:
     deployment_id = body.deployment_id if body is not None else None
     env_vars = body.env_vars if body is not None else None
-    addons = list(body.addons) if body is not None and body.addons else None
+    addons = body.addons if body is not None else None
     return await _enqueue(
         JobKind.provision,
         project_id,
