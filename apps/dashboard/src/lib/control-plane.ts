@@ -19,6 +19,9 @@ import type {
   EnvironmentWebhook,
   EnvironmentWebhookInput,
   JobKind,
+  NotificationChannel,
+  NotificationChannelInput,
+  NotificationTestResult,
   Project,
   ProjectMember,
   ProjectRole,
@@ -1120,6 +1123,132 @@ export async function listControlPlaneProjectAuditLogs(
   }
   const body = (await response.json()) as { items?: unknown };
   return Array.isArray(body.items) ? (body.items as AuditEvent[]) : [];
+}
+
+export async function getControlPlaneProjectNotifications(
+  config: ControlPlaneConfig,
+  projectId: string,
+  options: ListOptions = {},
+): Promise<NotificationChannel | null> {
+  if (!isControlPlaneUuid(projectId)) {
+    throw new ControlPlaneError("projectId must be a uuid");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/notifications`,
+    {
+      headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane project notifications failed (${response.status})`,
+      response.status,
+    );
+  }
+  return (await response.json()) as NotificationChannel | null;
+}
+
+export async function upsertControlPlaneProjectNotifications(
+  config: ControlPlaneConfig,
+  projectId: string,
+  input: NotificationChannelInput,
+  actorUserId?: string,
+  options: ListOptions = {},
+): Promise<NotificationChannel> {
+  if (!isControlPlaneUuid(projectId)) {
+    throw new ControlPlaneError("projectId must be a uuid");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${accessToken}`,
+    "content-type": "application/json",
+  };
+  if (actorUserId && isControlPlaneUuid(actorUserId)) {
+    headers["x-aerodeck-user-id"] = actorUserId;
+  }
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/notifications`,
+    {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(input),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane project notifications upsert failed (${response.status})`,
+      response.status,
+    );
+  }
+  return (await response.json()) as NotificationChannel;
+}
+
+export async function deleteControlPlaneProjectNotifications(
+  config: ControlPlaneConfig,
+  projectId: string,
+  actorUserId?: string,
+  options: ListOptions = {},
+): Promise<void> {
+  if (!isControlPlaneUuid(projectId)) {
+    throw new ControlPlaneError("projectId must be a uuid");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers: Record<string, string> = { authorization: `Bearer ${accessToken}` };
+  if (actorUserId && isControlPlaneUuid(actorUserId)) {
+    headers["x-aerodeck-user-id"] = actorUserId;
+  }
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/notifications`,
+    { method: "DELETE", headers, cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane project notifications delete failed (${response.status})`,
+      response.status,
+    );
+  }
+}
+
+export async function testControlPlaneProjectNotifications(
+  config: ControlPlaneConfig,
+  projectId: string,
+  actorUserId?: string,
+  options: ListOptions = {},
+): Promise<NotificationTestResult> {
+  if (!isControlPlaneUuid(projectId)) {
+    throw new ControlPlaneError("projectId must be a uuid");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${accessToken}`,
+  };
+  if (actorUserId && isControlPlaneUuid(actorUserId)) {
+    headers["x-aerodeck-user-id"] = actorUserId;
+  }
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/notifications/test`,
+    { method: "POST", headers, cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane project notifications test failed (${response.status})`,
+      response.status,
+    );
+  }
+  return (await response.json()) as NotificationTestResult;
 }
 
 async function postDeploymentStatus(

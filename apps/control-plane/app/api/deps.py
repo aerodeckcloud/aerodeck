@@ -49,6 +49,7 @@ from app.services.environment_vars import EnvironmentVariableRepository, Environ
 from app.services.hypervisor import FirecrackerHypervisor, Hypervisor, MemoryHypervisor, SandboxUnavailableError
 from app.services.jobs import DeploymentEnqueueHooks, JobDispatcher, JobService
 from app.services.letsencrypt import LetsEncryptIssuer
+from app.services.notifications import NotificationChannelRepository, NotificationService
 from app.services.pr_previews import PrPreviewService
 from app.services.projects import ProjectService
 from app.services.project_members import ProjectMemberRepository, ProjectMemberService
@@ -121,6 +122,19 @@ def get_audit_log_service(
 
 
 AuditLogServiceDep = Annotated[AuditLogService, Depends(get_audit_log_service)]
+
+
+def get_notification_service(
+    session: SessionDep, projects: ProjectServiceDep, settings: SettingsDep
+) -> NotificationService:
+    return NotificationService(
+        NotificationChannelRepository(session),
+        projects,
+        signing_key=settings.auth_signing_key.get_secret_value(),
+    )
+
+
+NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 
 
 def get_actor_user_id(

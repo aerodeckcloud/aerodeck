@@ -18,6 +18,9 @@ import {
   type EnvironmentVarUpsertItem,
   type EnvironmentWebhook,
   type EnvironmentWebhookInput,
+  type NotificationChannel,
+  type NotificationChannelInput,
+  type NotificationTestResult,
   type Project,
   type ProjectDetail,
   type ProjectMember,
@@ -340,6 +343,52 @@ export async function fetchProjectAuditLogs(projectId: string): Promise<AuditEve
   const response = await fetch(
     `/api/console/projects/${encodeURIComponent(projectId)}/audit-logs`,
     { credentials: "same-origin", cache: "no-store" },
+  );
+  return readJson(response);
+}
+
+export async function fetchProjectNotifications(
+  projectId: string,
+): Promise<NotificationChannel | null> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/notifications`,
+    { credentials: "same-origin", cache: "no-store" },
+  );
+  return readJson(response);
+}
+
+export async function upsertProjectNotifications(
+  projectId: string,
+  input: NotificationChannelInput,
+): Promise<NotificationChannel> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/notifications`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(input),
+    },
+  );
+  return readJson(response);
+}
+
+export async function deleteProjectNotifications(projectId: string): Promise<void> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/notifications`,
+    { method: "DELETE", credentials: "same-origin" },
+  );
+  if (!response.ok) {
+    await readJson(response);
+  }
+}
+
+export async function testProjectNotifications(
+  projectId: string,
+): Promise<NotificationTestResult> {
+  const response = await fetch(
+    `/api/console/projects/${encodeURIComponent(projectId)}/notifications/test`,
+    { method: "POST", credentials: "same-origin" },
   );
   return readJson(response);
 }
