@@ -9,12 +9,48 @@ When a repository cloned by ``DockerProvisioner`` does not contain a root
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 
-from app.services.docker_policy import validate_dockerfile
+from app.services.docker_policy import CommandRunner, sanitize_log_line, validate_dockerfile
 
 LogSink = Callable[[str], None]
+_EXPOSE_RE = re.compile(r"^\s*EXPOSE\s+(\d+)(?:/tcp)?\b", re.IGNORECASE | re.MULTILINE)
+
+
+def detect_exposed_port(dockerfile: Path, default_port: int = 8000) -> int:
+    """Return the first valid TCP ``EXPOSE`` port in ``dockerfile``, or ``default_port``."""
+    try:
+        content = dockerfile.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return default_port
+    match = _EXPOSE_RE.search(content)
+    if match:
+        port = int(match.group(1))
+        if 1 <= port <= 65535:
+            return port
+    return default_port
+
+
+def stream_container_crash_logs(
+    runner: CommandRunner,
+    docker_bin: str,
+    container_name: str,
+    docker_env: dict[str, str],
+    on_log: LogSink | None,
+) -> str:
+    """Fetch last 30 log lines from a failed candidate container and stream them to ``on_log``."""
+    res = runner.run([docker_bin, "logs", "--tail", "30", container_name], env=docker_env, timeout=15)
+    combined = f"{res.stdout}\n{res.stderr}".strip()
+    if not combined:
+        return ""
+    lines = [sanitize_log_line(line) for line in combined.splitlines() if line.strip()]
+    if on_log is not None and lines:
+        on_log(f"--- Container {container_name} output before failure ---")
+        for line in lines[-25:]:
+            on_log(f"  {line}")
+    return lines[-1] if lines else ""
 
 
 def detect_dockerfile_template(checkout: Path, container_port: int = 8000) -> tuple[str, str] | None:

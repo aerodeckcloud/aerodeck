@@ -264,9 +264,9 @@ def test_provision_rolls_back_candidate_when_health_check_fails() -> None:
         )
 
     assert [c[:2] for c in runner.calls] == [
-        ["git", "clone"], ["docker", "build"], ["docker", "run"], ["docker", "rm"],
+        ["git", "clone"], ["docker", "build"], ["docker", "run"], ["docker", "logs"], ["docker", "rm"],
     ]
-    assert runner.calls[3][-1].startswith("aerodeck-app-f27ee337-bacbb040-new-")
+    assert runner.calls[4][-1].startswith("aerodeck-app-f27ee337-bacbb040-new-")
     assert registered == []
 
 

@@ -18,7 +18,7 @@ from app.services.docker_policy import (
     validate_network, validate_runtime, validate_uuid, wait_for_tcp_health,
 )
 from app.services.docker_routes import upsert_environment_route_sync
-from app.services.dockerfile_detector import ensure_dockerfile
+from app.services.dockerfile_detector import detect_exposed_port, ensure_dockerfile, stream_container_crash_logs
 from app.services.provisioning import JobKind, JobOutcome, PermanentJobError
 
 __all__ = [
@@ -40,8 +40,6 @@ class RouteRegistrar(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class DockerProvisioner:
-    """Clone a GitHub repo, build its Dockerfile, and run it as an isolated container."""
-
     docker_bin: str
     git_bin: str
     bind_host: str
@@ -106,16 +104,12 @@ class DockerProvisioner:
             raise PermanentJobError("A valid GitHub repo_url is required for Docker provisioning")
         owner, repo = parsed
         if self.allowed_owners and owner.lower() not in self.allowed_owners:
-            raise PermanentJobError(
-                f"Repository owner {owner!r} is not in AERODECK_DOCKER_ALLOWED_OWNERS"
-            )
+            raise PermanentJobError(f"Repository owner {owner!r} is not in AERODECK_DOCKER_ALLOWED_OWNERS")
         clone_url = f"{canonical_github_repo_url(owner, repo)}.git"
         cname = container_name_for(str(p_uuid), str(e_uuid))
         tag = image_tag_for(project_slug, environment_slug, str(p_uuid), str(e_uuid))
-        docker_bin = validate_binary(self.docker_bin, "docker_bin")
-        git_bin = validate_binary(self.git_bin, "git_bin")
-        runtime = validate_runtime(self.docker_runtime)
-        network = validate_network(self.docker_network)
+        docker_bin, git_bin = validate_binary(self.docker_bin, "docker_bin"), validate_binary(self.git_bin, "git_bin")
+        runtime, network = validate_runtime(self.docker_runtime), validate_network(self.docker_network)
 
         def emit(msg: str) -> None:
             if on_log is not None:
@@ -130,7 +124,8 @@ class DockerProvisioner:
             )
             if clone_res.returncode != 0:
                 raise classify_failure("git clone", clone_res)
-            ensure_dockerfile(checkout, owner, repo, container_port=self.container_port, on_log=on_log)
+            dockerfile = ensure_dockerfile(checkout, owner, repo, container_port=self.container_port, on_log=on_log)
+            target_port = detect_exposed_port(dockerfile, default_port=self.container_port)
             emit(f"Building Docker image {tag}...")
             build_res = self.runner.run(
                 [docker_bin, "build", "--progress=plain", "--build-arg", "BUILDKIT_INLINE_CACHE=1", "--cache-from", tag, "--tag", tag, str(checkout)],
@@ -147,26 +142,26 @@ class DockerProvisioner:
             "--network", network, "--cap-drop=ALL", "--security-opt", "no-new-privileges:true",
             "--memory", self.memory_limit, "--cpus", self.cpus_limit, "--pids-limit", str(self.pids_limit),
             "--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
-            "--label", "aerodeck.managed=true",
-            "--label", f"aerodeck.project_id={p_uuid}",
-            "--label", f"aerodeck.environment_id={e_uuid}",
-            "-p", f"{self.bind_host}:{host_port}:{self.container_port}",
+            "--label", "aerodeck.managed=true", "--label", f"aerodeck.project_id={p_uuid}",
+            "--label", f"aerodeck.environment_id={e_uuid}", "-e", f"PORT={target_port}",
+            "-p", f"{self.bind_host}:{host_port}:{target_port}",
         ]
         if runtime is not None:
             run_cmd.extend(["--runtime", runtime])
         run_cmd.append(tag)
 
-        emit(f"Starting candidate container {candidate} on {self.bind_host}:{host_port}...")
+        emit(f"Starting candidate container {candidate} on {self.bind_host}:{host_port} (-> :{target_port})...")
         run_res = self.runner.run(run_cmd, env=docker_env, timeout=60)
         if run_res.returncode != 0:
             raise classify_failure("docker run", run_res)
 
         emit(f"Waiting for health check on {self.bind_host}:{host_port} (timeout {self.health_timeout_seconds}s)...")
         if not self.health_checker(self.bind_host, host_port, self.health_timeout_seconds):
+            last = stream_container_crash_logs(self.runner, docker_bin, candidate, docker_env, on_log)
             self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)
             raise PermanentJobError(
-                f"container {candidate} failed health check on {self.bind_host}:{host_port}; "
-                "rolled back and kept previous container live"
+                f"container {candidate} failed health check on {self.bind_host}:{host_port}"
+                f"{f' (last log: {last})' if last else ''}; rolled back and kept previous container live"
             )
 
         route_hostname: str | None = None
