@@ -402,7 +402,7 @@ async def promote_deployment(
     "/{deployment_id}/rollback",
     response_model=DeploymentRead,
     status_code=status.HTTP_201_CREATED,
-    summary="Roll back an environment to a previously succeeded deployment image (#253)",
+    summary="Roll back to a succeeded deployment image and its variable snapshot (#273)",
     responses=_NOT_FOUND | _UNAUTHENTICATED | _UNPROCESSABLE | _UNAVAILABLE,
 )
 async def rollback_deployment(

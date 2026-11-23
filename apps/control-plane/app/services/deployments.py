@@ -57,12 +57,26 @@ class EnvironmentLookup(Protocol):
     async def lock_for_deploy(self, environment_id: uuid.UUID) -> None: ...
 
 
+class EnvVarPlainEntry(Protocol):
+    """Value plus secret flag for an exact reinstate (#273)."""
+
+    @property
+    def value(self) -> str: ...
+
+    @property
+    def is_secret(self) -> bool: ...
+
+
 class EnvVarSnapshotter(Protocol):
     """Seal / name helpers for the release variable snapshot (#273)."""
 
     async def load_decrypted_map(
         self, project_id: uuid.UUID, environment_id: uuid.UUID
     ) -> dict[str, str]: ...
+
+    async def load_decrypted_entries(
+        self, project_id: uuid.UUID, environment_id: uuid.UUID
+    ) -> dict[str, EnvVarPlainEntry]: ...
 
     def seal(self, values: dict[str, str]) -> str: ...
 
@@ -76,6 +90,13 @@ class EnvVarSnapshotter(Protocol):
 
     async def replace_all(
         self, project_id: uuid.UUID, environment_id: uuid.UUID, values: dict[str, str]
+    ) -> list[str]: ...
+
+    async def replace_exact(
+        self,
+        project_id: uuid.UUID,
+        environment_id: uuid.UUID,
+        entries: dict[str, EnvVarPlainEntry],
     ) -> list[str]: ...
 
     def try_unseal(
@@ -257,12 +278,12 @@ class DeploymentService:
 
     async def restore_variables_from_snapshot(
         self, source: Deployment
-    ) -> tuple[bool, dict[str, str] | None]:
+    ) -> tuple[bool, dict[str, EnvVarPlainEntry] | None]:
         """Replace the environment's variables with the release snapshot.
 
         The caller must hold the environment deploy lock. Returns
-        ``(restored, prior)`` where ``prior`` is the map to reinstate if a later
-        step (queue dispatch) fails after this mutation was committed (#273).
+        ``(restored, prior)`` where ``prior`` keeps values and ``is_secret`` so a
+        failed queue dispatch can reinstate without flipping secret flags (#273).
         """
         if self._env_vars is None or not source.env_vars_snapshot:
             return False, None
@@ -275,7 +296,7 @@ class DeploymentService:
         )
         if values is None:
             return False, None
-        prior = await self._env_vars.load_decrypted_map(
+        prior = await self._env_vars.load_decrypted_entries(
             source.project_id, source.environment_id
         )
         await self._env_vars.replace_all(source.project_id, source.environment_id, values)
@@ -290,20 +311,23 @@ class DeploymentService:
         self,
         project_id: uuid.UUID,
         environment_id: uuid.UUID,
-        values: dict[str, str],
+        entries: dict[str, EnvVarPlainEntry],
     ) -> None:
         """Put variables back after a rollback restore that must not stick.
 
-        Commits immediately so a subsequent request rollback cannot undo it.
+        Re-acquires the deploy lock (enqueue failure already committed and
+        released it), then writes the prior map with original secret flags and
+        commits so a concurrent provision cannot race the reinstate (#273).
         """
         if self._env_vars is None:
             return
-        await self._env_vars.replace_all(project_id, environment_id, values)
+        await self._environments.lock_for_deploy(environment_id)
+        await self._env_vars.replace_exact(project_id, environment_id, entries)
         await self.commit()
         logger.info(
             "event=deployment_env_vars_reinstated environment=%s keys=%d",
             environment_id,
-            len(values),
+            len(entries),
         )
 
     async def _mark_terminal(

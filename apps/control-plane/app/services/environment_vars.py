@@ -9,7 +9,7 @@ import re
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -25,6 +25,13 @@ logger = get_logger("services.environment_vars")
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _ENCRYPTION_DOMAIN = b"aerodeck:env-vars:v1:"
+
+
+class EnvVarPlain(NamedTuple):
+    """Decrypted value plus the stored secret flag (for exact reinstate)."""
+
+    value: str
+    is_secret: bool
 
 
 class EnvironmentLookup(Protocol):
@@ -298,35 +305,59 @@ class EnvironmentVariableService:
         Keys not in ``values`` are deleted. Restored values are marked secret so
         a snapshot never weakens a key that was secret before (#273).
         """
+        return await self.replace_exact(
+            project_id,
+            environment_id,
+            {key: EnvVarPlain(value, True) for key, value in values.items()},
+        )
+
+    async def replace_exact(
+        self,
+        project_id: uuid.UUID,
+        environment_id: uuid.UUID,
+        entries: dict[str, EnvVarPlain],
+    ) -> list[str]:
+        """Make the environment match ``entries``, preserving each ``is_secret``."""
         await self._environments.get(project_id, environment_id)
         existing = await self._repo.list_for_environment(project_id, environment_id)
         existing_by_key = {row.key: row for row in existing}
-        for key, value in values.items():
+        for key, entry in entries.items():
             await self._repo.upsert(
                 project_id=project_id,
                 environment_id=environment_id,
                 key=key,
-                encrypted_value=encrypt_env_value(value, self._signing_key),
-                is_secret=True,
+                encrypted_value=encrypt_env_value(entry.value, self._signing_key),
+                is_secret=entry.is_secret,
             )
         for key, row in existing_by_key.items():
-            if key not in values:
+            if key not in entries:
                 await self._repo.delete(row)
         logger.info(
             "event=env_vars_replaced environment=%s keys=%d",
             environment_id,
-            len(values),
+            len(entries),
         )
-        return sorted(values)
+        return sorted(entries)
 
     async def load_decrypted_map(
         self, project_id: uuid.UUID, environment_id: uuid.UUID
     ) -> dict[str, str]:
+        return {
+            key: entry.value
+            for key, entry in (await self.load_decrypted_entries(project_id, environment_id)).items()
+        }
+
+    async def load_decrypted_entries(
+        self, project_id: uuid.UUID, environment_id: uuid.UUID
+    ) -> dict[str, EnvVarPlain]:
         rows = await self._repo.list_for_environment(project_id, environment_id)
-        decrypted: dict[str, str] = {}
+        decrypted: dict[str, EnvVarPlain] = {}
         for row in rows:
             try:
-                decrypted[row.key] = decrypt_env_value(row.encrypted_value, self._signing_key)
+                decrypted[row.key] = EnvVarPlain(
+                    decrypt_env_value(row.encrypted_value, self._signing_key),
+                    row.is_secret,
+                )
             except InvalidToken:
                 logger.warning(
                     "skipped unreadable encrypted env var %s for environment %s",

@@ -28,6 +28,13 @@ export async function POST(
   let restoreVariables = true;
   try {
     const payload = (await request.json()) as { restore_variables?: unknown };
+    if ("restore_variables" in payload && typeof payload.restore_variables !== "boolean") {
+      return jsonError(
+        400,
+        "restore_variables must be a boolean.",
+        "invalid_restore_variables",
+      );
+    }
     if (typeof payload.restore_variables === "boolean") {
       restoreVariables = payload.restore_variables;
     }

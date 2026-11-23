@@ -52,7 +52,7 @@ class RollbackService:
         # Serialize restore with enqueue's meta load (same transaction lock).
         await self._environments.lock_for_deploy(source.environment_id)
 
-        prior: dict[str, str] | None = None
+        prior = None
         variables_restored = False
         if restore_variables:
             variables_restored, prior = await self._deployments.restore_variables_from_snapshot(
@@ -76,11 +76,14 @@ class RollbackService:
                 deployment_id=created.id,
                 rollback_from_deployment_id=source.id,
             )
-        except Exception:
+        except Exception as exc:
             if prior is not None:
-                await self._deployments.reinstate_variables(
-                    source.project_id, source.environment_id, prior
-                )
+                try:
+                    await self._deployments.reinstate_variables(
+                        source.project_id, source.environment_id, prior
+                    )
+                except Exception as reinstate_exc:
+                    raise reinstate_exc from exc
             raise
 
         logger.info(

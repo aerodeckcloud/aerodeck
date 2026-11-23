@@ -143,6 +143,15 @@ export function ProjectDeploymentsSection({
     action: "redeploy" | "deploy-latest" | "rollback" | "promote",
   ) {
     setError(null);
+    if (action === "rollback") {
+      const dep = deployments.find((row) => row.id === deploymentId);
+      if (!dep) {
+        return;
+      }
+      if (!(await confirmRollback(dep))) {
+        return;
+      }
+    }
     setBusyId(`${deploymentId}:${action}`);
     try {
       let next: Deployment;
@@ -151,15 +160,6 @@ export function ProjectDeploymentsSection({
       } else if (action === "deploy-latest") {
         next = await deployLatestDeployment(deploymentId);
       } else if (action === "rollback") {
-        const dep = deployments.find((row) => row.id === deploymentId);
-        if (!dep) {
-          setBusyId(null);
-          return;
-        }
-        if (!(await confirmRollback(dep))) {
-          setBusyId(null);
-          return;
-        }
         next = await rollbackDeployment(deploymentId, { restoreVariables: true });
       } else {
         const targetId = promoteTargetById[deploymentId];

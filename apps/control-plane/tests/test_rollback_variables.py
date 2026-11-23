@@ -356,7 +356,7 @@ async def test_rollback_dispatch_failure_reinstates_variables(
             json={
                 "items": [
                     {"key": "KEEP", "value": "drifted-value", "is_secret": True},
-                    {"key": "EXTRA", "value": "only-after", "is_secret": True},
+                    {"key": "EXTRA", "value": "only-after", "is_secret": False},
                 ]
             },
             headers=auth,
@@ -370,7 +370,10 @@ async def test_rollback_dispatch_failure_reinstates_variables(
             )
 
         listed = (await client.get(base, headers=auth)).json()
-        assert [row["key"] for row in listed] == ["EXTRA", "KEEP"]
+        assert [(row["key"], row["is_secret"]) for row in listed] == [
+            ("EXTRA", False),
+            ("KEEP", True),
+        ]
         sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
         async with sessions() as session:
             rows = (
@@ -383,7 +386,9 @@ async def test_rollback_dispatch_failure_reinstates_variables(
             values = {
                 row.key: decrypt_env_value(row.encrypted_value, SIGNING_KEY) for row in rows
             }
+            secrets = {row.key: row.is_secret for row in rows}
             assert values == {"KEEP": "drifted-value", "EXTRA": "only-after"}
+            assert secrets == {"KEEP": True, "EXTRA": False}
     finally:
         app.dependency_overrides.pop(get_job_dispatcher, None)
 
