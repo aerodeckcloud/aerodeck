@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { ControlPlaneLamp } from "@/components/control-plane-lamp";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { fetchMe, logoutAccount, SessionEnded } from "@/lib/api";
@@ -82,15 +83,7 @@ export function AppShell({
             <Menu />
           </button>
           <div className="hidden items-center gap-2 sm:flex">
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                controlPlane
-                  ? "bg-primary shadow-[0_0_10px_var(--primary)]"
-                  : "bg-runway",
-              )}
-              aria-hidden
-            />
+            <ControlPlaneLamp controlPlane={controlPlane} glow="10px" />
             <p className="font-mono text-[11px] tracking-[0.24em] text-muted-foreground uppercase">
               Deck
             </p>

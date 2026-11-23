@@ -12,6 +12,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { BrandMark } from "@/components/brand-mark";
+import { ControlPlaneLamp } from "@/components/control-plane-lamp";
 import { buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
@@ -108,13 +109,7 @@ export function AppSidebar({ mobileOpen, onCloseMobile, controlPlane = false }: 
 
         <div className="border-t border-sidebar-border p-4">
           <div className="flex items-center gap-2">
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                controlPlane ? "bg-primary shadow-[0_0_8px_var(--primary)]" : "bg-runway",
-              )}
-              aria-hidden
-            />
+            <ControlPlaneLamp controlPlane={controlPlane} />
             <p className="font-mono text-[10px] tracking-[0.16em] text-muted-foreground uppercase">
               {controlPlane ? "Live control plane" : "Local mock"}
             </p>
