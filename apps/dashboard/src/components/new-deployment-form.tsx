@@ -132,6 +132,11 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
       return;
     }
 
+    if (isControlPlane && !blueprint) {
+      await handleInspect();
+      return;
+    }
+
     if (blueprint) {
       const missing = blueprint.env.find(
         (item) =>
@@ -208,7 +213,7 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
         <CardTitle>Repository</CardTitle>
         <CardDescription>
           {isControlPlane
-            ? "HTTPS GitHub URL and an existing environment. Click Inspect to load aerodeck.yaml / docker-compose variables and database addons."
+            ? "The GitHub repository to scan. The next pages are built from what that scan finds."
             : "HTTPS GitHub URL. Validated in the browser, then POSTed to /api/mock/v1/deployments."}
         </CardDescription>
       </CardHeader>
@@ -242,25 +247,13 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
                 }}
                 className="h-10 flex-1"
               />
-              {isControlPlane ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={submitting || inspecting || enqueueBlocked || repoUrl.trim().length === 0}
-                  onClick={handleInspect}
-                  className="h-10"
-                >
-                  {inspecting ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Search data-icon="inline-start" />}
-                  {inspecting ? "Inspecting…" : "Inspect"}
-                </Button>
-              ) : null}
             </div>
             <p className="text-xs text-muted-foreground">
               Reads <code>aerodeck.yaml</code>, <code>docker-compose.yaml</code>,{" "}
               <code>Dockerfile</code>, and <code>.env.example</code>.
             </p>
           </div>
-          {isControlPlane ? (
+          {isControlPlane && blueprint ? (
             <>
               <EnvironmentSelect
                 environments={environments}
@@ -312,10 +305,21 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
           ) : null}
         </CardContent>
         <CardFooter className="justify-end">
-          <Button type="submit" size="lg" disabled={!canSubmit}>
-            {submitting ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Rocket data-icon="inline-start" />}
-            {submitting ? "Deploying…" : "Deploy"}
-          </Button>
+          {isControlPlane && !blueprint ? (
+            <Button
+              type="submit"
+              size="lg"
+              disabled={submitting || inspecting || enqueueBlocked || repoUrl.trim().length === 0}
+            >
+              {inspecting ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Search data-icon="inline-start" />}
+              {inspecting ? "Scanning…" : "Scan repository"}
+            </Button>
+          ) : (
+            <Button type="submit" size="lg" disabled={!canSubmit}>
+              {submitting ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Rocket data-icon="inline-start" />}
+              {submitting ? "Deploying…" : "Deploy"}
+            </Button>
+          )}
         </CardFooter>
       </form>
     </Card>

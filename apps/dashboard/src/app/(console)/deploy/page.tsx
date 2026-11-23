@@ -14,7 +14,7 @@ export default async function DeployPage() {
         title="New Deployment"
         description={
           controlPlane
-            ? "Point AeroDeck at a GitHub repository and an existing environment. The dashboard server stores the deployment and queues provision."
+            ? "Start with the GitHub repository. AeroDeck scans it, then the next pages come from what that scan finds."
             : "Point AeroDeck at a GitHub repository. The request stays on this Next.js app — the mock API pretends to be the control plane."
         }
       />
