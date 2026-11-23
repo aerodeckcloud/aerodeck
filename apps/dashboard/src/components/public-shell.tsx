@@ -36,9 +36,13 @@ export function PublicShell({ children }: { children: React.ReactNode }) {
       <main className="console-canvas flex-1">{children}</main>
 
       <footer className="border-t border-border">
-        <div className="flex w-full flex-col gap-3 px-4 py-6 text-xs text-muted-foreground md:flex-row md:items-end md:justify-between md:px-8">
-          <div className="flex flex-col gap-1">
-            <p>AeroDeck · GitOps on DigitalOcean</p>
+        <div className="flex w-full flex-col gap-4 px-4 py-6 text-xs text-muted-foreground md:flex-row md:items-end md:justify-between md:px-8">
+          <div className="flex flex-col gap-2">
+            <Link href="/about" className="flex items-center gap-2 text-foreground">
+              <BrandMark className="size-6 text-primary" />
+              <span className="font-heading text-sm font-semibold tracking-tight">AeroDeck</span>
+            </Link>
+            <p>GitOps on DigitalOcean</p>
             <p>Local mock UI. No FastAPI and no cloud apply from this page.</p>
           </div>
           <nav aria-label="Legal" className="flex items-center gap-4">
