@@ -15,6 +15,7 @@ import {
   statesMatch,
 } from "@/lib/google-oauth";
 import { loginGoogleUser } from "@/lib/mock-store";
+import { publicOrigin } from "@/lib/public-origin";
 import {
   OAUTH_STATE_COOKIE,
   OAUTH_VERIFIER_COOKIE,
@@ -34,7 +35,7 @@ export async function GET(request: Request) {
   await connection();
 
   const incoming = new URL(request.url);
-  const origin = incoming.origin;
+  const origin = publicOrigin(request);
   const jar = await cookies();
   const expectedState = jar.get(OAUTH_STATE_COOKIE)?.value;
   const receivedState = incoming.searchParams.get("state") ?? undefined;
@@ -49,7 +50,11 @@ export async function GET(request: Request) {
 
   try {
     const code = incoming.searchParams.get("code");
-    const profile = await resolveGoogleProfile(incoming, jar.get(OAUTH_VERIFIER_COOKIE)?.value);
+    const profile = await resolveGoogleProfile(
+      incoming,
+      origin,
+      jar.get(OAUTH_VERIFIER_COOKIE)?.value,
+    );
     const config = readControlPlaneConfig();
     const token =
       config && code && isRealGoogleConfigured()
@@ -74,6 +79,7 @@ export async function GET(request: Request) {
 
 async function resolveGoogleProfile(
   incoming: URL,
+  origin: string,
   verifier: string | undefined,
 ): Promise<{ email: string; subject: string }> {
   const code = incoming.searchParams.get("code");
@@ -81,7 +87,7 @@ async function resolveGoogleProfile(
     if (!verifier) {
       throw new Error("missing_pkce_verifier");
     }
-    return exchangeGoogleCode(incoming.origin, code, verifier);
+    return exchangeGoogleCode(origin, code, verifier);
   }
 
   if (incoming.searchParams.get("mock") === "1") {

@@ -52,6 +52,10 @@ docker run -d --name aerodeck-dashboard --network host --restart unless-stopped 
   aerodeck/dashboard:dev
 ```
 
+`HOSTNAME=0.0.0.0` is only how the process binds the port. Google redirects
+use the host the browser sent, so the callback stays on
+`https://dev.app.aero-deck.app` instead of `0.0.0.0`.
+
 `enroll-console-client.sh` keeps those two lines when it rotates the console
 API client. Copy `dashboard_env.py` into the same directory as that script
 before you run it. See [dashboard-console.md](dashboard-console.md).
