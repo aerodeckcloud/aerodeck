@@ -759,10 +759,14 @@ async def test_rollback_restore_requires_a_developer(
         headers=owner,
     )
 
-    for headers in (viewer, stranger):
+    for headers, restore in (
+        (viewer, True),
+        (viewer, False),
+        (stranger, True),
+    ):
         refused = await client.post(
             f"/api/v1/deployments/{dep['id']}/rollback",
-            json={"restore_variables": True},
+            json={"restore_variables": restore},
             headers=headers,
         )
         assert refused.status_code == 403, refused.text

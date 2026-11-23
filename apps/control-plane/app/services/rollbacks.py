@@ -50,10 +50,12 @@ class RollbackService:
         if source.status is not DeploymentStatus.succeeded:
             raise UnprocessableError("Only succeeded deployments can be rolled back to.")
 
+        # Image-only rollback still retags the live environment, so the same role
+        # applies whether or not variables are restored (#273).
+        await self._members.require_role(source.project_id, actor_user_id, ProjectRole.developer)
+
         entries = None
         if restore_variables:
-            # Same bar as saving variables: a viewer must not rewrite project secrets (#273).
-            await self._members.require_role(source.project_id, actor_user_id, ProjectRole.developer)
             entries = self._deployments.read_snapshot_entries(source)
 
         created = await self._deployments.create(
