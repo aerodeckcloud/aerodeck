@@ -5,7 +5,7 @@ from typing import Protocol
 
 from sqlalchemy.exc import IntegrityError
 
-from app.core.errors import NotFoundError
+from app.core.errors import ConflictError, NotFoundError
 from app.core.github import canonical_github_repo_url, parse_github_repo
 from app.core.logging import get_logger
 from app.models.deployment import (
@@ -20,6 +20,16 @@ from app.schemas.deployment import DeploymentCreate
 from app.services.deployment_terminal import DeploymentTerminalService
 
 logger = get_logger("services.deployments")
+
+NOT_STARTED_DETAIL = "Deployment is waiting for another deployment and has not started."
+
+
+def is_waiting(deployment: Deployment) -> bool:
+    """True while the row is held behind another deployment (#271)."""
+    return (
+        deployment.status == DeploymentStatus.queued
+        and deployment.held_for_deployment_id is not None
+    )
 
 
 def _is_deployment_environment_fk_violation(exc: IntegrityError) -> bool:
@@ -167,23 +177,29 @@ class DeploymentService:
     async def refresh(self, deployment: Deployment) -> None:
         await self._deployments.refresh(deployment)
 
-    async def _lock_environment_of(self, deployment_id: uuid.UUID) -> None:
+    async def _lock_environment_of(self, deployment_id: uuid.UUID) -> Deployment | None:
         """Take the environment lock before writing the deployment row.
 
         Enqueue locks the environment and then writes deployment rows. A status
         change that wrote its row first and asked for the lock second could
         deadlock against it on PostgreSQL, so both use the same order.
+        Returns the row as it is once the lock is held.
         """
         current = await self._deployments.get(deployment_id)
         if current is not None and current.environment_id is not None:
             await self._environments.lock_for_deploy(current.environment_id)
             # Another request may have changed the row while this one waited.
             await self._deployments.refresh(current)
+        return current
 
     async def _mark_terminal(
         self, deployment_id: uuid.UUID, status: DeploymentStatus
     ) -> Deployment:
-        await self._lock_environment_of(deployment_id)
+        current = await self._lock_environment_of(deployment_id)
+        if current is not None and is_waiting(current):
+            # Nothing has run yet, so there is no outcome to record. Without this
+            # a console that reported one would close the row and it would never start.
+            raise ConflictError(NOT_STARTED_DETAIL)
         stored = await self._terminal.mark(deployment_id, status)
         if stored is None:
             raise NotFoundError(f"Deployment {deployment_id} not found")

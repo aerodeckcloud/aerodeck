@@ -19,7 +19,7 @@ from typing import Protocol
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
-from app.core.errors import ConflictError, UnprocessableError
+from app.core.errors import ConflictError, QueueUnavailableError, UnprocessableError
 from app.core.logging import get_logger
 from app.models.deployment import Deployment, DeploymentStatus
 from app.models.project import DeployOverlap, Environment
@@ -27,6 +27,7 @@ from app.repositories.jobs import JobState
 from app.services.deployment_logs import (
     PROVISION_QUEUE_FAILED_LINE,
     PROVISION_QUEUED_LINE,
+    PROVISION_WAITING_LINE,
     publish_line,
 )
 from app.services.deployments import DeploymentService
@@ -278,6 +279,7 @@ class JobService:
         """Keep the row queued behind ``active``. Only the newest waiter survives."""
         superseded = await self._deployments.cancel_waiting(environment.id, keep_id=deployment_id)
         await self._deployments.mark_waiting(deployment_id, active.id, replay.to_json())
+        await self._publish_waiting_line(deployment_id)
         logger.info(
             "event=deployment_waiting deployment=%s active=%s superseded=%d",
             deployment_id,
@@ -291,6 +293,22 @@ class JobService:
             environment_id=environment.id,
             active_deployment_id=active.id,
         )
+
+    async def _publish_waiting_line(self, deployment_id: uuid.UUID) -> None:
+        """Give the log stream a line so it does not fall back to the stub.
+
+        The stub ends in ``Done``, which the console reads as success. The
+        outcome routes refuse a waiting row either way, so a log store that is
+        down must not stop the deployment from waiting.
+        """
+        try:
+            await publish_line(self._redis_url, deployment_id, PROVISION_WAITING_LINE)
+        except QueueUnavailableError as publish_exc:
+            logger.warning(
+                "event=deployment_log_waiting_publish_skipped deployment=%s error_type=%s",
+                deployment_id,
+                type(publish_exc).__name__,
+            )
 
     async def _override(
         self, environment: Environment, deployment_id: uuid.UUID, active: list[Deployment]

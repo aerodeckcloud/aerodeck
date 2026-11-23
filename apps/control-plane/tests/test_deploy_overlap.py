@@ -18,6 +18,12 @@ from app.api.deps import get_job_dispatcher
 from app.models.deployment import Deployment
 from app.repositories.deployments import DeploymentRepository
 from app.repositories.jobs import JobState
+from app.services.deployment_logs import (
+    DONE_LINE,
+    PROVISION_QUEUED_LINE,
+    PROVISION_WAITING_LINE,
+    memory_log_lines,
+)
 from app.services.provisioning import JobKind
 from tests.conftest import TEST_DATABASE_URL
 
@@ -366,6 +372,94 @@ async def test_cancelling_a_waiting_deploy_drops_what_it_kept(
         assert len(dispatcher.calls) == 1
     finally:
         app.dependency_overrides.pop(get_job_dispatcher, None)
+
+
+@pytest.mark.asyncio
+async def test_a_waiting_deploy_cannot_be_given_an_outcome_before_it_starts(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    """The console reports an outcome from the log stream. A waiting row has none yet."""
+    dispatcher = FakeDispatcher()
+    app.dependency_overrides[get_job_dispatcher] = lambda: dispatcher
+    try:
+        project, environment = await _project_env(client, auth, slug="overlap-no-outcome")
+        first = await _deployment(client, auth, project["id"], environment["id"])
+        await client.post(
+            _provision(project["id"], environment["id"]),
+            json={"deployment_id": first["id"]},
+            headers=auth,
+        )
+        waiting = await _deployment(client, auth, project["id"], environment["id"])
+        held = await client.post(
+            _provision(project["id"], environment["id"]),
+            json={"deployment_id": waiting["id"]},
+            headers=auth,
+        )
+        assert held.json()["active_deployment_id"] == first["id"]
+
+        # The stream has a real line, so it never falls back to the stub's Done.
+        assert memory_log_lines(uuid.UUID(waiting["id"])) == [PROVISION_WAITING_LINE]
+        stream = await client.get(f"/api/v1/deployments/{waiting['id']}/logs", headers=auth)
+        assert stream.status_code == 200, stream.text
+        assert f"data: {PROVISION_WAITING_LINE}" in stream.text
+        assert f"data: {DONE_LINE}" not in stream.text
+
+        for outcome in ("succeeded", "failed"):
+            refused = await client.post(
+                f"/api/v1/deployments/{waiting['id']}/{outcome}", headers=auth
+            )
+            assert refused.status_code == 409, refused.text
+            assert refused.json()["code"] == "conflict"
+        untouched = await client.get(f"/api/v1/deployments/{waiting['id']}", headers=auth)
+        assert untouched.json()["status"] == "queued"
+        assert untouched.json()["held_for_deployment_id"] == first["id"]
+
+        # It still starts when the active deploy ends, and then takes an outcome.
+        finished = await client.post(f"/api/v1/deployments/{first['id']}/succeeded", headers=auth)
+        assert finished.status_code == 200, finished.text
+        assert len(dispatcher.calls) == 2
+        assert dispatcher.calls[1]["meta"]["deployment_id"] == waiting["id"]
+        assert memory_log_lines(uuid.UUID(waiting["id"])) == [
+            PROVISION_WAITING_LINE,
+            PROVISION_QUEUED_LINE,
+        ]
+        done = await client.post(f"/api/v1/deployments/{waiting['id']}/succeeded", headers=auth)
+        assert done.status_code == 200, done.text
+        assert done.json()["status"] == "succeeded"
+    finally:
+        app.dependency_overrides.pop(get_job_dispatcher, None)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_active_deploy_without_a_queue_leaves_the_waiter_queued(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    """No queue means nowhere to run it, so the waiter is not claimed and failed."""
+    project, environment = await _project_env(client, auth, slug="overlap-cancel-no-queue")
+    active = await _deployment(client, auth, project["id"], environment["id"])
+    sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
+    async with sessions() as session:
+        row = await session.get(Deployment, uuid.UUID(active["id"]))
+        assert row is not None
+        row.dispatched_at = datetime.now(UTC)
+        await session.commit()
+
+    waiting = await _deployment(client, auth, project["id"], environment["id"])
+    held = await client.post(
+        _provision(project["id"], environment["id"]),
+        json={"deployment_id": waiting["id"]},
+        headers=auth,
+    )
+    assert held.status_code == 202, held.text
+    assert held.json()["active_deployment_id"] == active["id"]
+
+    cancelled = await client.post(f"/api/v1/deployments/{active['id']}/cancel", headers=auth)
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+
+    left = await client.get(f"/api/v1/deployments/{waiting['id']}", headers=auth)
+    assert left.json()["status"] == "queued"
+    assert left.json()["held_for_deployment_id"] == active["id"]
 
 
 @pytest.mark.asyncio

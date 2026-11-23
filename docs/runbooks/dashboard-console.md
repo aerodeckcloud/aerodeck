@@ -87,6 +87,12 @@ the git ref, the rollback source, the addon names, and any one-off variables
 sent with the deploy. The variables are stored only as a token encrypted with
 the same key as saved environment variables. The payload is removed when the
 row starts, is cancelled, or fails.
+A waiting row has no outcome yet. Its log stream shows `Waiting for the current
+deployment to finish...` in place of the stub, and `succeeded` and `failed`
+return 409 until it starts. Deployment detail shows a Waiting badge, re-reads
+the row every few seconds, and reports an outcome only once it has started.
+Without a queue (`AERODECK_REDIS_URL` unset) no route starts a waiting row; it
+stays `queued` until it is cancelled.
 When the console client is set and a deployment has `provision_job_id`, detail
 shows a Provision job panel that polls `GET /api/console/jobs/{id}` (→
 `GET /api/v1/jobs/{id}`) about every 5s until succeeded/failed, a poll

@@ -42,6 +42,8 @@ router = APIRouter(prefix="/deployments", tags=["deployments"])
 _NOT_FOUND = {status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}}
 _UNAUTHENTICATED = {status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse}}
 _UNAVAILABLE = {status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ErrorResponse}}
+# A deployment held behind another one has no outcome yet (#271).
+_NOT_STARTED = {status.HTTP_409_CONFLICT: {"model": ErrorResponse}}
 
 
 async def _known_actor(users: ConsoleUserService, actor_user_id: uuid.UUID | None) -> uuid.UUID | None:
@@ -153,7 +155,7 @@ async def get_deployment(deployment_id: uuid.UUID, deployments: DeploymentServic
     response_model=DeploymentRead,
     status_code=status.HTTP_200_OK,
     summary="Record that a deployment finished",
-    responses=_NOT_FOUND | _UNAUTHENTICATED,
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED,
 )
 async def succeed_deployment(
     deployment_id: uuid.UUID,
@@ -171,7 +173,7 @@ async def succeed_deployment(
     response_model=DeploymentRead,
     status_code=status.HTTP_200_OK,
     summary="Record that a deployment failed",
-    responses=_NOT_FOUND | _UNAUTHENTICATED,
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED,
 )
 async def fail_deployment(
     deployment_id: uuid.UUID,
@@ -344,10 +346,13 @@ async def cancel_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
     jobs: JobServiceDep,
+    release: ReleaseJobServiceDep,
 ) -> DeploymentRead:
     stored = await deployments.cancel(deployment_id)
     await jobs.revoke_quietly(stored.provision_job_id)
-    await jobs.release_waiting(stored)
+    # Same rule as the outcome routes: without a queue the waiter stays queued.
+    if release is not None:
+        await release.release_waiting(stored)
     return DeploymentRead.model_validate(stored)
 
 
