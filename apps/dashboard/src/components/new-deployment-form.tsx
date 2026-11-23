@@ -8,6 +8,7 @@ import {
   DeploymentBlueprintFields,
   parseDotenvText,
 } from "@/components/deployment-blueprint-fields";
+import { DeployBuildStep } from "@/components/deploy-build-step";
 import { EnvironmentSelect } from "@/components/environment-select";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +29,7 @@ import {
   ProvisionEnqueueFailed,
   upsertEnvironmentVars,
 } from "@/lib/api";
+import { applyBuildConfirmation } from "@/lib/deploy-build";
 import { environmentOptionKey } from "@/lib/environment-option";
 import { parseGithubRepo } from "@/lib/github";
 import type { AddonType, DeploymentBlueprint } from "@/lib/types";
@@ -47,6 +49,10 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
   const [repoUrl, setRepoUrl] = useState("");
   const [envVarsText, setEnvVarsText] = useState("");
   const [blueprint, setBlueprint] = useState<DeploymentBlueprint | null>(null);
+  const [step, setStep] = useState<"repository" | "build" | "launch">("repository");
+  const [portDraft, setPortDraft] = useState("");
+  const [serviceDraft, setServiceDraft] = useState("");
+  const [portInvalid, setPortInvalid] = useState(false);
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [selectedAddons, setSelectedAddons] = useState<AddonType[]>([]);
   const [inspecting, setInspecting] = useState(false);
@@ -98,6 +104,10 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
     try {
       const bp = await inspectDeploymentRepo(repoUrl.trim());
       setBlueprint(bp);
+      setPortDraft(String(bp.build.port));
+      setServiceDraft(bp.build.service ?? "");
+      setPortInvalid(false);
+      setStep("build");
       const initialFields: Record<string, string> = {};
       for (const item of bp.env) {
         initialFields[item.key] = item.default ?? "";
@@ -134,6 +144,20 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
 
     if (isControlPlane && !blueprint) {
       await handleInspect();
+      return;
+    }
+
+    if (isControlPlane && blueprint && step === "build") {
+      const confirmed = applyBuildConfirmation(blueprint.build, { port: portDraft, service: serviceDraft });
+      if (!confirmed) {
+        setPortInvalid(true);
+        setError("Enter a port from 1 to 65535.");
+        return;
+      }
+      setBlueprint({ ...blueprint, build: confirmed });
+      setPortDraft(String(confirmed.port));
+      setServiceDraft(confirmed.service ?? "");
+      setStep("launch");
       return;
     }
 
@@ -210,11 +234,17 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
     <Card className="overflow-hidden ring-primary/15">
       <div className="h-1 bg-gradient-to-r from-primary via-runway to-primary/40" />
       <CardHeader className="border-b">
-        <CardTitle>Repository</CardTitle>
+        <CardTitle>
+          {step === "build" ? "Build" : step === "launch" ? "Deploy" : "Repository"}
+        </CardTitle>
         <CardDescription>
-          {isControlPlane
-            ? "The GitHub repository to scan. The next pages are built from what that scan finds."
-            : "HTTPS GitHub URL. Validated in the browser, then POSTed to /api/mock/v1/deployments."}
+          {step === "build"
+            ? "Detected from the scan. Change the port, and the Compose service when this repository has one."
+            : step === "launch"
+              ? "Environment, addons, and variables follow the build you confirmed."
+              : isControlPlane
+                ? "The GitHub repository to scan. A successful scan opens the build before anything else."
+                : "HTTPS GitHub URL. Validated in the browser, then POSTed to /api/mock/v1/deployments."}
         </CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>
@@ -235,6 +265,10 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
                   setRepoUrl(value);
                   if (blueprint) {
                     setBlueprint(null);
+                    setStep("repository");
+                    setPortDraft("");
+                    setServiceDraft("");
+                    setPortInvalid(false);
                     setFieldValues({});
                     setSelectedAddons([]);
                   }
@@ -253,7 +287,24 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
               <code>Dockerfile</code>, and <code>.env.example</code>.
             </p>
           </div>
-          {isControlPlane && blueprint ? (
+          {isControlPlane && blueprint && step !== "repository" ? (
+            <DeployBuildStep
+              blueprint={blueprint}
+              port={portDraft}
+              service={serviceDraft}
+              onPortChange={(value) => {
+                setPortDraft(value);
+                if (portInvalid) {
+                  setPortInvalid(false);
+                }
+              }}
+              onServiceChange={setServiceDraft}
+              portInvalid={portInvalid}
+              disabled={submitting || inspecting || enqueueBlocked}
+              confirmed={step === "launch"}
+            />
+          ) : null}
+          {isControlPlane && blueprint && step === "launch" ? (
             <>
               <EnvironmentSelect
                 environments={environments}
@@ -304,7 +355,12 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
             </p>
           ) : null}
         </CardContent>
-        <CardFooter className="justify-end">
+        <CardFooter className="justify-end gap-2">
+          {step === "launch" ? (
+            <Button type="button" variant="outline" size="lg" onClick={() => setStep("build")}>
+              Change build
+            </Button>
+          ) : null}
           {isControlPlane && !blueprint ? (
             <Button
               type="submit"
@@ -313,6 +369,10 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
             >
               {inspecting ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Search data-icon="inline-start" />}
               {inspecting ? "Scanning…" : "Scan repository"}
+            </Button>
+          ) : isControlPlane && step === "build" ? (
+            <Button type="submit" size="lg" disabled={submitting || inspecting || enqueueBlocked}>
+              Continue
             </Button>
           ) : (
             <Button type="submit" size="lg" disabled={!canSubmit}>
