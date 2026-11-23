@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type JSX, type KeyboardEvent, type RefObject } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -36,11 +36,11 @@ const FRAMES = [
 ] as const;
 
 type FrameId = (typeof FRAMES)[number]["id"];
+type Frame = (typeof FRAMES)[number];
 
 export function DeckSlider() {
   const [index, setIndex] = useState(0);
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
-  const frame = FRAMES[index];
 
   function select(next: number) {
     const wrapped = (next + FRAMES.length) % FRAMES.length;
@@ -48,84 +48,123 @@ export function DeckSlider() {
     tabs.current[wrapped]?.focus();
   }
 
+  return (
+    <div className="grid gap-4 lg:grid-cols-[15rem_1fr] lg:items-stretch">
+      <DeckTabList index={index} tabs={tabs} onSelect={select} />
+      <DeckPanel frame={FRAMES[index]} />
+    </div>
+  );
+}
+
+function DeckTabList({
+  index,
+  tabs,
+  onSelect,
+}: {
+  index: number;
+  tabs: RefObject<Array<HTMLButtonElement | null>>;
+  onSelect: (next: number) => void;
+}) {
+  const orientation = useTabOrientation();
+
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    const forward = orientation === "vertical" ? "ArrowDown" : "ArrowRight";
+    const back = orientation === "vertical" ? "ArrowUp" : "ArrowLeft";
+    if (event.key === forward) {
       event.preventDefault();
-      select(index + 1);
-    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      onSelect(index + 1);
+    } else if (event.key === back) {
       event.preventDefault();
-      select(index - 1);
+      onSelect(index - 1);
     } else if (event.key === "Home") {
       event.preventDefault();
-      select(0);
+      onSelect(0);
     } else if (event.key === "End") {
       event.preventDefault();
-      select(FRAMES.length - 1);
+      onSelect(FRAMES.length - 1);
     }
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[15rem_1fr] lg:items-stretch">
-      <div
-        role="tablist"
-        aria-label="Deck frames"
-        className="flex gap-2 overflow-x-auto lg:flex-col"
-        onKeyDown={onKeyDown}
-      >
-        {FRAMES.map((item, itemIndex) => {
-          const selected = item.id === frame.id;
-          return (
-            <button
-              key={item.id}
-              ref={(node) => {
-                tabs.current[itemIndex] = node;
-              }}
-              id={`deck-tab-${item.id}`}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              aria-controls="deck-panel"
-              tabIndex={selected ? 0 : -1}
-              className={cn(
-                "min-w-40 shrink-0 rounded-xl border px-3 py-3 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none lg:min-w-0",
-                selected
-                  ? "border-primary/50 bg-primary/10 text-foreground"
-                  : "border-border bg-card/40 text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setIndex(itemIndex)}
-            >
-              <span className="block font-mono text-[10px] tracking-[0.18em] uppercase">
-                {String(itemIndex + 1).padStart(2, "0")}
-              </span>
-              <span className="mt-1 block font-heading text-sm font-semibold">{item.label}</span>
-              <span className="mt-0.5 block text-xs">{item.kicker}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div
-        id="deck-panel"
-        role="tabpanel"
-        aria-labelledby={`deck-tab-${frame.id}`}
-        className="relative overflow-hidden rounded-2xl border border-border bg-card"
-      >
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <p className="font-mono text-[10px] tracking-[0.2em] text-muted-foreground uppercase">
-            Deck
-          </p>
-          <p className="font-mono text-[10px] tracking-[0.16em] text-primary uppercase">
-            {frame.label}
-          </p>
-        </div>
-        <div className="grid gap-6 p-4 md:grid-cols-[1.15fr_0.85fr] md:items-center md:p-6">
-          <FramePicture id={frame.id} />
-          <p className="text-sm leading-relaxed text-muted-foreground">{frame.caption}</p>
-        </div>
-        <span className="deck-horizon" aria-hidden />
-      </div>
+    <div
+      role="tablist"
+      aria-label="Deck frames"
+      aria-orientation={orientation}
+      className="flex gap-2 overflow-x-auto lg:flex-col"
+      onKeyDown={onKeyDown}
+    >
+      {FRAMES.map((item, itemIndex) => {
+        const selected = itemIndex === index;
+        return (
+          <button
+            key={item.id}
+            ref={(node) => {
+              tabs.current[itemIndex] = node;
+            }}
+            id={`deck-tab-${item.id}`}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-controls="deck-panel"
+            tabIndex={selected ? 0 : -1}
+            className={cn(
+              "min-w-40 shrink-0 rounded-xl border px-3 py-3 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none lg:min-w-0",
+              selected
+                ? "border-primary/50 bg-primary/10 text-foreground"
+                : "border-border bg-card/40 text-muted-foreground hover:text-foreground",
+            )}
+            onClick={() => onSelect(itemIndex)}
+          >
+            <span className="block font-mono text-[10px] tracking-[0.18em] uppercase">
+              {String(itemIndex + 1).padStart(2, "0")}
+            </span>
+            <span className="mt-1 block font-heading text-sm font-semibold">{item.label}</span>
+            <span className="mt-0.5 block text-xs">{item.kicker}</span>
+          </button>
+        );
+      })}
     </div>
   );
+}
+
+function DeckPanel({ frame }: { frame: Frame }) {
+  return (
+    <div
+      id="deck-panel"
+      role="tabpanel"
+      aria-labelledby={`deck-tab-${frame.id}`}
+      className="relative overflow-hidden rounded-2xl border border-border bg-card"
+    >
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <p className="font-mono text-[10px] tracking-[0.2em] text-muted-foreground uppercase">
+          Deck
+        </p>
+        <p className="font-mono text-[10px] tracking-[0.16em] text-primary uppercase">
+          {frame.label}
+        </p>
+      </div>
+      <div className="grid gap-6 p-4 md:grid-cols-[1.15fr_0.85fr] md:items-center md:p-6">
+        <FramePicture id={frame.id} />
+        <p className="text-sm leading-relaxed text-muted-foreground">{frame.caption}</p>
+      </div>
+      <span className="deck-horizon" aria-hidden />
+    </div>
+  );
+}
+
+/** Matches the `lg` column. The first paint stays horizontal so hydration does not disagree. */
+function useTabOrientation(): "horizontal" | "vertical" {
+  const [orientation, setOrientation] = useState<"horizontal" | "vertical">("horizontal");
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 64rem)");
+    const apply = () => setOrientation(media.matches ? "vertical" : "horizontal");
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, []);
+
+  return orientation;
 }
 
 const FRAME_PICTURES: Record<FrameId, () => JSX.Element> = {
