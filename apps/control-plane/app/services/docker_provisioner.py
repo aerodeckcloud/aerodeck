@@ -14,7 +14,8 @@ from app.core.config import Settings
 from app.core.github import canonical_github_repo_url, parse_github_repo
 from app.services.docker_policy import (
     CommandResult, CommandRunner, LogSink, SubprocessCommandRunner, classify_failure, container_name_for,
-    deployment_image_tag_for, find_available_port, image_tag_for, route_hostname_for, validate_binary,
+    deployment_image_tag_for, find_available_port, image_tag_for, parse_release_command,
+    route_hostname_for, validate_binary,
     normalize_git_sha, validate_dockerfile, validate_git_ref, validate_network, validate_runtime, validate_uuid,
     wait_for_tcp_health,
 )
@@ -25,7 +26,7 @@ from app.services.dockerfile_detector import (
     build_runtime_env_file, detect_exposed_port, ensure_dockerfile,
     stream_container_crash_logs, wait_for_container_or_fast_fail,
 )
-from app.services.provisioning import JobKind, JobOutcome, PermanentJobError
+from app.services.provisioning import JobKind, JobOutcome, PermanentJobError, TransientJobError
 
 __all__ = [
     "CommandResult", "CommandRunner", "DockerProvisioner", "HealthChecker", "LogSink", "PortAllocator",
@@ -58,6 +59,7 @@ class DockerProvisioner:
     docker_network: str = "bridge"
     allowed_owners: tuple[str, ...] = ()
     health_timeout_seconds: int = 30
+    release_command_timeout_seconds: int = 300
     route_base_domain: str | None = None
     port_allocator: PortAllocator = find_available_port
     health_checker: HealthChecker = wait_for_tcp_health
@@ -77,7 +79,9 @@ class DockerProvisioner:
             runner=runner or SubprocessCommandRunner(), docker_host=settings.docker_host,
             docker_runtime=validate_runtime(settings.docker_runtime), docker_network=validate_network(settings.docker_network),
             allowed_owners=tuple(o.strip().lower() for o in settings.docker_allowed_owners if o.strip()),
-            health_timeout_seconds=settings.docker_health_timeout_seconds, route_base_domain=settings.docker_route_base_domain,
+            health_timeout_seconds=settings.docker_health_timeout_seconds,
+            release_command_timeout_seconds=settings.release_command_timeout_seconds,
+            route_base_domain=settings.docker_route_base_domain,
             port_allocator=port_allocator or find_available_port, health_checker=health_checker or wait_for_tcp_health,
             route_registrar=route_registrar,
         )
@@ -95,7 +99,7 @@ class DockerProvisioner:
         addons_json: str = "", image_deployment_id: str = "", rollback_from_deployment_id: str = "",
         promote_from_deployment_id: str = "", promote_from_environment_id: str = "",
         promote_from_environment_slug: str = "",
-        git_ref: str = "", on_log: LogSink | None = None,
+        git_ref: str = "", release_command: str = "", on_log: LogSink | None = None,
         on_checkout: Callable[[str], None] | None = None,
         on_swap: Callable[[], None] | None = None,
     ) -> JobOutcome:
@@ -248,6 +252,11 @@ class DockerProvisioner:
                 f"{f' (last log: {last})' if last else ''}; rolled back and kept previous container live"
             )
 
+        self._run_release_command(
+            docker_bin=docker_bin, docker_env=docker_env, candidate=candidate,
+            release_command=release_command, on_log=on_log, emit=emit,
+        )
+
         if route_hostname and self.route_registrar is not None:
             emit(f"Registering Traefik route https://{route_hostname} -> {self.bind_host}:{host_port}...")
             try:
@@ -269,6 +278,38 @@ class DockerProvisioner:
         loc = f"at https://{route_hostname} ({self.bind_host}:{host_port})" if route_hostname else f"on {self.bind_host}:{host_port}"
         emit(f"Container {cname} {'live ' if route_hostname else 'running '}{loc}.")
         return JobOutcome(kind=JobKind.provision, project_id=str(p_uuid), environment_id=str(e_uuid), changed=True, detail=f"deployed {tag} as {cname} {loc}")
+
+    def _run_release_command(
+        self, *, docker_bin: str, docker_env: dict[str, str], candidate: str,
+        release_command: str, on_log: LogSink | None, emit: LogSink,
+    ) -> None:
+        """Run the operator command in the new container before traffic moves (#275)."""
+        argv = parse_release_command(release_command)
+        if not argv:
+            return
+        emit("Running release command before traffic moves...")
+        # Docker exec does not treat "--" as an options terminator; it would become the executable.
+        exec_cmd = [docker_bin, "exec", candidate, *argv]
+        try:
+            result = self.runner.run(
+                exec_cmd, env=docker_env, timeout=self.release_command_timeout_seconds, on_line=on_log,
+            )
+        except TransientJobError as exc:
+            self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)
+            if "timed out" in str(exc):
+                raise PermanentJobError(
+                    f"release command timed out after {self.release_command_timeout_seconds}s; "
+                    "previous container still serving"
+                ) from exc
+            raise
+        except PermanentJobError:
+            self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)
+            raise
+        if result.returncode != 0:
+            self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)
+            raise PermanentJobError(
+                f"release command failed (exit {result.returncode}); previous container still serving"
+            )
 
     def reconcile(
         self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",

@@ -1,7 +1,12 @@
 import { connection, NextResponse } from "next/server";
 
 import { requireEnrolledEnvironmentIds } from "@/lib/console-environment-route";
-import { readJsonObject, readOptionalInteger, readOptionalString } from "@/lib/console-json-body";
+import {
+  readJsonObject,
+  readOptionalInteger,
+  readOptionalNullableString,
+  readOptionalString,
+} from "@/lib/console-json-body";
 import {
   ControlPlaneError,
   deleteControlPlaneEnvironment,
@@ -41,6 +46,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     region?: string;
     deploy_overlap?: string;
     rollback_images_to_keep?: number;
+    release_command?: string | null;
   } = {};
   for (const [key, code] of [
     ["name", "invalid_name"],
@@ -62,6 +68,13 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
   if (keep.value !== undefined) {
     fields.rollback_images_to_keep = keep.value;
+  }
+  const command = readOptionalNullableString(body.value, "release_command", "invalid_release_command");
+  if (!command.ok) {
+    return command.response;
+  }
+  if (command.value !== undefined) {
+    fields.release_command = command.value;
   }
 
   const parsed = parseEnvironmentUpdateFields(fields);

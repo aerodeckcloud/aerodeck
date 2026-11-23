@@ -31,6 +31,7 @@ def _environment() -> MagicMock:
     environment.kind.value = "prod"
     environment.region = "nyc3"
     environment.project.slug = "payments"
+    environment.release_command = None
     return environment
 
 
@@ -85,6 +86,36 @@ async def test_enqueue_persists_provision_job_id_via_injected_callback() -> None
 
     assert ticket.job_id == job_id
     persist.assert_awaited_once_with(deployment.id, uuid.UUID(job_id))
+
+
+@pytest.mark.asyncio
+async def test_enqueue_copies_the_live_release_command() -> None:
+    deployment = _deployment()
+    environment = _environment()
+    environment.release_command = "  python manage.py migrate  "
+    service, _persist = _job_service(
+        job_id=str(uuid.uuid4()),
+        deployment=deployment,
+        environment=environment,
+    )
+
+    await service.enqueue(
+        JobKind.provision,
+        environment.project_id,
+        environment.id,
+        deployment_id=deployment.id,
+    )
+
+    assert service._dispatcher.dispatch.call_args.kwargs["release_command"] == "python manage.py migrate"
+
+    environment.release_command = "   "
+    await service.enqueue(
+        JobKind.provision,
+        environment.project_id,
+        environment.id,
+        deployment_id=deployment.id,
+    )
+    assert "release_command" not in service._dispatcher.dispatch.call_args.kwargs
 
 
 @pytest.mark.asyncio

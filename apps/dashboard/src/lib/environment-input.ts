@@ -106,9 +106,12 @@ export function parseEnvironmentCreateFields(
 }
 
 export const ENVIRONMENT_UPDATE_EMPTY =
-  "Change the name, kind, region, deploy behavior, or rollback image count before saving.";
+  "Change the name, kind, region, deploy behavior, rollback image count, or release command before saving.";
 export const ENVIRONMENT_OVERLAP_INVALID = "Choose wait or override.";
 export const ENVIRONMENT_RETENTION_INVALID = "Keep between 1 and 20 rollback images.";
+export const ENVIRONMENT_RELEASE_COMMAND_INVALID =
+  "Use an executable and arguments, not a shell script.";
+export const RELEASE_COMMAND_MAX = 500;
 export const ROLLBACK_IMAGES_MIN = 1;
 export const ROLLBACK_IMAGES_MAX = 20;
 export const ROLLBACK_IMAGES_DEFAULT = 5;
@@ -124,12 +127,58 @@ export function isValidRollbackImageCount(value: number): boolean {
   return Number.isInteger(value) && value >= ROLLBACK_IMAGES_MIN && value <= ROLLBACK_IMAGES_MAX;
 }
 
+const RELEASE_SHELL_CHARS = new Set([";", "|", "&", "<", ">", "`"]);
+
+/** Split a release command the way the control plane does. Null means it is not an argv. */
+export function releaseCommandArgv(raw: string): string[] | null {
+  const command = raw.trim();
+  if (!command || command.length > RELEASE_COMMAND_MAX || /[\n\r\0]/.test(command)) {
+    return null;
+  }
+  const argv: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  for (const ch of command) {
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (RELEASE_SHELL_CHARS.has(ch)) {
+      return null;
+    }
+    if (ch === " " || ch === "\t") {
+      if (current) {
+        argv.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (quote || (argv.length === 0 && !current)) {
+    return null;
+  }
+  if (current) {
+    argv.push(current);
+  }
+  return argv;
+}
+
 export type EnvironmentUpdateFields = {
   name?: string;
   kind?: string;
   region?: string;
   deploy_overlap?: string;
   rollback_images_to_keep?: number;
+  release_command?: string | null;
 };
 
 export type EnvironmentUpdateParsed = {
@@ -138,6 +187,7 @@ export type EnvironmentUpdateParsed = {
   region?: string;
   deploy_overlap?: DeployOverlap;
   rollback_images_to_keep?: number;
+  release_command?: string | null;
 };
 
 export type EnvironmentUpdateParseResult =
@@ -182,12 +232,26 @@ export function parseEnvironmentUpdateFields(
     }
     value.rollback_images_to_keep = input.rollback_images_to_keep;
   }
+  if (input.release_command !== undefined) {
+    if (input.release_command === null || input.release_command.trim() === "") {
+      value.release_command = null;
+    } else if (releaseCommandArgv(input.release_command) === null) {
+      return {
+        ok: false,
+        error: ENVIRONMENT_RELEASE_COMMAND_INVALID,
+        code: "invalid_release_command",
+      };
+    } else {
+      value.release_command = input.release_command.trim();
+    }
+  }
   if (
     value.name === undefined &&
     value.kind === undefined &&
     value.region === undefined &&
     value.deploy_overlap === undefined &&
-    value.rollback_images_to_keep === undefined
+    value.rollback_images_to_keep === undefined &&
+    value.release_command === undefined
   ) {
     return { ok: false, error: ENVIRONMENT_UPDATE_EMPTY, code: "empty_update" };
   }

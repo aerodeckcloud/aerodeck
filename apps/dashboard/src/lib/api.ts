@@ -139,6 +139,7 @@ export async function updateEnvironment(
     region?: string;
     deploy_overlap?: "wait" | "override";
     rollback_images_to_keep?: number;
+    release_command?: string | null;
   },
 ): Promise<EnvironmentOption> {
   const response = await fetch(

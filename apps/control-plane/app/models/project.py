@@ -72,6 +72,8 @@ class Environment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     rollback_images_to_keep: Mapped[int] = mapped_column(
         Integer, nullable=False, default=5, server_default="5"
     )
+    # Executable plus arguments, run in the new container before traffic moves (#275).
+    release_command: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     project: Mapped[Project] = relationship(back_populates="environments")
     routes: Mapped[list["Route"]] = relationship(

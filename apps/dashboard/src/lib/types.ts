@@ -124,6 +124,8 @@ export type EnvironmentOption = {
   rollback_images_to_keep?: number;
   /** Succeeded images that have not been pruned. */
   retained_rollback_images?: number;
+  /** Executable and arguments run before traffic moves. Null clears it. */
+  release_command?: string | null;
 };
 
 export type EnvironmentOptionPage = {

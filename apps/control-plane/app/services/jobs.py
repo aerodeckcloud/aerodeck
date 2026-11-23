@@ -147,6 +147,10 @@ class JobService:
             "environment_kind": environment.kind.value,
             "region": environment.region,
         }
+        # Re-read on every enqueue, including a waiter that starts later (#275).
+        release_command = getattr(environment, "release_command", None)
+        if kind is JobKind.provision and isinstance(release_command, str) and release_command.strip():
+            meta["release_command"] = release_command.strip()
         merged_env: dict[str, str] = {}
         if replace_env_vars is not None:
             # Full map for rollback restore: do not merge with the live environment (#273).

@@ -33,6 +33,9 @@ DOCKER_DEFAULT_CPUS_LIMIT = "0.5"
 DOCKER_DEFAULT_PIDS_LIMIT = 256
 DOCKER_DEFAULT_BUILD_TIMEOUT_SECONDS = 600
 DOCKER_DEFAULT_HEALTH_TIMEOUT_SECONDS = 30
+# Release command runs after the health check and before traffic moves (#275).
+DOCKER_DEFAULT_RELEASE_COMMAND_TIMEOUT_SECONDS = 300
+DOCKER_MAX_RELEASE_COMMAND_TIMEOUT_SECONDS = 900
 DOCKER_DEFAULT_NETWORK = "bridge"
 
 
@@ -150,6 +153,11 @@ class Settings(BaseSettings):
     docker_pids_limit: int = Field(default=DOCKER_DEFAULT_PIDS_LIMIT, ge=16, le=4096)
     docker_build_timeout_seconds: int = Field(default=DOCKER_DEFAULT_BUILD_TIMEOUT_SECONDS, ge=30, le=1800)
     docker_health_timeout_seconds: int = Field(default=DOCKER_DEFAULT_HEALTH_TIMEOUT_SECONDS, ge=1, le=300)
+    release_command_timeout_seconds: int = Field(
+        default=DOCKER_DEFAULT_RELEASE_COMMAND_TIMEOUT_SECONDS,
+        ge=1,
+        le=DOCKER_MAX_RELEASE_COMMAND_TIMEOUT_SECONDS,
+    )
     docker_network: str = DOCKER_DEFAULT_NETWORK
     # Optional base domain for auto-registered Traefik routes (e.g. "dev.app.aero-deck.app").
     docker_route_base_domain: str | None = None

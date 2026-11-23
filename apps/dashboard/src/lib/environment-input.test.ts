@@ -8,6 +8,7 @@ import {
   ENVIRONMENT_PROJECT_ID_INVALID,
   ENVIRONMENT_PROJECT_REQUIRED,
   ENVIRONMENT_REGION_INVALID,
+  ENVIRONMENT_RELEASE_COMMAND_INVALID,
   ENVIRONMENT_SLUG_INVALID,
   ENVIRONMENT_RETENTION_INVALID,
   ENVIRONMENT_UPDATE_EMPTY,
@@ -179,6 +180,31 @@ describe("parseEnvironmentUpdateFields", () => {
       ok: false,
       error: ENVIRONMENT_RETENTION_INVALID,
       code: "invalid_rollback_images",
+    });
+  });
+
+  it("accepts an executable and clears a blank release command", () => {
+    assert.deepEqual(parseEnvironmentUpdateFields({ release_command: " python manage.py migrate " }), {
+      ok: true,
+      value: { release_command: "python manage.py migrate" },
+    });
+    assert.deepEqual(parseEnvironmentUpdateFields({ release_command: null }), {
+      ok: true,
+      value: { release_command: null },
+    });
+    assert.deepEqual(parseEnvironmentUpdateFields({ release_command: "   " }), {
+      ok: true,
+      value: { release_command: null },
+    });
+    assert.deepEqual(parseEnvironmentUpdateFields({ release_command: "echo a && echo b" }), {
+      ok: false,
+      error: ENVIRONMENT_RELEASE_COMMAND_INVALID,
+      code: "invalid_release_command",
+    });
+    assert.deepEqual(parseEnvironmentUpdateFields({ release_command: "a\nb" }), {
+      ok: false,
+      error: ENVIRONMENT_RELEASE_COMMAND_INVALID,
+      code: "invalid_release_command",
     });
   });
 

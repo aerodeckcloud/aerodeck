@@ -81,6 +81,17 @@ without marking that deployment failed. The project page shows how many
 rollback images are still present (`retained_rollback_images`). Rollback or
 promote of a pruned image returns 422 `image_not_retained`. These tags stay on
 the Docker host; they are not pushed to a registry.
+An environment can set `release_command` (at most 500 characters): one
+executable and its arguments, not a shell script. After the new container is
+healthy and before Traefik moves traffic, the worker runs that command inside
+the container with `docker exec` and the deployment's environment variables.
+The platform does not start a shell and does not print variable values.
+stdout and stderr go to the deployment log. The timeout is
+`AERODECK_RELEASE_COMMAND_TIMEOUT_SECONDS` (default 300, maximum 900). A
+non-zero exit or a timeout fails the deployment, removes the new container,
+and leaves the previous container serving. An empty command skips this step.
+Rolling an image back does not undo schema changes or migrations that command
+applied.
 
 `POST /api/v1/deployments/{id}/cancel` (console `POST /api/console/deployments/{id}/cancel`)
 marks a queued or running deployment `cancelled` and sets `finished_at` when the
