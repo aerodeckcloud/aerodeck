@@ -9,6 +9,10 @@ import json
 import uuid
 from dataclasses import dataclass
 
+from app.core.logging import get_logger
+
+logger = get_logger("services.provision_replay")
+
 
 @dataclass(frozen=True, slots=True)
 class ProvisionReplay:
@@ -31,14 +35,19 @@ class ProvisionReplay:
 
     @classmethod
     def from_json(cls, raw: str | None) -> "ProvisionReplay":
-        """Read a stored payload. Anything malformed is treated as absent."""
+        """Read a stored payload. Anything malformed is treated as absent.
+
+        The payload itself is never logged: it can hold the encrypted variables.
+        """
         if not raw:
             return cls()
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
+            logger.warning("event=provision_replay_unreadable reason=invalid_json")
             return cls()
         if not isinstance(payload, dict):
+            logger.warning("event=provision_replay_unreadable reason=not_an_object")
             return cls()
         addons = payload.get("addons")
         return cls(
