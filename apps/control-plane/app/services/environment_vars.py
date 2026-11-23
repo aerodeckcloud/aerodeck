@@ -9,7 +9,7 @@ import re
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
-from typing import NamedTuple, Protocol
+from typing import Literal, NamedTuple, Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -339,21 +339,8 @@ class EnvironmentVariableService:
     async def load_decrypted_entries(
         self, project_id: uuid.UUID, environment_id: uuid.UUID
     ) -> dict[str, EnvVarPlain]:
-        rows = await self._repo.list_for_environment(project_id, environment_id)
-        decrypted: dict[str, EnvVarPlain] = {}
-        for row in rows:
-            try:
-                decrypted[row.key] = EnvVarPlain(
-                    decrypt_env_value(row.encrypted_value, self._signing_key),
-                    row.is_secret,
-                )
-            except InvalidToken:
-                logger.warning(
-                    "skipped unreadable encrypted env var %s for environment %s",
-                    row.key,
-                    environment_id,
-                )
-        return decrypted
+        loaded = await self._decrypt_rows(project_id, environment_id, on_invalid="skip")
+        return loaded or {}
 
     async def load_complete_entries(
         self, project_id: uuid.UUID, environment_id: uuid.UUID
@@ -362,6 +349,16 @@ class EnvironmentVariableService:
 
         A snapshot must be complete: a later rollback deletes keys that are absent.
         """
+        return await self._decrypt_rows(project_id, environment_id, on_invalid="abort")
+
+    async def _decrypt_rows(
+        self,
+        project_id: uuid.UUID,
+        environment_id: uuid.UUID,
+        *,
+        on_invalid: Literal["skip", "abort"],
+    ) -> dict[str, EnvVarPlain] | None:
+        """Decrypt stored variables. ``abort`` returns None on the first unreadable row."""
         rows = await self._repo.list_for_environment(project_id, environment_id)
         decrypted: dict[str, EnvVarPlain] = {}
         for row in rows:
@@ -371,10 +368,16 @@ class EnvironmentVariableService:
                     row.is_secret,
                 )
             except InvalidToken:
+                if on_invalid == "abort":
+                    logger.warning(
+                        "event=env_vars_snapshot_incomplete environment=%s key=%s",
+                        environment_id,
+                        row.key,
+                    )
+                    return None
                 logger.warning(
-                    "event=env_vars_snapshot_incomplete environment=%s key=%s",
-                    environment_id,
+                    "skipped unreadable encrypted env var %s for environment %s",
                     row.key,
+                    environment_id,
                 )
-                return None
         return decrypted
