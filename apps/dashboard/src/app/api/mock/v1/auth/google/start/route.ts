@@ -7,6 +7,7 @@ import {
   isRealGoogleConfigured,
   newOauthState,
 } from "@/lib/google-oauth";
+import { publicOrigin } from "@/lib/public-origin";
 import { persistOauthCookies } from "@/lib/session-cookie";
 
 export async function GET(request: Request) {
@@ -14,7 +15,7 @@ export async function GET(request: Request) {
 
   const incoming = new URL(request.url);
   const state = newOauthState();
-  const origin = incoming.origin;
+  const origin = publicOrigin(request);
 
   if (incoming.searchParams.get("error") === "1") {
     const callback = new URL(GOOGLE_CALLBACK_PATH, origin);
