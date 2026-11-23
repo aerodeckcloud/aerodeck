@@ -15,6 +15,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
+from app.models.project import ROLLBACK_IMAGES_TO_KEEP_CHECK
+
 revision: str = "0025"
 down_revision: str | None = "0024"
 branch_labels: str | Sequence[str] | None = None
@@ -30,7 +32,7 @@ def upgrade() -> None:
         )
         batch.create_check_constraint(
             _KEEP_RANGE,
-            "rollback_images_to_keep >= 1 AND rollback_images_to_keep <= 20",
+            ROLLBACK_IMAGES_TO_KEEP_CHECK,
         )
     with op.batch_alter_table("deployments") as batch:
         batch.add_column(sa.Column("image_pruned_at", sa.DateTime(timezone=True), nullable=True))

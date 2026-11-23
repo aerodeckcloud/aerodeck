@@ -15,6 +15,15 @@ class EnvironmentKind(enum.StrEnum):
     prod = "prod"
 
 
+# Succeeded images an environment may keep for rollback (#274).
+ROLLBACK_IMAGES_TO_KEEP_MIN = 1
+ROLLBACK_IMAGES_TO_KEEP_MAX = 20
+ROLLBACK_IMAGES_TO_KEEP_CHECK = (
+    f"rollback_images_to_keep >= {ROLLBACK_IMAGES_TO_KEEP_MIN} "
+    f"AND rollback_images_to_keep <= {ROLLBACK_IMAGES_TO_KEEP_MAX}"
+)
+
+
 class DeployOverlap(enum.StrEnum):
     """What a new provision does while another deploy is still queued or running (#271)."""
 
@@ -43,10 +52,7 @@ class Environment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         UniqueConstraint("project_id", "slug", name="uq_environments_project_id_slug"),
         # Target for deployments composite FK (project_id, environment_id).
         UniqueConstraint("project_id", "id", name="uq_environments_project_id_id"),
-        CheckConstraint(
-            "rollback_images_to_keep >= 1 AND rollback_images_to_keep <= 20",
-            name="rollback_images_to_keep_range",
-        ),
+        CheckConstraint(ROLLBACK_IMAGES_TO_KEEP_CHECK, name="rollback_images_to_keep_range"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(

@@ -6,6 +6,7 @@ import {
   rollbackControlPlaneDeployment,
 } from "@/lib/control-plane";
 import { jsonControlPlaneError, jsonError } from "@/lib/mock-http";
+import { rollbackRefusalResponse } from "@/lib/rollback-refusal";
 import { requireSessionUser } from "@/lib/session";
 
 export async function POST(
@@ -56,6 +57,10 @@ export async function POST(
     });
     return NextResponse.json(deployment, { status: 201 });
   } catch (cause) {
+    const refused = rollbackRefusalResponse(cause);
+    if (refused) {
+      return refused;
+    }
     return jsonControlPlaneError(cause, "console_deployment_rollback_failed");
   }
 }

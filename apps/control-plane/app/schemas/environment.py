@@ -4,14 +4,21 @@ from typing import Annotated, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.project import DeployOverlap, EnvironmentKind
+from app.models.project import (
+    ROLLBACK_IMAGES_TO_KEEP_MAX,
+    ROLLBACK_IMAGES_TO_KEEP_MIN,
+    DeployOverlap,
+    EnvironmentKind,
+)
 from app.schemas.common import Slug
 
 Name = Annotated[str, Field(min_length=1, max_length=120)]
 # DigitalOcean region slug, e.g. nyc3, ams3, fra1. Validated against the live list in Epic 2.
 Region = Annotated[str, Field(min_length=4, max_length=16, pattern=r"^[a-z]{3}[0-9]$")]
 # Succeeded images kept for rollback. The column default matches this (#274).
-RollbackImagesToKeep = Annotated[int, Field(ge=1, le=20)]
+RollbackImagesToKeep = Annotated[
+    int, Field(ge=ROLLBACK_IMAGES_TO_KEEP_MIN, le=ROLLBACK_IMAGES_TO_KEEP_MAX)
+]
 
 
 class EnvironmentCreate(BaseModel):

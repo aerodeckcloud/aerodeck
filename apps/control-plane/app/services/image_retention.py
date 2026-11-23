@@ -20,6 +20,7 @@ from app.core.config import Settings
 from app.core.db import create_engine
 from app.core.logging import get_logger
 from app.models.deployment import Deployment, DeploymentStatus
+from app.models.project import ROLLBACK_IMAGES_TO_KEEP_MAX, ROLLBACK_IMAGES_TO_KEEP_MIN
 from app.repositories.deployments import DeploymentRepository
 from app.repositories.environments import EnvironmentRepository
 from app.services.docker_env_discovery import ensure_default_docker_config
@@ -34,8 +35,6 @@ from app.services.provisioning import PermanentJobError, TransientJobError
 logger = get_logger("services.image_retention")
 
 PRUNE_IMAGES_TASK = "aerodeck.environments.prune_images"
-KEEP_MIN = 1
-KEEP_MAX = 20
 _RM_TIMEOUT_SECONDS = 30
 
 
@@ -60,7 +59,7 @@ def image_ids_to_drop(
     Already-pruned rows still occupy a slot in the newest ``keep`` so a later
     success does not delete a newer image to fill a hole. They are not returned.
     """
-    bounded = min(max(keep, KEEP_MIN), KEEP_MAX)
+    bounded = min(max(keep, ROLLBACK_IMAGES_TO_KEEP_MIN), ROLLBACK_IMAGES_TO_KEEP_MAX)
     ordered = sorted(rows, key=_recency, reverse=True)
     kept = {row.deployment_id for row in ordered[:bounded]}
     kept.add(protect_deployment_id)
