@@ -129,6 +129,7 @@ class JobService:
         *,
         deployment_id: uuid.UUID | None = None,
         env_vars: dict[str, str] | None = None,
+        replace_env_vars: dict[str, str] | None = None,
         addons: list[str] | None = None,
         rollback_from_deployment_id: uuid.UUID | None = None,
         promote_from_deployment_id: uuid.UUID | None = None,
@@ -142,7 +143,10 @@ class JobService:
             "region": environment.region,
         }
         merged_env: dict[str, str] = {}
-        if kind is JobKind.provision and self._env_var_loader is not None:
+        if replace_env_vars is not None:
+            # Full map for rollback restore: do not merge with the live environment (#273).
+            merged_env.update(replace_env_vars)
+        elif kind is JobKind.provision and self._env_var_loader is not None:
             merged_env.update(await self._env_var_loader.load_decrypted_map(project_id, environment_id))
         if env_vars:
             merged_env.update(env_vars)

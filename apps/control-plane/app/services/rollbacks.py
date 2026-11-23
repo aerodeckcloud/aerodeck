@@ -34,12 +34,12 @@ class RollbackService:
         restore_variables: bool,
         actor_user_id: uuid.UUID | None,
     ) -> tuple[Deployment, bool]:
-        """Restore the release snapshot when asked, then enqueue the image retag.
+        """Enqueue the image retag, then apply the variable snapshot only on success.
 
-        The environment deploy lock is held across restore and enqueue so the
-        variable mutation and the job's env load cannot interleave with another
-        provision. If the queue refuses the job after a restore, the prior
-        variable map is written back and committed before the error propagates.
+        The snapshot is unsealed up front and passed as ``replace_env_vars`` so the
+        worker gets the release map without mutating the live environment first.
+        ``replace_exact`` runs only after enqueue returns, so a dispatch failure
+        never leaves restored variables durable or unlocked for another provision.
         """
         source = await self._deployments.get(deployment_id)
         if source.project_id is None or source.environment_id is None:
@@ -49,15 +49,11 @@ class RollbackService:
         if source.status is not DeploymentStatus.succeeded:
             raise UnprocessableError("Only succeeded deployments can be rolled back to.")
 
-        # Serialize restore with enqueue's meta load (same transaction lock).
         await self._environments.lock_for_deploy(source.environment_id)
 
-        prior = None
-        variables_restored = False
+        entries = None
         if restore_variables:
-            variables_restored, prior = await self._deployments.restore_variables_from_snapshot(
-                source
-            )
+            entries = self._deployments.read_snapshot_entries(source)
 
         created = await self._deployments.create(
             DeploymentCreate(
@@ -68,23 +64,24 @@ class RollbackService:
             trigger=DeploymentTrigger.rollback,
             actor_user_id=actor_user_id,
         )
-        try:
-            await self._jobs.enqueue(
-                JobKind.provision,
-                source.project_id,
-                source.environment_id,
-                deployment_id=created.id,
-                rollback_from_deployment_id=source.id,
+        replace_env_vars = (
+            {key: entry.value for key, entry in entries.items()} if entries is not None else None
+        )
+        await self._jobs.enqueue(
+            JobKind.provision,
+            source.project_id,
+            source.environment_id,
+            deployment_id=created.id,
+            rollback_from_deployment_id=source.id,
+            replace_env_vars=replace_env_vars,
+        )
+
+        variables_restored = False
+        if entries is not None:
+            await self._deployments.apply_snapshot_entries(
+                source.project_id, source.environment_id, entries
             )
-        except Exception as exc:
-            if prior is not None:
-                try:
-                    await self._deployments.reinstate_variables(
-                        source.project_id, source.environment_id, prior
-                    )
-                except Exception as reinstate_exc:
-                    raise reinstate_exc from exc
-            raise
+            variables_restored = True
 
         logger.info(
             "event=deployment_rollback source=%s deployment=%s variables_restored=%s",

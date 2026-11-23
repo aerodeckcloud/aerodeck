@@ -91,9 +91,13 @@ async def test_succeed_stores_encrypted_env_snapshot_and_exposes_names_only(
         row = await session.get(Deployment, uuid.UUID(dep["id"]))
         assert row is not None
         assert row.env_vars_snapshot is not None
+        assert row.snapshot_names_json == '["API_TOKEN", "NODE_ENV"]'
         assert "super-secret-token" not in row.env_vars_snapshot
         restored = json.loads(decrypt_env_value(row.env_vars_snapshot, SIGNING_KEY))
-        assert restored == {"API_TOKEN": "super-secret-token", "NODE_ENV": "production"}
+        assert restored == {
+            "API_TOKEN": {"value": "super-secret-token", "is_secret": True},
+            "NODE_ENV": {"value": "production", "is_secret": False},
+        }
 
     # Sticky re-POST must not rewrite the snapshot after variables change.
     await client.put(
@@ -108,7 +112,7 @@ async def test_succeed_stores_encrypted_env_snapshot_and_exposes_names_only(
         row = await session.get(Deployment, uuid.UUID(dep["id"]))
         assert row is not None
         restored = json.loads(decrypt_env_value(row.env_vars_snapshot or "", SIGNING_KEY))
-        assert restored["API_TOKEN"] == "super-secret-token"
+        assert restored["API_TOKEN"]["value"] == "super-secret-token"
 
 
 @pytest.mark.asyncio
@@ -125,7 +129,7 @@ async def test_rollback_restores_snapshot_then_enqueues_image(
             json={
                 "items": [
                     {"key": "KEEP", "value": "original", "is_secret": True},
-                    {"key": "GONE", "value": "will-delete", "is_secret": True},
+                    {"key": "GONE", "value": "will-delete", "is_secret": False},
                 ]
             },
             headers=auth,
@@ -168,9 +172,16 @@ async def test_rollback_restores_snapshot_then_enqueues_image(
         assert "original" not in rolled.text
         assert "drifted" not in rolled.text
         assert dispatcher.calls[-1]["meta"]["rollback_from_deployment_id"] == dep["id"]
+        assert json.loads(dispatcher.calls[-1]["meta"]["env_vars_json"]) == {
+            "KEEP": "original",
+            "GONE": "will-delete",
+        }
 
         listed = (await client.get(base, headers=auth)).json()
-        assert [row["key"] for row in listed] == ["GONE", "KEEP"]
+        assert [(row["key"], row["is_secret"]) for row in listed] == [
+            ("GONE", False),
+            ("KEEP", True),
+        ]
 
         sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
         async with sessions() as session:
@@ -216,12 +227,13 @@ async def test_rollback_without_snapshot_leaves_variables(
         ).json()
         assert (await client.post(f"/api/v1/deployments/{dep['id']}/succeeded", headers=auth)).status_code == 200
 
-        # Simulate a pre-story succeeded row: clear the snapshot column.
+        # Simulate a pre-story succeeded row: clear both snapshot columns.
         sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
         async with sessions() as session:
             row = await session.get(Deployment, uuid.UUID(dep["id"]))
             assert row is not None
             row.env_vars_snapshot = None
+            row.snapshot_names_json = None
             await session.commit()
 
         got = await client.get(f"/api/v1/deployments/{dep['id']}", headers=auth)
@@ -288,7 +300,8 @@ async def test_rollback_with_garbage_snapshot_continues_image_only(
 
         got = await client.get(f"/api/v1/deployments/{dep['id']}", headers=auth)
         assert got.status_code == 200
-        assert got.json()["snapshot_variable_names"] is None
+        # Names stay readable from plaintext; restore still no-ops on bad ciphertext.
+        assert got.json()["snapshot_variable_names"] == ["STAY"]
 
         rolled = await client.post(
             f"/api/v1/deployments/{dep['id']}/rollback",
@@ -316,10 +329,10 @@ async def test_rollback_with_garbage_snapshot_continues_image_only(
 
 
 @pytest.mark.asyncio
-async def test_rollback_dispatch_failure_reinstates_variables(
+async def test_rollback_dispatch_failure_does_not_mutate_environment(
     app: FastAPI, client: AsyncClient, auth: dict[str, str]
 ) -> None:
-    """Queue failure after restore must not leave the drifted map replaced (#273)."""
+    """Dispatch failure must never write the snapshot; another session still sees drift (#273)."""
 
     class BrokenDispatcher:
         def dispatch(self, kind: JobKind, *, project_id: str, environment_id: str, **meta: str) -> str:
@@ -369,11 +382,7 @@ async def test_rollback_dispatch_failure_reinstates_variables(
                 headers=auth,
             )
 
-        listed = (await client.get(base, headers=auth)).json()
-        assert [(row["key"], row["is_secret"]) for row in listed] == [
-            ("EXTRA", False),
-            ("KEEP", True),
-        ]
+        # A separate session must still see the drifted map — restore never committed.
         sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
         async with sessions() as session:
             rows = (
@@ -389,6 +398,13 @@ async def test_rollback_dispatch_failure_reinstates_variables(
             secrets = {row.key: row.is_secret for row in rows}
             assert values == {"KEEP": "drifted-value", "EXTRA": "only-after"}
             assert secrets == {"KEEP": True, "EXTRA": False}
+            assert "from-snapshot" not in values.values()
+
+        listed = (await client.get(base, headers=auth)).json()
+        assert [(row["key"], row["is_secret"]) for row in listed] == [
+            ("EXTRA", False),
+            ("KEEP", True),
+        ]
     finally:
         app.dependency_overrides.pop(get_job_dispatcher, None)
 

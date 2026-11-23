@@ -249,10 +249,10 @@ class EnvironmentVariableService:
         )
 
     def seal(self, values: dict[str, str]) -> str:
-        """Encrypt a variable map (waiting one-offs or a release snapshot).
+        """Encrypt a plain string map (waiting one-off overlays).
 
         Same key and cipher as saved variables. The token must never be logged
-        or returned to the client (#271, #273).
+        or returned to the client (#271).
         """
         return encrypt_env_value(json.dumps(values), self._signing_key)
 
@@ -261,38 +261,44 @@ class EnvironmentVariableService:
         values = json.loads(decrypt_env_value(token, self._signing_key))
         return {str(key): str(value) for key, value in values.items()}
 
-    def try_unseal(
+    def seal_snapshot(self, entries: dict[str, EnvVarPlain]) -> str:
+        """Encrypt a release snapshot including each key's ``is_secret`` (#273)."""
+        payload = {
+            key: {"value": entry.value, "is_secret": entry.is_secret}
+            for key, entry in entries.items()
+        }
+        return encrypt_env_value(json.dumps(payload, sort_keys=True), self._signing_key)
+
+    def try_unseal_snapshot(
         self,
         token: str,
         *,
         deployment_id: uuid.UUID | None = None,
         environment_id: uuid.UUID | None = None,
-    ) -> dict[str, str] | None:
-        """Like ``unseal``, but returns None when the token is corrupt or unreadable."""
+    ) -> dict[str, EnvVarPlain] | None:
+        """Decrypt a release snapshot. Returns None when the token is unreadable."""
         try:
-            return self.unseal(token)
-        except (InvalidToken, json.JSONDecodeError, TypeError, ValueError):
+            raw = json.loads(decrypt_env_value(token, self._signing_key))
+            if not isinstance(raw, dict):
+                raise TypeError("snapshot payload must be an object")
+            entries: dict[str, EnvVarPlain] = {}
+            for key, item in raw.items():
+                if isinstance(item, dict):
+                    entries[str(key)] = EnvVarPlain(
+                        str(item["value"]),
+                        bool(item.get("is_secret", True)),
+                    )
+                else:
+                    # Legacy plain string map (pre-is_secret snapshot shape).
+                    entries[str(key)] = EnvVarPlain(str(item), True)
+            return entries
+        except (InvalidToken, json.JSONDecodeError, TypeError, ValueError, KeyError):
             logger.warning(
                 "event=env_vars_snapshot_unreadable deployment=%s environment=%s",
                 deployment_id,
                 environment_id,
             )
             return None
-
-    def snapshot_names(
-        self,
-        token: str | None,
-        *,
-        deployment_id: uuid.UUID | None = None,
-        environment_id: uuid.UUID | None = None,
-    ) -> list[str] | None:
-        """Sorted variable names in a sealed snapshot. Never the values (#273)."""
-        if not token:
-            return None
-        values = self.try_unseal(
-            token, deployment_id=deployment_id, environment_id=environment_id
-        )
-        return None if values is None else sorted(values)
 
     async def replace_all(
         self,

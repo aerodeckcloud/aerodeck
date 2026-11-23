@@ -72,6 +72,8 @@ class Deployment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Encrypted copy of the environment's variables when this row succeeded (#273).
     # Same Fernet helper as saved env vars. Null on rows that never captured one.
     env_vars_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Sorted JSON name list for the snapshot. Plaintext so reads never decrypt (#273).
+    snapshot_names_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[DeploymentStatus] = mapped_column(
         Enum(DeploymentStatus, name="deployment_status", native_enum=False, length=16),
         nullable=False,

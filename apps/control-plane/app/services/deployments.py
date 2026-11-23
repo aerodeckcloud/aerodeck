@@ -1,3 +1,4 @@
+import json
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -70,27 +71,11 @@ class EnvVarPlainEntry(Protocol):
 class EnvVarSnapshotter(Protocol):
     """Seal / name helpers for the release variable snapshot (#273)."""
 
-    async def load_decrypted_map(
-        self, project_id: uuid.UUID, environment_id: uuid.UUID
-    ) -> dict[str, str]: ...
-
     async def load_decrypted_entries(
         self, project_id: uuid.UUID, environment_id: uuid.UUID
     ) -> dict[str, EnvVarPlainEntry]: ...
 
-    def seal(self, values: dict[str, str]) -> str: ...
-
-    def snapshot_names(
-        self,
-        token: str | None,
-        *,
-        deployment_id: uuid.UUID | None = None,
-        environment_id: uuid.UUID | None = None,
-    ) -> list[str] | None: ...
-
-    async def replace_all(
-        self, project_id: uuid.UUID, environment_id: uuid.UUID, values: dict[str, str]
-    ) -> list[str]: ...
+    def seal_snapshot(self, entries: dict[str, EnvVarPlainEntry]) -> str: ...
 
     async def replace_exact(
         self,
@@ -99,13 +84,13 @@ class EnvVarSnapshotter(Protocol):
         entries: dict[str, EnvVarPlainEntry],
     ) -> list[str]: ...
 
-    def try_unseal(
+    def try_unseal_snapshot(
         self,
         token: str,
         *,
         deployment_id: uuid.UUID | None = None,
         environment_id: uuid.UUID | None = None,
-    ) -> dict[str, str] | None: ...
+    ) -> dict[str, EnvVarPlainEntry] | None: ...
 
 
 class DeploymentService:
@@ -262,62 +247,37 @@ class DeploymentService:
         variables_restored: bool | None = None,
     ) -> DeploymentRead:
         """Build the API model. Snapshot names only — never values or ciphertext."""
-        names = None
-        if self._env_vars is not None:
-            names = self._env_vars.snapshot_names(
-                deployment.env_vars_snapshot,
-                deployment_id=deployment.id,
-                environment_id=deployment.environment_id,
-            )
         return DeploymentRead.model_validate(deployment).model_copy(
             update={
-                "snapshot_variable_names": names,
+                "snapshot_variable_names": _parse_snapshot_names(deployment.snapshot_names_json),
                 "variables_restored": variables_restored,
             }
         )
 
-    async def restore_variables_from_snapshot(
+    def read_snapshot_entries(
         self, source: Deployment
-    ) -> tuple[bool, dict[str, EnvVarPlainEntry] | None]:
-        """Replace the environment's variables with the release snapshot.
+    ) -> dict[str, EnvVarPlainEntry] | None:
+        """Decrypt the release snapshot without writing the environment (#273).
 
-        The caller must hold the environment deploy lock. Returns
-        ``(restored, prior)`` where ``prior`` keeps values and ``is_secret`` so a
-        failed queue dispatch can reinstate without flipping secret flags (#273).
+        Returns None when the row has no snapshot or the ciphertext is unreadable.
         """
         if self._env_vars is None or not source.env_vars_snapshot:
-            return False, None
-        if source.project_id is None or source.environment_id is None:
-            return False, None
-        values = self._env_vars.try_unseal(
+            return None
+        return self._env_vars.try_unseal_snapshot(
             source.env_vars_snapshot,
             deployment_id=source.id,
             environment_id=source.environment_id,
         )
-        if values is None:
-            return False, None
-        prior = await self._env_vars.load_decrypted_entries(
-            source.project_id, source.environment_id
-        )
-        await self._env_vars.replace_all(source.project_id, source.environment_id, values)
-        logger.info(
-            "event=deployment_env_vars_restored deployment=%s keys=%d",
-            source.id,
-            len(values),
-        )
-        return True, prior
 
-    async def reinstate_variables(
+    async def apply_snapshot_entries(
         self,
         project_id: uuid.UUID,
         environment_id: uuid.UUID,
         entries: dict[str, EnvVarPlainEntry],
     ) -> None:
-        """Put variables back after a rollback restore that must not stick.
+        """Write the snapshot into the environment after enqueue has succeeded (#273).
 
-        Re-acquires the deploy lock (enqueue failure already committed and
-        released it), then writes the prior map with original secret flags and
-        commits so a concurrent provision cannot race the reinstate (#273).
+        Re-acquires the deploy lock when a prior enqueue commit released it.
         """
         if self._env_vars is None:
             return
@@ -325,7 +285,7 @@ class DeploymentService:
         await self._env_vars.replace_exact(project_id, environment_id, entries)
         await self.commit()
         logger.info(
-            "event=deployment_env_vars_reinstated environment=%s keys=%d",
+            "event=deployment_env_vars_restored environment=%s keys=%d",
             environment_id,
             len(entries),
         )
@@ -360,13 +320,27 @@ class DeploymentService:
             return
         if deployment.project_id is None or deployment.environment_id is None:
             return
-        values = await self._env_vars.load_decrypted_map(
+        entries = await self._env_vars.load_decrypted_entries(
             deployment.project_id, deployment.environment_id
         )
-        deployment.env_vars_snapshot = self._env_vars.seal(values)
+        deployment.env_vars_snapshot = self._env_vars.seal_snapshot(entries)
+        deployment.snapshot_names_json = json.dumps(sorted(entries))
         await self._deployments.save(deployment)
         logger.info(
             "event=deployment_env_vars_snapshot deployment=%s keys=%d",
             deployment.id,
-            len(values),
+            len(entries),
         )
+
+
+def _parse_snapshot_names(raw: str | None) -> list[str] | None:
+    """Read the plaintext name list. Never touches the sealed blob."""
+    if not raw:
+        return None
+    try:
+        names = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        return None
+    return list(names)
