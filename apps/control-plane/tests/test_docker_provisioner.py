@@ -24,12 +24,22 @@ from app.worker import select_provisioner
 
 
 class FakeCommandRunner:
-    def __init__(self, *, create_dockerfile: bool = True, fail_on: dict[str, CommandResult] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        create_dockerfile: bool = True,
+        fail_on: dict[str, CommandResult] | None = None,
+        dockerfile_text: str = "FROM alpine:3.20\n",
+        compose_text: str | None = None,
+    ) -> None:
         self.calls: list[list[str]] = []
         self.envs: list[dict[str, str] | None] = []
         self.timeouts: list[int] = []
         self.create_dockerfile = create_dockerfile
         self.fail_on = fail_on or {}
+        self.dockerfile_text = dockerfile_text
+        self.compose_text = compose_text
+        self.env_files: list[str] = []
 
     def run(
         self,
@@ -51,7 +61,9 @@ class FakeCommandRunner:
             target = Path(args[-1])
             target.mkdir(parents=True, exist_ok=True)
             if self.create_dockerfile:
-                (target / "Dockerfile").write_text("FROM alpine:3.20\n", encoding="utf-8")
+                (target / "Dockerfile").write_text(self.dockerfile_text, encoding="utf-8")
+            if self.compose_text is not None:
+                (target / "docker-compose.yaml").write_text(self.compose_text, encoding="utf-8")
             if on_line:
                 on_line("Cloning into 'repo'...")
             return CommandResult(0, "", "")
@@ -65,6 +77,9 @@ class FakeCommandRunner:
         if args[:2] == ["docker", "rm"]:
             return CommandResult(0, "", "")
         if args[:2] == ["docker", "run"]:
+            if "--env-file" in args:
+                env_path = Path(args[args.index("--env-file") + 1])
+                self.env_files.append(env_path.read_text(encoding="utf-8"))
             return CommandResult(0, "abc123container\n", "")
         if args[:2] == ["docker", "exec"]:
             if on_line:
@@ -166,6 +181,60 @@ def test_provision_clones_builds_runs_and_streams_logs() -> None:
     assert any("Cloning mangatohjunior/demo-app" in line for line in streamed)
     assert any("#1 [internal] load build definition" in line for line in streamed)
     assert any("Container aerodeck-app-f27ee337-bacbb040 running on 10.41.0.2:10420." in line for line in streamed)
+
+
+def test_provision_uses_confirmed_port_instead_of_expose() -> None:
+    runner = FakeCommandRunner(dockerfile_text="FROM alpine:3.20\nEXPOSE 8080\n")
+    provisioner = _make_provisioner(runner, port=10420)
+    streamed: list[str] = []
+
+    provisioner.provision(
+        project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+        environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+        project_slug="payments",
+        environment_slug="dev",
+        repo_url="https://github.com/mangatohjunior/demo-app",
+        container_port="3000",
+        on_log=streamed.append,
+    )
+
+    run_cmd = next(call for call in runner.calls if call[:2] == ["docker", "run"])
+    assert "10.41.0.2:10420:3000" in run_cmd
+    assert "10.41.0.2:10420:8080" not in run_cmd
+    assert "PORT=3000" in runner.env_files[0]
+    assert any("Using confirmed port 3000." in line for line in streamed)
+
+
+def test_provision_scopes_compose_env_to_the_confirmed_service() -> None:
+    runner = FakeCommandRunner(
+        compose_text=(
+            "services:\n"
+            "  web:\n"
+            "    build: .\n"
+            "    environment:\n"
+            "      WEB_ONLY: yes\n"
+            "  db:\n"
+            "    build: .\n"
+            "    environment:\n"
+            "      DB_ONLY: yes\n"
+        ),
+    )
+    provisioner = _make_provisioner(runner)
+    streamed: list[str] = []
+
+    provisioner.provision(
+        project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+        environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+        project_slug="payments",
+        environment_slug="dev",
+        repo_url="https://github.com/mangatohjunior/demo-app",
+        compose_service="web",
+        on_log=streamed.append,
+    )
+
+    assert "WEB_ONLY=yes" in runner.env_files[0]
+    assert "DB_ONLY" not in runner.env_files[0]
+    assert any("Using Compose service web." in line for line in streamed)
 
 
 def test_provision_fetches_a_pinned_commit_instead_of_the_default_branch() -> None:
