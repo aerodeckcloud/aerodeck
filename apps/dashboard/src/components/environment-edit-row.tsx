@@ -259,10 +259,11 @@ export function EnvironmentEditRow({
           }}
         />
         <p className="text-sm text-muted-foreground">
-          Optional. An executable and its arguments, not a shell script. It runs in the new
-          container after the health check and before traffic moves. If it fails or times out,
-          the current release stays up. Rolling an image back does not undo migrations this
-          command applied.
+          Optional. An executable and its arguments. Unquoted ; | &amp; &lt; &gt; ` are rejected. A
+          quoted command such as bash -c &quot;...&quot; is allowed. The control plane decides
+          backslash escapes. It runs after the health check and before traffic moves, including
+          on rollback and promote. A failure or timeout leaves the current release up. Rolling
+          an image back does not undo migrations this command applied.
         </p>
       </div>
       <label className="flex items-center gap-2 text-sm sm:col-span-2">

@@ -2107,14 +2107,29 @@ export async function provisionControlPlaneEnvironment(
     },
   );
   await throwIfEnvironmentJobResponseFailed(response, "provision");
-  let approvalPending = false;
+  let payload: unknown;
   try {
-    const payload = (await response.json()) as { approval_pending?: unknown };
-    approvalPending = payload?.approval_pending === true;
-  } catch {
-    approvalPending = false;
+    payload = await response.json();
+  } catch (cause) {
+    throw new ControlPlaneError("control plane provision accept body was not JSON", undefined, undefined, {
+      cause,
+    });
   }
-  return { approvalPending };
+  return { approvalPending: readApprovalPending(payload) };
+}
+
+function readApprovalPending(body: unknown): boolean {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new ControlPlaneError("control plane provision accept body was not an object");
+  }
+  const flag = (body as Record<string, unknown>).approval_pending;
+  if (flag === undefined || flag === false) {
+    return false;
+  }
+  if (flag === true) {
+    return true;
+  }
+  throw new ControlPlaneError("control plane provision accept body has an invalid approval_pending");
 }
 
 export async function inspectControlPlaneDeploymentRepo(
@@ -2454,17 +2469,17 @@ function parseEnvironmentOption(
     rollback_images_to_keep: rollbackImagesToKeep,
     retained_rollback_images: retainedRollbackImages,
     release_command: releaseCommand,
-    auto_deploy_paused: readEnvironmentFlag(row.auto_deploy_paused),
-    prod_deploy_approval: readEnvironmentFlag(row.prod_deploy_approval),
+    auto_deploy_paused: readEnvironmentFlag(row.auto_deploy_paused, "auto_deploy_paused"),
+    prod_deploy_approval: readEnvironmentFlag(row.prod_deploy_approval, "prod_deploy_approval"),
   };
 }
 
-function readEnvironmentFlag(value: unknown): boolean {
+function readEnvironmentFlag(value: unknown, field: string): boolean {
   if (value === undefined || value === null) {
     return false;
   }
   if (typeof value !== "boolean") {
-    throw new ControlPlaneError("control plane environments response was not a page");
+    throw new ControlPlaneError(`control plane environment ${field} was not a boolean`);
   }
   return value;
 }

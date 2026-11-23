@@ -16,6 +16,7 @@ import {
   cancelControlPlaneDeployment,
   createControlPlaneDeployment,
   createControlPlaneDeploymentAndProvision,
+  provisionControlPlaneEnvironment,
   deployLatestControlPlaneDeployment,
   promoteControlPlaneDeployment,
   createControlPlaneProject,
@@ -401,6 +402,46 @@ describe("listControlPlaneEnvironments", () => {
       (cause: unknown) => {
         assert.ok(cause instanceof ControlPlaneError);
         assert.match(cause.message, /was not a page/);
+        return true;
+      },
+    );
+  });
+
+  it("names a non-boolean pause or approval flag", async () => {
+    clearControlPlaneTokenCache();
+    const fetchImpl = (flag: "auto_deploy_paused" | "prod_deploy_approval"): typeof fetch => {
+      return async (input) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/auth/token")) {
+          return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+        }
+        if (url.includes("/api/v1/projects?") && !url.includes("/environments")) {
+          return jsonResponse({ items: [projectRow], total: 1, limit: 200, offset: 0 });
+        }
+        return jsonResponse({
+          items: [{ ...environmentRow, [flag]: "yes" }],
+          total: 1,
+          limit: 200,
+          offset: 0,
+        });
+      };
+    };
+
+    await assert.rejects(
+      () => listControlPlaneEnvironments(config, { fetch: fetchImpl("auto_deploy_paused") }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.match(cause.message, /auto_deploy_paused/);
+        assert.equal(cause.message.includes("was not a page"), false);
+        return true;
+      },
+    );
+    clearControlPlaneTokenCache();
+    await assert.rejects(
+      () => listControlPlaneEnvironments(config, { fetch: fetchImpl("prod_deploy_approval") }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.match(cause.message, /prod_deploy_approval/);
         return true;
       },
     );
@@ -1348,6 +1389,81 @@ describe("createControlPlaneDeploymentAndProvision", () => {
     assert.equal(provisionActor, actorUserId);
   });
 
+  it("refetches the deployment when provision is waiting for approval", async () => {
+    clearControlPlaneTokenCache();
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    const environmentId = "22222222-2222-4222-8222-222222222222";
+    const deploymentId = "33333333-3333-4333-8333-333333333333";
+    let refetched = false;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      if (url.endsWith(`/environments/${environmentId}`) && (init?.method ?? "GET") === "GET") {
+        return jsonResponse({
+          id: environmentId,
+          project_id: projectId,
+          slug: "prod",
+          name: "Prod",
+          kind: "prod",
+          region: "ams3",
+          created_at: "2026-10-18T00:00:00.000Z",
+          updated_at: "2026-10-18T00:00:00.000Z",
+        });
+      }
+      if (url.endsWith("/api/v1/deployments") && init?.method === "POST") {
+        return jsonResponse({
+          id: deploymentId,
+          repo_url: "https://github.com/acme/payments",
+          owner: "acme",
+          repo: "payments",
+          project_id: projectId,
+          environment_id: environmentId,
+          status: "queued",
+          started_at: "2026-10-18T00:00:00.000Z",
+        });
+      }
+      if (url.endsWith(`/environments/${environmentId}/provision`) && init?.method === "POST") {
+        return jsonResponse({
+          approval_pending: true,
+          kind: "provision",
+          project_id: projectId,
+          environment_id: environmentId,
+          status: "queued",
+        });
+      }
+      if (url.endsWith(`/api/v1/deployments/${deploymentId}`)) {
+        refetched = true;
+        return jsonResponse({
+          id: deploymentId,
+          repo_url: "https://github.com/acme/payments",
+          owner: "acme",
+          repo: "payments",
+          project_id: projectId,
+          environment_id: environmentId,
+          status: "queued",
+          started_at: "2026-10-18T00:00:00.000Z",
+          approval_required_at: "2026-10-18T00:00:01.000Z",
+        });
+      }
+      return jsonResponse({ detail: "unexpected" }, 500);
+    };
+
+    const deployment = await createControlPlaneDeploymentAndProvision(
+      config,
+      {
+        repoUrl: "https://github.com/acme/payments",
+        projectId,
+        environmentId,
+      },
+      { fetch: fetchImpl },
+    );
+    assert.equal(refetched, true);
+    assert.equal(deployment.id, deploymentId);
+    assert.equal(deployment.approval_required_at, "2026-10-18T00:00:01.000Z");
+  });
+
   it("does not create a deployment when the environment is missing", async () => {
     clearControlPlaneTokenCache();
     const projectId = "11111111-1111-4111-8111-111111111111";
@@ -1504,6 +1620,67 @@ describe("createControlPlaneDeploymentAndProvision", () => {
         assert.equal(cause.deploymentId, deploymentId);
         assert.match(cause.message, /network down/);
         assert.ok(cause.cause instanceof TypeError);
+        return true;
+      },
+    );
+  });
+});
+
+describe("provisionControlPlaneEnvironment", () => {
+  const projectId = "11111111-1111-4111-8111-111111111111";
+  const environmentId = "22222222-2222-4222-8222-222222222222";
+  const deploymentId = "33333333-3333-4333-8333-333333333333";
+
+  function provisionFetch(body: unknown, status = 202): typeof fetch {
+    return async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      if (typeof body === "string") {
+        return new Response(body, { status, headers: { "content-type": "application/json" } });
+      }
+      return jsonResponse(body, status);
+    };
+  }
+
+  it("continues when the accept body has no approval flag", async () => {
+    clearControlPlaneTokenCache();
+    const accepted = await provisionControlPlaneEnvironment(
+      config,
+      projectId,
+      environmentId,
+      deploymentId,
+      { fetch: provisionFetch({ job_id: "44444444-4444-4444-8444-444444444444", status: "queued" }) },
+    );
+    assert.equal(accepted.approvalPending, false);
+  });
+
+  it("fails when the accept body is not JSON", async () => {
+    clearControlPlaneTokenCache();
+    await assert.rejects(
+      () =>
+        provisionControlPlaneEnvironment(config, projectId, environmentId, deploymentId, {
+          fetch: provisionFetch("not-json"),
+        }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.match(cause.message, /was not JSON/);
+        return true;
+      },
+    );
+  });
+
+  it("fails when approval_pending is not a boolean", async () => {
+    clearControlPlaneTokenCache();
+    await assert.rejects(
+      () =>
+        provisionControlPlaneEnvironment(config, projectId, environmentId, deploymentId, {
+          fetch: provisionFetch({ approval_pending: "yes" }),
+        }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.match(cause.message, /approval_pending/);
         return true;
       },
     );

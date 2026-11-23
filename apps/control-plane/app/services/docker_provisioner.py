@@ -13,7 +13,8 @@ from typing import Protocol
 from app.core.config import Settings
 from app.core.github import canonical_github_repo_url, parse_github_repo
 from app.services.docker_policy import (
-    CommandResult, CommandRunner, LogSink, SubprocessCommandRunner, classify_failure, container_name_for,
+    CommandResult, CommandRunner, CommandTimeoutError, LogSink, SubprocessCommandRunner, classify_failure,
+    container_name_for,
     deployment_image_tag_for, find_available_port, image_tag_for, parse_release_command,
     route_hostname_for, validate_binary,
     normalize_git_sha, validate_dockerfile, validate_git_ref, validate_network, validate_runtime, validate_uuid,
@@ -284,7 +285,10 @@ class DockerProvisioner:
         release_command: str, on_log: LogSink | None, emit: LogSink,
     ) -> None:
         """Run the operator command in the new container before traffic moves (#275)."""
-        argv = parse_release_command(release_command)
+        try:
+            argv = parse_release_command(release_command)
+        except ValueError as exc:
+            raise PermanentJobError(str(exc)) from exc
         if not argv:
             return
         emit("Running release command before traffic moves...")
@@ -296,7 +300,7 @@ class DockerProvisioner:
             )
         except TransientJobError as exc:
             self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)
-            if "timed out" in str(exc):
+            if isinstance(exc, CommandTimeoutError):
                 raise PermanentJobError(
                     f"release command timed out after {self.release_command_timeout_seconds}s; "
                     "previous container still serving"

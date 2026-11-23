@@ -111,6 +111,8 @@ export const ENVIRONMENT_OVERLAP_INVALID = "Choose wait or override.";
 export const ENVIRONMENT_RETENTION_INVALID = "Keep between 1 and 20 rollback images.";
 export const ENVIRONMENT_RELEASE_COMMAND_INVALID =
   "Use an executable and arguments, not a shell script.";
+export const ENVIRONMENT_RELEASE_COMMAND_TOO_LONG =
+  "Use a release command of at most 500 characters.";
 export const RELEASE_COMMAND_MAX = 500;
 export const ROLLBACK_IMAGES_MIN = 1;
 export const ROLLBACK_IMAGES_MAX = 20;
@@ -129,7 +131,11 @@ export function isValidRollbackImageCount(value: number): boolean {
 
 const RELEASE_SHELL_CHARS = new Set([";", "|", "&", "<", ">", "`"]);
 
-/** Split a release command the way the control plane does. Null means it is not an argv. */
+/**
+ * Reject unquoted shell characters. Null means the form should not send it.
+ * Backslash escapes are left to the control plane: `echo a\ b` is one argument there
+ * and three tokens here, and a trailing backslash is invalid only on the API.
+ */
 export function releaseCommandArgv(raw: string): string[] | null {
   const command = raw.trim();
   if (!command || command.length > RELEASE_COMMAND_MAX || /[\n\r\0]/.test(command)) {
@@ -237,16 +243,23 @@ export function parseEnvironmentUpdateFields(
     value.rollback_images_to_keep = input.rollback_images_to_keep;
   }
   if (input.release_command !== undefined) {
-    if (input.release_command === null || input.release_command.trim() === "") {
+    const command = input.release_command?.trim() ?? "";
+    if (command === "") {
       value.release_command = null;
-    } else if (releaseCommandArgv(input.release_command) === null) {
+    } else if (command.length > RELEASE_COMMAND_MAX) {
+      return {
+        ok: false,
+        error: ENVIRONMENT_RELEASE_COMMAND_TOO_LONG,
+        code: "invalid_release_command",
+      };
+    } else if (releaseCommandArgv(command) === null) {
       return {
         ok: false,
         error: ENVIRONMENT_RELEASE_COMMAND_INVALID,
         code: "invalid_release_command",
       };
     } else {
-      value.release_command = input.release_command.trim();
+      value.release_command = command;
     }
   }
   if (input.auto_deploy_paused !== undefined) {

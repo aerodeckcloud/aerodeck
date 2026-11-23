@@ -9,6 +9,7 @@ import {
   ENVIRONMENT_PROJECT_REQUIRED,
   ENVIRONMENT_REGION_INVALID,
   ENVIRONMENT_RELEASE_COMMAND_INVALID,
+  ENVIRONMENT_RELEASE_COMMAND_TOO_LONG,
   ENVIRONMENT_SLUG_INVALID,
   ENVIRONMENT_RETENTION_INVALID,
   ENVIRONMENT_UPDATE_EMPTY,
@@ -18,6 +19,7 @@ import {
   isValidEnvironmentSlug,
   parseEnvironmentCreateFields,
   parseEnvironmentUpdateFields,
+  releaseCommandArgv,
 } from "./environment-input";
 
 const VALID_PROJECT_ID = "11111111-1111-4111-8111-111111111111";
@@ -206,6 +208,17 @@ describe("parseEnvironmentUpdateFields", () => {
       error: ENVIRONMENT_RELEASE_COMMAND_INVALID,
       code: "invalid_release_command",
     });
+    assert.deepEqual(parseEnvironmentUpdateFields({ release_command: "a".repeat(501) }), {
+      ok: false,
+      error: ENVIRONMENT_RELEASE_COMMAND_TOO_LONG,
+      code: "invalid_release_command",
+    });
+  });
+
+  it("leaves backslash escapes to the control plane", () => {
+    // Python shlex joins `echo a\ b` into ["echo", "a b"] and rejects a trailing backslash.
+    assert.deepEqual(releaseCommandArgv("echo a\\ b"), ["echo", "a\\", "b"]);
+    assert.deepEqual(releaseCommandArgv("echo a\\"), ["echo", "a\\"]);
   });
 
   it("accepts a pause or approval change on its own", () => {

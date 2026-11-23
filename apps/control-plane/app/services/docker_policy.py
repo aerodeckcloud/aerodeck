@@ -17,6 +17,10 @@ from typing import Protocol
 
 from app.services.provisioning import PermanentJobError, TransientJobError
 
+
+class CommandTimeoutError(TransientJobError):
+    """The process was killed because it passed its deadline."""
+
 LogSink = Callable[[str], None]
 _MAX_LOG_LINE_LEN = 400
 _MAX_ERROR_TAIL_LEN = 2000
@@ -78,7 +82,7 @@ class SubprocessCommandRunner:
             _collect_stream(proc, on_line, collected, timeout)
             return CommandResult(proc.returncode, "\n".join(collected), "")
         except subprocess.TimeoutExpired as exc:
-            raise TransientJobError(f"command timed out after {timeout}s: {args[0]}") from exc
+            raise CommandTimeoutError(f"command timed out after {timeout}s: {args[0]}") from exc
         except OSError as exc:
             raise PermanentJobError(f"failed to execute {args[0]}: {exc}") from exc
 
@@ -227,19 +231,19 @@ def parse_release_command(raw: str | None) -> list[str]:
     if not command:
         return []
     if len(command) > RELEASE_COMMAND_MAX_LENGTH:
-        raise PermanentJobError(
+        raise ValueError(
             f"release command must be at most {RELEASE_COMMAND_MAX_LENGTH} characters"
         )
     if any(char in command for char in "\n\r\x00"):
-        raise PermanentJobError(_RELEASE_COMMAND_REJECTED)
+        raise ValueError(_RELEASE_COMMAND_REJECTED)
     if _unquoted_shell_syntax(command):
-        raise PermanentJobError(_RELEASE_COMMAND_REJECTED)
+        raise ValueError(_RELEASE_COMMAND_REJECTED)
     try:
         argv = shlex.split(command, posix=True)
     except ValueError as exc:
-        raise PermanentJobError(_RELEASE_COMMAND_REJECTED) from exc
+        raise ValueError(_RELEASE_COMMAND_REJECTED) from exc
     if not argv or any("\x00" in token for token in argv):
-        raise PermanentJobError(_RELEASE_COMMAND_REJECTED)
+        raise ValueError(_RELEASE_COMMAND_REJECTED)
     return argv
 
 

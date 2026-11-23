@@ -18,6 +18,7 @@ from app.services.docker_provisioner import (
     image_tag_for,
     route_hostname_for,
 )
+from app.services.docker_policy import CommandTimeoutError
 from app.services.provisioning import DeploymentCancelled, JobKind, PermanentJobError, TransientJobError
 from app.worker import select_provisioner
 
@@ -506,7 +507,7 @@ def test_release_command_timeout_fails_without_moving_traffic() -> None:
         ) -> CommandResult:
             if args[:2] == ["docker", "exec"]:
                 self.calls.append(args)
-                raise TransientJobError(f"command timed out after {timeout}s: docker")
+                raise CommandTimeoutError(f"command timed out after {timeout}s: docker")
             return super().run(args, cwd=cwd, env=env, timeout=timeout, on_line=on_line)
 
     runner = ExecTimeout()

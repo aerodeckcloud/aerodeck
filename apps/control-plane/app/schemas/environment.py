@@ -12,7 +12,6 @@ from app.models.project import (
 )
 from app.schemas.common import Slug
 from app.services.docker_policy import parse_release_command
-from app.services.provisioning import PermanentJobError
 
 Name = Annotated[str, Field(min_length=1, max_length=120)]
 # DigitalOcean region slug, e.g. nyc3, ams3, fra1. Validated against the live list in Epic 2.
@@ -31,10 +30,7 @@ def _release_command_or_none(value: object) -> str | None:
         raise ValueError("release command must be a string")
     if not value.strip():
         return None
-    try:
-        parse_release_command(value)
-    except PermanentJobError as exc:
-        raise ValueError(str(exc)) from exc
+    parse_release_command(value)
     return value.strip()
 
 
