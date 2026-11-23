@@ -1,12 +1,12 @@
 import json
 import uuid
 from datetime import datetime
-from typing import Annotated, Self
+from typing import Annotated, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.github import parse_github_repo
-from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
+from app.models.deployment import DeploymentStatus, DeploymentTrigger
 
 RepoUrl = Annotated[str, Field(min_length=1, max_length=512)]
 
@@ -77,8 +77,14 @@ class DeploymentRead(BaseModel):
     updated_at: datetime
 
 
+class DeploymentSource(Protocol):
+    """Fields the read model copies. Not the ORM entity (#273)."""
+
+    snapshot_names_json: str | None
+
+
 def deployment_to_read(
-    deployment: Deployment,
+    deployment: DeploymentSource,
     *,
     variables_restored: bool | None = None,
 ) -> DeploymentRead:

@@ -1,5 +1,23 @@
 /** Build the rollback confirm copy. Names only — never values (#273). */
 
+export function rollbackRestoreWarning(input: {
+  sourceNames: string[] | null | undefined;
+  variablesRestored: boolean | null | undefined;
+  heldForDeploymentId: string | null | undefined;
+}): string | null {
+  if (input.sourceNames == null) {
+    return null;
+  }
+  if (input.variablesRestored !== false) {
+    return null;
+  }
+  // A held rollback restores when it is dispatched, not in this response.
+  if (input.heldForDeploymentId) {
+    return null;
+  }
+  return "The image rollback started, but the saved variables could not be restored. Environment variables were left unchanged.";
+}
+
 export type RollbackVariableDiff = {
   added: string[];
   removed: string[];

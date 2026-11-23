@@ -30,7 +30,7 @@ import { isDeploymentWaiting } from "@/lib/deployment-waiting";
 import { formatDuration, formatInstant } from "@/lib/format";
 import { nativeSelectClassName } from "@/lib/native-select";
 import { canPromote, promotionTargetLabel, promotionTargets } from "@/lib/promotion";
-import { rollbackConfirmMessage } from "@/lib/rollback-variables";
+import { rollbackConfirmMessage, rollbackRestoreWarning } from "@/lib/rollback-variables";
 import type { Deployment, DeploymentStatus, EnvironmentOption, ProjectSource } from "@/lib/types";
 
 function statusBadge(status: DeploymentStatus, heldFor?: string | null) {
@@ -143,6 +143,7 @@ export function ProjectDeploymentsSection({
     action: "redeploy" | "deploy-latest" | "rollback" | "promote",
   ) {
     setError(null);
+    let rollbackSource: Deployment | null = null;
     if (action === "rollback") {
       const dep = deployments.find((row) => row.id === deploymentId);
       if (!dep) {
@@ -151,6 +152,7 @@ export function ProjectDeploymentsSection({
       if (!(await confirmRollback(dep))) {
         return;
       }
+      rollbackSource = dep;
     }
     setBusyId(`${deploymentId}:${action}`);
     try {
@@ -161,6 +163,14 @@ export function ProjectDeploymentsSection({
         next = await deployLatestDeployment(deploymentId);
       } else if (action === "rollback") {
         next = await rollbackDeployment(deploymentId, { restoreVariables: true });
+        const warning = rollbackRestoreWarning({
+          sourceNames: rollbackSource?.snapshot_variable_names,
+          variablesRestored: next.variables_restored,
+          heldForDeploymentId: next.held_for_deployment_id,
+        });
+        if (warning) {
+          window.alert(warning);
+        }
       } else {
         const targetId = promoteTargetById[deploymentId];
         if (!targetId) {

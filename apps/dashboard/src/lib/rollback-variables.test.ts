@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { rollbackConfirmMessage, rollbackVariableDiff } from "./rollback-variables";
+import {
+  rollbackConfirmMessage,
+  rollbackRestoreWarning,
+  rollbackVariableDiff,
+} from "./rollback-variables";
 
 describe("rollbackVariableDiff", () => {
   it("returns null when there is no snapshot", () => {
@@ -15,6 +19,48 @@ describe("rollbackVariableDiff", () => {
       removed: ["C"],
       restored: ["B"],
     });
+  });
+});
+
+describe("rollbackRestoreWarning", () => {
+  it("warns when named variables were not restored and the job was not held", () => {
+    const message = rollbackRestoreWarning({
+      sourceNames: ["KEEP"],
+      variablesRestored: false,
+      heldForDeploymentId: null,
+    });
+    assert.match(message ?? "", /could not be restored/);
+    assert.doesNotMatch(message ?? "", /KEEP/);
+  });
+
+  it("stays quiet when restore is deferred behind another deploy", () => {
+    assert.equal(
+      rollbackRestoreWarning({
+        sourceNames: ["KEEP"],
+        variablesRestored: false,
+        heldForDeploymentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      }),
+      null,
+    );
+  });
+
+  it("stays quiet when there was no snapshot or restore succeeded", () => {
+    assert.equal(
+      rollbackRestoreWarning({
+        sourceNames: null,
+        variablesRestored: false,
+        heldForDeploymentId: null,
+      }),
+      null,
+    );
+    assert.equal(
+      rollbackRestoreWarning({
+        sourceNames: ["KEEP"],
+        variablesRestored: true,
+        heldForDeploymentId: null,
+      }),
+      null,
+    );
   });
 });
 

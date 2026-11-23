@@ -386,7 +386,6 @@ async def promote_deployment(
     deployment_id: uuid.UUID,
     body: DeploymentPromote,
     promotions: PromotionServiceDep,
-    deployments: DeploymentServiceDep,
     users: ConsoleUserServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
