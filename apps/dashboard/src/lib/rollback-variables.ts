@@ -21,8 +21,15 @@ export function rollbackVariableDiff(
   return { added, removed, restored };
 }
 
-export function rollbackConfirmMessage(diff: RollbackVariableDiff | null): string {
-  if (diff === null) {
+export type RollbackConfirmInput = {
+  snapshotNames: string[] | null | undefined;
+  /** Current keys, or null when the list could not be loaded. */
+  currentNames: string[] | null;
+};
+
+export function rollbackConfirmMessage(input: RollbackConfirmInput): string {
+  const { snapshotNames, currentNames } = input;
+  if (snapshotNames == null) {
     return [
       "Roll back to this release?",
       "",
@@ -30,19 +37,40 @@ export function rollbackConfirmMessage(diff: RollbackVariableDiff | null): strin
     ].join("\n");
   }
 
+  if (currentNames === null) {
+    const saved =
+      snapshotNames.length > 0 ? snapshotNames.join(", ") : "(none — empty snapshot)";
+    return [
+      "Roll back to this release?",
+      "",
+      `Saved variable names: ${saved}`,
+      "Could not load the current environment variables, so the add/remove list is unavailable.",
+      "Confirming will still restore the saved variables when the snapshot is readable.",
+      "",
+      "Values are never shown.",
+    ].join("\n");
+  }
+
+  const diff = rollbackVariableDiff(snapshotNames, currentNames);
   const lines = ["Roll back to this release?", "", "Variables that would change (names only):"];
-  if (diff.added.length > 0) {
+  if (diff && diff.added.length > 0) {
     lines.push(`Add: ${diff.added.join(", ")}`);
   }
-  if (diff.removed.length > 0) {
+  if (diff && diff.removed.length > 0) {
     lines.push(`Remove: ${diff.removed.join(", ")}`);
   }
-  if (diff.restored.length > 0) {
+  if (diff && diff.restored.length > 0) {
     lines.push(`Restore values for: ${diff.restored.join(", ")}`);
   }
-  if (diff.added.length === 0 && diff.removed.length === 0 && diff.restored.length === 0) {
+  if (
+    diff &&
+    diff.added.length === 0 &&
+    diff.removed.length === 0 &&
+    diff.restored.length === 0
+  ) {
     lines.push("None — the snapshot is empty, so every current variable will be removed.");
   }
   lines.push("", "Values are never shown.");
+  lines.push("To roll back the image without restoring variables, use the API with restore_variables: false.");
   return lines.join("\n");
 }

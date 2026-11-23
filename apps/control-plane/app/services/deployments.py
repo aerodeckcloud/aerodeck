@@ -72,7 +72,7 @@ class EnvVarSnapshotter(Protocol):
         self, project_id: uuid.UUID, environment_id: uuid.UUID, values: dict[str, str]
     ) -> list[str]: ...
 
-    def unseal(self, token: str) -> dict[str, str]: ...
+    def try_unseal(self, token: str) -> dict[str, str] | None: ...
 
 
 class DeploymentService:
@@ -242,14 +242,17 @@ class DeploymentService:
     async def restore_variables_from_snapshot(self, source: Deployment) -> bool:
         """Replace the environment's variables with the release snapshot.
 
-        Returns True when a snapshot was applied. False when the row has none
-        (pre-story deployments) so the caller can leave variables alone (#273).
+        Returns True when a snapshot was applied. False when the row has none,
+        the ciphertext is unreadable, or the row is unlinked — so the caller
+        can leave variables alone and still retag the image (#273).
         """
         if self._env_vars is None or not source.env_vars_snapshot:
             return False
         if source.project_id is None or source.environment_id is None:
             return False
-        values = self._env_vars.unseal(source.env_vars_snapshot)
+        values = self._env_vars.try_unseal(source.env_vars_snapshot)
+        if values is None:
+            return False
         await self._env_vars.replace_all(source.project_id, source.environment_id, values)
         logger.info(
             "event=deployment_env_vars_restored deployment=%s keys=%d",

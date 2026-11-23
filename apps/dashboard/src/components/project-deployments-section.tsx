@@ -30,7 +30,7 @@ import { isDeploymentWaiting } from "@/lib/deployment-waiting";
 import { formatDuration, formatInstant } from "@/lib/format";
 import { nativeSelectClassName } from "@/lib/native-select";
 import { canPromote, promotionTargetLabel, promotionTargets } from "@/lib/promotion";
-import { rollbackConfirmMessage, rollbackVariableDiff } from "@/lib/rollback-variables";
+import { rollbackConfirmMessage } from "@/lib/rollback-variables";
 import type { Deployment, DeploymentStatus, EnvironmentOption, ProjectSource } from "@/lib/types";
 
 function statusBadge(status: DeploymentStatus, heldFor?: string | null) {
@@ -120,19 +120,22 @@ export function ProjectDeploymentsSection({
   const envNameById = new Map(environments.map((env) => [env.id, env.slug]));
 
   async function confirmRollback(dep: Deployment): Promise<boolean> {
-    let currentNames: string[] = [];
+    let currentNames: string[] | null = [];
     if (dep.snapshot_variable_names != null && dep.project_id && dep.environment_id) {
       try {
         const vars = await fetchEnvironmentVars(dep.project_id, dep.environment_id);
         currentNames = vars.map((row) => row.key);
       } catch {
-        // Still confirm with snapshot names alone when the current list cannot load.
+        // Do not treat a failed load as an empty environment (false "Add" list).
+        currentNames = null;
       }
     }
-    const message = rollbackConfirmMessage(
-      rollbackVariableDiff(dep.snapshot_variable_names, currentNames),
+    return window.confirm(
+      rollbackConfirmMessage({
+        snapshotNames: dep.snapshot_variable_names,
+        currentNames,
+      }),
     );
-    return window.confirm(message);
   }
 
   async function handleAction(

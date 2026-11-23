@@ -250,6 +250,72 @@ async def test_rollback_without_snapshot_leaves_variables(
 
 
 @pytest.mark.asyncio
+async def test_rollback_with_garbage_snapshot_continues_image_only(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    """Corrupt ciphertext must not 500; leave vars alone and still enqueue (#273)."""
+    dispatcher = FakeDispatcher()
+    app.dependency_overrides[get_job_dispatcher] = lambda: dispatcher
+    try:
+        project, env = await _project_env(client, auth, "snap-garbage")
+        base = f"/api/v1/projects/{project['id']}/environments/{env['id']}/env-vars"
+        await client.put(
+            base,
+            json={"items": [{"key": "STAY", "value": "keep-me", "is_secret": True}]},
+            headers=auth,
+        )
+        dep = (
+            await client.post(
+                "/api/v1/deployments",
+                json={
+                    "repo_url": "https://github.com/mangatohjunior/dev-portal",
+                    "project_id": project["id"],
+                    "environment_id": env["id"],
+                },
+                headers=auth,
+            )
+        ).json()
+        assert (
+            await client.post(f"/api/v1/deployments/{dep['id']}/succeeded", headers=auth)
+        ).status_code == 200
+
+        sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
+        async with sessions() as session:
+            row = await session.get(Deployment, uuid.UUID(dep["id"]))
+            assert row is not None
+            row.env_vars_snapshot = "not-valid-fernet-ciphertext"
+            await session.commit()
+
+        got = await client.get(f"/api/v1/deployments/{dep['id']}", headers=auth)
+        assert got.status_code == 200
+        assert got.json()["snapshot_variable_names"] is None
+
+        rolled = await client.post(
+            f"/api/v1/deployments/{dep['id']}/rollback",
+            json={"restore_variables": True},
+            headers=auth,
+        )
+        assert rolled.status_code == 201, rolled.text
+        assert rolled.json()["variables_restored"] is False
+        assert dispatcher.calls[-1]["meta"]["rollback_from_deployment_id"] == dep["id"]
+
+        listed = (await client.get(base, headers=auth)).json()
+        assert [row["key"] for row in listed] == ["STAY"]
+        async with sessions() as session:
+            row = (
+                await session.scalars(
+                    select(EnvironmentVariable).where(
+                        EnvironmentVariable.environment_id == uuid.UUID(env["id"]),
+                        EnvironmentVariable.key == "STAY",
+                    )
+                )
+            ).one()
+            assert decrypt_env_value(row.encrypted_value, SIGNING_KEY) == "keep-me"
+    finally:
+        app.dependency_overrides.pop(get_job_dispatcher, None)
+
+
+@pytest.mark.asyncio
 async def test_rollback_can_skip_variable_restore(
     app: FastAPI, client: AsyncClient, auth: dict[str, str]
 ) -> None:

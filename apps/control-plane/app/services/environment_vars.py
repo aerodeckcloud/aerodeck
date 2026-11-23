@@ -254,15 +254,20 @@ class EnvironmentVariableService:
         values = json.loads(decrypt_env_value(token, self._signing_key))
         return {str(key): str(value) for key, value in values.items()}
 
+    def try_unseal(self, token: str) -> dict[str, str] | None:
+        """Like ``unseal``, but returns None when the token is corrupt or unreadable."""
+        try:
+            return self.unseal(token)
+        except (InvalidToken, json.JSONDecodeError, TypeError, ValueError):
+            logger.warning("event=env_vars_snapshot_unreadable")
+            return None
+
     def snapshot_names(self, token: str | None) -> list[str] | None:
         """Sorted variable names in a sealed snapshot. Never the values (#273)."""
         if not token:
             return None
-        try:
-            return sorted(self.unseal(token))
-        except (InvalidToken, json.JSONDecodeError, TypeError, ValueError):
-            logger.warning("event=env_vars_snapshot_unreadable")
-            return None
+        values = self.try_unseal(token)
+        return None if values is None else sorted(values)
 
     async def replace_all(
         self,
