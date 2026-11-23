@@ -47,6 +47,8 @@ _UNAVAILABLE = {status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ErrorResponse}}
 _NOT_STARTED = {status.HTTP_409_CONFLICT: {"model": ErrorResponse}}
 # Promoting needs a developer, and an owner when the target is production (#272).
 _FORBIDDEN = {status.HTTP_403_FORBIDDEN: {"model": ErrorResponse}}
+# Same environment, other project, non-succeeded row, or missing image (#272).
+_UNPROCESSABLE = {status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ErrorResponse}}
 # The target replaces its active deploy, and that deploy is already swapping containers.
 _SWAP_STARTED = {status.HTTP_409_CONFLICT: {"model": ErrorResponse}}
 
@@ -366,7 +368,12 @@ async def cancel_deployment(
     response_model=DeploymentRead,
     status_code=status.HTTP_201_CREATED,
     summary="Run a succeeded deployment's image in another environment of the project (#272)",
-    responses=_NOT_FOUND | _UNAUTHENTICATED | _FORBIDDEN | _SWAP_STARTED | _UNAVAILABLE,
+    responses=_NOT_FOUND
+    | _UNAUTHENTICATED
+    | _FORBIDDEN
+    | _UNPROCESSABLE
+    | _SWAP_STARTED
+    | _UNAVAILABLE,
 )
 async def promote_deployment(
     deployment_id: uuid.UUID,
