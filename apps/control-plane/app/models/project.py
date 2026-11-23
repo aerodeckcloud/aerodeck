@@ -1,7 +1,7 @@
 import enum
 import uuid
 
-from sqlalchemy import CheckConstraint, Enum, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Enum, ForeignKey, Integer, String, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -74,6 +74,15 @@ class Environment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     # Executable plus arguments, run in the new container before traffic moves (#275).
     release_command: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # When true, a GitHub push does not enqueue a provision (#276).
+    auto_deploy_paused: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    # When true, a developer or webhook deploy to this prod environment waits for an owner.
+    # Existing rows stay false. New prod environments are set true by the API (#276).
+    prod_deploy_approval: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
 
     project: Mapped[Project] = relationship(back_populates="environments")
     routes: Mapped[list["Route"]] = relationship(

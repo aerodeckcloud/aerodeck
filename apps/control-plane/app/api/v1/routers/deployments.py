@@ -19,7 +19,9 @@ from app.api.deps import (
     AuditLogServiceDep,
     ClientDep,
     ConsoleUserServiceDep,
+    DeployApprovalServiceDep,
     DeploymentServiceDep,
+    EnvironmentServiceDep,
     ImageRetentionServiceDep,
     JobServiceDep,
     ReleaseJobServiceDep,
@@ -44,7 +46,6 @@ from app.services.blueprint_inspector import inspect_github_repository_sync
 from app.services.docker_policy import normalize_git_sha
 from app.services.container_logs import ContainerLogsRead, dispatch_container_logs
 from app.services.deployment_logs import ensure_log_store_ready, iter_deployment_log_lines
-from app.services.provisioning import JobKind
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
 
@@ -280,13 +281,15 @@ def _require_linked(source) -> tuple[uuid.UUID, uuid.UUID]:
 async def _enqueue_copy(
     source,
     deployments: DeploymentServiceDep,
-    jobs: JobServiceDep,
     users: ConsoleUserServiceDep,
+    environments: EnvironmentServiceDep,
+    approval: DeployApprovalServiceDep,
     actor_user_id: uuid.UUID | None,
     *,
     git_ref: str | None,
 ) -> DeploymentRead:
     project_id, environment_id = _require_linked(source)
+    known_actor = await _known_actor(users, actor_user_id)
     created = await deployments.create(
         DeploymentCreate(
             repo_url=source.repo_url,
@@ -294,15 +297,10 @@ async def _enqueue_copy(
             environment_id=environment_id,
         ),
         trigger=DeploymentTrigger.manual,
-        actor_user_id=await _known_actor(users, actor_user_id),
+        actor_user_id=known_actor,
     )
-    await jobs.enqueue(
-        JobKind.provision,
-        project_id,
-        environment_id,
-        deployment_id=created.id,
-        git_ref=git_ref,
-    )
+    environment = await environments.get(project_id, environment_id)
+    await approval.enqueue_or_defer(environment, known_actor, created.id, git_ref=git_ref)
     refreshed = await deployments.get(created.id)
     await deployments.refresh(refreshed)
     return deployment_to_read(refreshed)
@@ -318,8 +316,9 @@ async def _enqueue_copy(
 async def redeploy_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
-    jobs: JobServiceDep,
     users: ConsoleUserServiceDep,
+    environments: EnvironmentServiceDep,
+    approval: DeployApprovalServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
     source = await deployments.get(deployment_id)
@@ -331,7 +330,13 @@ async def redeploy_deployment(
             detail="Cannot repeat a deployment that has no recorded commit.",
         )
     return await _enqueue_copy(
-        source, deployments, jobs, users, actor_user_id, git_ref=sha
+        source,
+        deployments,
+        users,
+        environments,
+        approval,
+        actor_user_id,
+        git_ref=sha,
     )
 
 
@@ -345,13 +350,20 @@ async def redeploy_deployment(
 async def deploy_latest_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
-    jobs: JobServiceDep,
     users: ConsoleUserServiceDep,
+    environments: EnvironmentServiceDep,
+    approval: DeployApprovalServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
     source = await deployments.get(deployment_id)
     return await _enqueue_copy(
-        source, deployments, jobs, users, actor_user_id, git_ref=None
+        source,
+        deployments,
+        users,
+        environments,
+        approval,
+        actor_user_id,
+        git_ref=None,
     )
 
 
@@ -373,6 +385,38 @@ async def cancel_deployment(
     # Same rule as the outcome routes: without a queue the waiter stays queued.
     if release is not None:
         await release.release_waiting(stored)
+    return deployment_to_read(stored)
+
+
+@router.post(
+    "/{deployment_id}/approve",
+    response_model=DeploymentRead,
+    status_code=status.HTTP_200_OK,
+    summary="Approve a production deploy that is waiting for an owner (#276)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _FORBIDDEN | _NOT_STARTED | _UNAVAILABLE,
+)
+async def approve_deployment(
+    deployment_id: uuid.UUID,
+    approval: DeployApprovalServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentRead:
+    stored = await approval.approve(deployment_id, actor_user_id)
+    return deployment_to_read(stored)
+
+
+@router.post(
+    "/{deployment_id}/reject",
+    response_model=DeploymentRead,
+    status_code=status.HTTP_200_OK,
+    summary="Reject a production deploy that is waiting for an owner (#276)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _FORBIDDEN | _NOT_STARTED,
+)
+async def reject_deployment(
+    deployment_id: uuid.UUID,
+    approval: DeployApprovalServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentRead:
+    stored = await approval.reject(deployment_id, actor_user_id)
     return deployment_to_read(stored)
 
 

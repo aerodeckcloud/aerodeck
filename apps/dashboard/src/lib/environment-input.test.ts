@@ -208,6 +208,17 @@ describe("parseEnvironmentUpdateFields", () => {
     });
   });
 
+  it("accepts a pause or approval change on its own", () => {
+    assert.deepEqual(parseEnvironmentUpdateFields({ auto_deploy_paused: true }), {
+      ok: true,
+      value: { auto_deploy_paused: true },
+    });
+    assert.deepEqual(parseEnvironmentUpdateFields({ prod_deploy_approval: false }), {
+      ok: true,
+      value: { prod_deploy_approval: false },
+    });
+  });
+
   it("rejects an empty update", () => {
     assert.deepEqual(parseEnvironmentUpdateFields({}), {
       ok: false,

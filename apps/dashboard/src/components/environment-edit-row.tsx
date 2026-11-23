@@ -53,6 +53,8 @@ export function EnvironmentEditRow({
     String(environment.rollback_images_to_keep ?? ROLLBACK_IMAGES_DEFAULT),
   );
   const [command, setCommand] = useState(environment.release_command ?? "");
+  const [paused, setPaused] = useState(environment.auto_deploy_paused ?? false);
+  const [approval, setApproval] = useState(environment.prod_deploy_approval ?? false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -77,6 +79,8 @@ export function EnvironmentEditRow({
       deploy_overlap?: DeployOverlap;
       rollback_images_to_keep?: number;
       release_command?: string | null;
+      auto_deploy_paused?: boolean;
+      prod_deploy_approval?: boolean;
     } = {};
     if (name.trim() !== environment.name) {
       fields.name = name;
@@ -98,6 +102,12 @@ export function EnvironmentEditRow({
     if (nextCommand !== (environment.release_command ?? "")) {
       fields.release_command = nextCommand === "" ? null : nextCommand;
     }
+    if (paused !== (environment.auto_deploy_paused ?? false)) {
+      fields.auto_deploy_paused = paused;
+    }
+    if (approval !== (environment.prod_deploy_approval ?? false)) {
+      fields.prod_deploy_approval = approval;
+    }
     const parsed = parseEnvironmentUpdateFields(fields);
     if (!parsed.ok) {
       setError(parsed.error);
@@ -117,6 +127,8 @@ export function EnvironmentEditRow({
       setOverlap(updated.deploy_overlap ?? "wait");
       setKeep(String(updated.rollback_images_to_keep ?? ROLLBACK_IMAGES_DEFAULT));
       setCommand(updated.release_command ?? "");
+      setPaused(updated.auto_deploy_paused ?? false);
+      setApproval(updated.prod_deploy_approval ?? false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Update failed.");
     } finally {
@@ -251,6 +263,38 @@ export function EnvironmentEditRow({
           container after the health check and before traffic moves. If it fails or times out,
           the current release stays up. Rolling an image back does not undo migrations this
           command applied.
+        </p>
+      </div>
+      <label className="flex items-center gap-2 text-sm sm:col-span-2">
+        <input
+          type="checkbox"
+          className="size-3.5 accent-primary"
+          checked={paused}
+          disabled={busy}
+          onChange={(event) => {
+            setPaused(event.currentTarget.checked);
+            clearError();
+          }}
+        />
+        Pause automatic redeploys
+      </label>
+      <div className="grid gap-1 sm:col-span-2">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="size-3.5 accent-primary"
+            checked={approval}
+            disabled={busy}
+            onChange={(event) => {
+              setApproval(event.currentTarget.checked);
+              clearError();
+            }}
+          />
+          Require owner approval for production deploys
+        </label>
+        <p className="text-sm text-muted-foreground">
+          Applies when this environment is production. A developer or a GitHub push is stored
+          until an owner approves it. An owner can still deploy immediately.
         </p>
       </div>
       <div className="flex flex-wrap items-end gap-2">

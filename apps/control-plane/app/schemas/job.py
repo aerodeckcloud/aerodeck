@@ -55,9 +55,13 @@ class JobAccepted(BaseModel):
     project_id: uuid.UUID
     environment_id: uuid.UUID
     status: JobStatusValue = "queued"
+    # True when the row is stored and waiting for an owner, so no job was started (#276).
+    approval_pending: bool = False
 
     @model_validator(mode="after")
     def job_or_active_deployment(self) -> "JobAccepted":
+        if self.approval_pending:
+            return self
         if self.job_id is None and self.active_deployment_id is None:
             raise ValueError("job_id or active_deployment_id is required")
         return self

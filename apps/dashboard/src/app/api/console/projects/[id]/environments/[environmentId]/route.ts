@@ -3,6 +3,7 @@ import { connection, NextResponse } from "next/server";
 import { requireEnrolledEnvironmentIds } from "@/lib/console-environment-route";
 import {
   readJsonObject,
+  readOptionalBoolean,
   readOptionalInteger,
   readOptionalNullableString,
   readOptionalString,
@@ -47,6 +48,8 @@ export async function PATCH(request: Request, context: RouteContext) {
     deploy_overlap?: string;
     rollback_images_to_keep?: number;
     release_command?: string | null;
+    auto_deploy_paused?: boolean;
+    prod_deploy_approval?: boolean;
   } = {};
   for (const [key, code] of [
     ["name", "invalid_name"],
@@ -76,6 +79,18 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (command.value !== undefined) {
     fields.release_command = command.value;
   }
+  for (const [key, code] of [
+    ["auto_deploy_paused", "invalid_auto_deploy_paused"],
+    ["prod_deploy_approval", "invalid_prod_deploy_approval"],
+  ] as const) {
+    const flag = readOptionalBoolean(body.value, key, code);
+    if (!flag.ok) {
+      return flag.response;
+    }
+    if (flag.value !== undefined) {
+      fields[key] = flag.value;
+    }
+  }
 
   const parsed = parseEnvironmentUpdateFields(fields);
   if (!parsed.ok) {
@@ -83,15 +98,26 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 
   try {
-    const environment = await updateControlPlaneEnvironment(config, {
-      projectId: gated.projectId,
-      environmentId: gated.environmentId,
-      ...parsed.value,
-    });
+    const environment = await updateControlPlaneEnvironment(
+      config,
+      {
+        projectId: gated.projectId,
+        environmentId: gated.environmentId,
+        ...parsed.value,
+      },
+      { actorUserId: gated.userId },
+    );
     return NextResponse.json(environment);
   } catch (cause) {
     if (cause instanceof ControlPlaneError && cause.status === 404) {
       return jsonError(404, "Environment was not found.", "not_found");
+    }
+    if (cause instanceof ControlPlaneError && cause.status === 403) {
+      return jsonError(
+        403,
+        "Only an owner can change pause, production approval, or whether this environment is production.",
+        "forbidden",
+      );
     }
     if (cause instanceof ControlPlaneError && cause.status === 422) {
       return jsonError(400, ENVIRONMENT_FIELDS_INVALID, "invalid_fields");

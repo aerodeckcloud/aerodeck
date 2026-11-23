@@ -8,6 +8,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.deployment import Deployment, DeploymentStatus
 
 
+def _awaiting_approval(deployment_id: uuid.UUID) -> tuple[ColumnElement[bool], ...]:
+    """Rows still waiting for an owner. Shared by approve and reject (#276)."""
+    return (
+        Deployment.id == deployment_id,
+        Deployment.approval_required_at.is_not(None),
+        Deployment.approved_at.is_(None),
+        Deployment.status == DeploymentStatus.queued,
+        Deployment.finished_at.is_(None),
+        Deployment.dispatched_at.is_(None),
+    )
+
+
 class DeploymentRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -183,6 +195,53 @@ class DeploymentRepository:
         stored.dispatched_at = dispatched_at
         await self._session.flush()
         await self._session.refresh(stored)
+
+    async def mark_awaiting_approval(
+        self, deployment_id: uuid.UUID, required_at: datetime, replay_json: str | None
+    ) -> Deployment | None:
+        """Queue the row until an owner approves. A dispatched row is left alone."""
+        stored = await self._session.get(Deployment, deployment_id)
+        if stored is None or stored.dispatched_at is not None or stored.approved_at is not None:
+            return stored
+        stored.status = DeploymentStatus.queued
+        stored.approval_required_at = required_at
+        stored.provision_replay_json = replay_json
+        await self._session.flush()
+        await self._session.refresh(stored)
+        return stored
+
+    async def mark_approved(self, deployment_id: uuid.UUID, approved_at: datetime) -> Deployment | None:
+        """Stamp approval only while the row is still waiting for an owner.
+
+        A second approve, or an approve after reject or dispatch, updates nothing.
+        """
+        updated = await self._session.scalar(
+            update(Deployment)
+            .where(*_awaiting_approval(deployment_id))
+            .values(approved_at=approved_at)
+            .returning(Deployment)
+        )
+        return updated
+
+    async def cancel_awaiting_approval(
+        self, deployment_id: uuid.UUID, finished_at: datetime
+    ) -> Deployment | None:
+        """Cancel only while the row is still waiting for an owner.
+
+        An approved or dispatched row is left alone, so a late reject cannot
+        stop a deploy that already won the race.
+        """
+        updated = await self._session.scalar(
+            update(Deployment)
+            .where(*_awaiting_approval(deployment_id))
+            .values(
+                status=DeploymentStatus.cancelled,
+                finished_at=finished_at,
+                provision_replay_json=None,
+            )
+            .returning(Deployment)
+        )
+        return updated
 
     async def mark_waiting(
         self, deployment_id: uuid.UUID, active_id: uuid.UUID, replay_json: str | None

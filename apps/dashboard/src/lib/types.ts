@@ -60,6 +60,9 @@ export type Deployment = {
   swap_started_at?: string | null;
   /** Set while this row is waiting behind another deployment. Status stays queued. */
   held_for_deployment_id?: string | null;
+  /** Set while a production deploy is waiting for an owner. Status stays queued. */
+  approval_required_at?: string | null;
+  approved_at?: string | null;
   status: DeploymentStatus;
   /** Sorted names from the encrypted release snapshot. Null when none (#273). */
   snapshot_variable_names?: string[] | null;
@@ -105,6 +108,8 @@ export type AcceptedJob = {
   project_id: string;
   environment_id: string;
   status: ProvisionJobStatus;
+  /** True when the row is stored and waiting for an owner, so no job was started. */
+  approval_pending?: boolean;
 };
 
 export type DeployOverlap = "wait" | "override";
@@ -126,6 +131,10 @@ export type EnvironmentOption = {
   retained_rollback_images?: number;
   /** Executable and arguments run before traffic moves. Null clears it. */
   release_command?: string | null;
+  /** When true, a GitHub push does not start a deploy. */
+  auto_deploy_paused?: boolean;
+  /** When true, a developer or webhook deploy to production waits for an owner. */
+  prod_deploy_approval?: boolean;
 };
 
 export type EnvironmentOptionPage = {

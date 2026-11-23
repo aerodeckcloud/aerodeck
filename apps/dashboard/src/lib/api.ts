@@ -140,6 +140,8 @@ export async function updateEnvironment(
     deploy_overlap?: "wait" | "override";
     rollback_images_to_keep?: number;
     release_command?: string | null;
+    auto_deploy_paused?: boolean;
+    prod_deploy_approval?: boolean;
   },
 ): Promise<EnvironmentOption> {
   const response = await fetch(
@@ -563,6 +565,22 @@ export async function fetchProjectDeployments(
 export async function redeployDeployment(deploymentId: string): Promise<Deployment> {
   const response = await fetch(
     `/api/console/deployments/${encodeURIComponent(deploymentId)}/redeploy`,
+    { method: "POST", credentials: "same-origin" },
+  );
+  return readJson(response);
+}
+
+export async function approveDeployment(deploymentId: string): Promise<Deployment> {
+  const response = await fetch(
+    `/api/console/deployments/${encodeURIComponent(deploymentId)}/approve`,
+    { method: "POST", credentials: "same-origin" },
+  );
+  return readJson(response);
+}
+
+export async function rejectDeployment(deploymentId: string): Promise<Deployment> {
+  const response = await fetch(
+    `/api/console/deployments/${encodeURIComponent(deploymentId)}/reject`,
     { method: "POST", credentials: "same-origin" },
   );
   return readJson(response);

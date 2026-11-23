@@ -792,6 +792,66 @@ describe("updateControlPlaneEnvironment", () => {
     assert.equal(environment.project_slug, "payments");
     assert.equal(posted, JSON.stringify({ name: "Production EU", region: "ams3" }));
   });
+
+  it("sends the actor when pause, approval, or kind changes", async () => {
+    clearControlPlaneTokenCache();
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    const environmentId = "22222222-2222-4222-8222-222222222222";
+    const actorUserId = "44444444-4444-4444-8444-444444444444";
+    let actorHeader = "";
+    let posted = "";
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      if (url.endsWith(`/api/v1/projects/${projectId}`) && (init?.method ?? "GET") === "GET") {
+        return jsonResponse({
+          id: projectId,
+          slug: "payments",
+          name: "Payments",
+          description: null,
+          created_at: "2026-10-19T00:00:00.000Z",
+          updated_at: "2026-10-19T00:00:00.000Z",
+        });
+      }
+      assert.equal(init?.method, "PATCH");
+      actorHeader = new Headers(init?.headers).get("x-aerodeck-user-id") ?? "";
+      posted = String(init?.body ?? "");
+      return jsonResponse({
+        id: environmentId,
+        project_id: projectId,
+        slug: "prod",
+        name: "Production",
+        kind: "prod",
+        region: "ams3",
+        auto_deploy_paused: true,
+        prod_deploy_approval: false,
+        created_at: "2026-10-19T00:00:00.000Z",
+        updated_at: "2026-10-19T01:00:00.000Z",
+      });
+    };
+    await updateControlPlaneEnvironment(
+      config,
+      {
+        projectId,
+        environmentId,
+        kind: "prod",
+        auto_deploy_paused: true,
+        prod_deploy_approval: false,
+      },
+      { fetch: fetchImpl, actorUserId },
+    );
+    assert.equal(actorHeader, actorUserId);
+    assert.equal(
+      posted,
+      JSON.stringify({
+        kind: "prod",
+        auto_deploy_paused: true,
+        prod_deploy_approval: false,
+      }),
+    );
+  });
 });
 
 describe("deleteControlPlaneEnvironment", () => {
@@ -1221,6 +1281,71 @@ describe("createControlPlaneDeploymentAndProvision", () => {
     assert.ok(calls.some((call) => call.includes(`/environments/${environmentId}`) && call.startsWith("GET")));
     assert.ok(calls.some((call) => call.includes("/api/v1/deployments") && call.startsWith("POST")));
     assert.ok(calls.some((call) => call.includes("/provision") && call.startsWith("POST")));
+  });
+
+  it("forwards the actor on create and on provision", async () => {
+    clearControlPlaneTokenCache();
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    const environmentId = "22222222-2222-4222-8222-222222222222";
+    const deploymentId = "33333333-3333-4333-8333-333333333333";
+    const actorUserId = "55555555-5555-4555-8555-555555555555";
+    let createActor = "";
+    let provisionActor = "";
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      if (url.endsWith(`/environments/${environmentId}`) && (init?.method ?? "GET") === "GET") {
+        return jsonResponse({
+          id: environmentId,
+          project_id: projectId,
+          slug: "prod",
+          name: "Prod",
+          kind: "prod",
+          region: "ams3",
+          created_at: "2026-10-18T00:00:00.000Z",
+          updated_at: "2026-10-18T00:00:00.000Z",
+        });
+      }
+      if (url.endsWith("/api/v1/deployments") && init?.method === "POST") {
+        createActor = new Headers(init.headers).get("x-aerodeck-user-id") ?? "";
+        return jsonResponse({
+          id: deploymentId,
+          repo_url: "https://github.com/acme/payments",
+          owner: "acme",
+          repo: "payments",
+          project_id: projectId,
+          environment_id: environmentId,
+          status: "running",
+          started_at: "2026-10-18T00:00:00.000Z",
+        });
+      }
+      if (url.endsWith(`/environments/${environmentId}/provision`) && init?.method === "POST") {
+        provisionActor = new Headers(init.headers).get("x-aerodeck-user-id") ?? "";
+        return jsonResponse({
+          job_id: "44444444-4444-4444-8444-444444444444",
+          kind: "provision",
+          project_id: projectId,
+          environment_id: environmentId,
+          status: "queued",
+        });
+      }
+      return jsonResponse({ detail: "unexpected" }, 500);
+    };
+
+    await createControlPlaneDeploymentAndProvision(
+      config,
+      {
+        repoUrl: "https://github.com/acme/payments",
+        projectId,
+        environmentId,
+        actorUserId,
+      },
+      { fetch: fetchImpl },
+    );
+    assert.equal(createActor, actorUserId);
+    assert.equal(provisionActor, actorUserId);
   });
 
   it("does not create a deployment when the environment is missing", async () => {

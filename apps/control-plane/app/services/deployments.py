@@ -33,6 +33,16 @@ def is_waiting(deployment: Deployment) -> bool:
     )
 
 
+def is_awaiting_approval(deployment: Deployment) -> bool:
+    """True while a production deploy is stored and an owner has not approved it (#276)."""
+    return (
+        deployment.approval_required_at is not None
+        and deployment.approved_at is None
+        and deployment.status == DeploymentStatus.queued
+        and deployment.finished_at is None
+    )
+
+
 def _is_deployment_environment_fk_violation(exc: IntegrityError) -> bool:
     """True when the failing constraint is the deployment↔environment composite FK.
 
@@ -200,6 +210,33 @@ class DeploymentService:
     async def mark_dispatched(self, deployment_id: uuid.UUID) -> None:
         await self._deployments.mark_dispatched(deployment_id, datetime.now(UTC))
 
+    async def mark_awaiting_approval(self, deployment_id: uuid.UUID, replay_json: str | None) -> Deployment:
+        await self._lock_environment_of(deployment_id)
+        stored = await self._deployments.mark_awaiting_approval(
+            deployment_id, datetime.now(UTC), replay_json
+        )
+        if stored is None:
+            raise NotFoundError(f"Deployment {deployment_id} not found")
+        return stored
+
+    async def mark_approved(self, deployment_id: uuid.UUID) -> Deployment | None:
+        """Approve only if this request still sees a waiting row. None if another request won."""
+        current = await self._lock_environment_of(deployment_id)
+        if current is None:
+            raise NotFoundError(f"Deployment {deployment_id} not found")
+        if not is_awaiting_approval(current):
+            return None
+        return await self._deployments.mark_approved(deployment_id, datetime.now(UTC))
+
+    async def cancel_awaiting_approval(self, deployment_id: uuid.UUID) -> Deployment | None:
+        """Cancel only if this request still sees a waiting row. None if another request won."""
+        current = await self._lock_environment_of(deployment_id)
+        if current is None:
+            raise NotFoundError(f"Deployment {deployment_id} not found")
+        if not is_awaiting_approval(current):
+            return None
+        return await self._deployments.cancel_awaiting_approval(deployment_id, datetime.now(UTC))
+
     async def mark_waiting(
         self, deployment_id: uuid.UUID, active_id: uuid.UUID, replay_json: str | None
     ) -> None:
@@ -288,6 +325,8 @@ class DeploymentService:
             # Nothing has run yet, so there is no outcome to record. Without this
             # a console that reported one would close the row and it would never start.
             raise ConflictError(NOT_STARTED_DETAIL)
+        if current is not None and is_awaiting_approval(current):
+            raise ConflictError("Deployment is waiting for owner approval and has not started.")
         was_terminal = current is not None and current.status in (
             DeploymentStatus.succeeded,
             DeploymentStatus.failed,

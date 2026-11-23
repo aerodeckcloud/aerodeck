@@ -1,4 +1,4 @@
-import type { DeploymentStatus } from "./types";
+import type { Deployment, DeploymentStatus } from "./types";
 
 /**
  * True while a deployment is held behind another one and has not started.
@@ -14,4 +14,18 @@ export function isDeploymentWaiting(
 /** True once nothing more will happen to the deployment. */
 export function isDeploymentFinished(status: DeploymentStatus): boolean {
   return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
+/**
+ * True while a production deploy is stored and an owner has not approved it.
+ * The row stays `queued` with `approval_required_at` set and `approved_at` empty.
+ */
+export function isAwaitingApproval(
+  deployment: Pick<Deployment, "status" | "approval_required_at" | "approved_at">,
+): boolean {
+  return (
+    deployment.status === "queued" &&
+    Boolean(deployment.approval_required_at) &&
+    !deployment.approved_at
+  );
 }

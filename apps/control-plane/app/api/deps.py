@@ -35,6 +35,7 @@ from app.services.certificates import CertificateService
 from app.services.console_sessions import ConsoleSessionService
 from app.services.console_users import ConsoleUserService
 from app.services.deployment_terminal import DeploymentTerminalService
+from app.services.deploy_approval import DeployApprovalService
 from app.services.deployments import DeploymentService
 from app.services.dns01 import DigitalOceanDns01, Dns01Provider, Dns01UnavailableError, MemoryDns01
 from app.services.dns_records import (
@@ -235,29 +236,6 @@ EnvironmentVariableServiceDep = Annotated[
 ]
 
 
-def get_webhook_service(
-    session: SessionDep,
-    environments: EnvironmentServiceDep,
-    env_vars: EnvironmentVariableServiceDep,
-    settings: SettingsDep,
-) -> WebhookService:
-    pr_previews = PrPreviewService(
-        EnvironmentRepository(session),
-        environments,
-        env_vars,
-        settings,
-    )
-    return WebhookService(
-        WebhookRepository(session),
-        environments,
-        signing_key=settings.auth_signing_key.get_secret_value(),
-        pr_previews=pr_previews,
-    )
-
-
-WebhookServiceDep = Annotated[WebhookService, Depends(get_webhook_service)]
-
-
 def get_deployment_terminal_service(
     deployments: DeploymentRepositoryDep,
 ) -> DeploymentTerminalService:
@@ -435,6 +413,43 @@ def get_job_service(
 JobServiceDep = Annotated[JobService, Depends(get_job_service)]
 
 
+def get_deploy_approval_service(
+    members: ProjectMemberServiceDep,
+    jobs: JobServiceDep,
+    deployments: DeploymentServiceDep,
+    audit: AuditLogServiceDep,
+) -> DeployApprovalService:
+    return DeployApprovalService(members, jobs, deployments, audit)
+
+
+DeployApprovalServiceDep = Annotated[DeployApprovalService, Depends(get_deploy_approval_service)]
+
+
+def get_webhook_service(
+    session: SessionDep,
+    environments: EnvironmentServiceDep,
+    env_vars: EnvironmentVariableServiceDep,
+    settings: SettingsDep,
+    approval: DeployApprovalServiceDep,
+) -> WebhookService:
+    pr_previews = PrPreviewService(
+        EnvironmentRepository(session),
+        environments,
+        env_vars,
+        settings,
+    )
+    return WebhookService(
+        WebhookRepository(session),
+        environments,
+        signing_key=settings.auth_signing_key.get_secret_value(),
+        pr_previews=pr_previews,
+        approval=approval,
+    )
+
+
+WebhookServiceDep = Annotated[WebhookService, Depends(get_webhook_service)]
+
+
 def get_release_job_service(
     dispatcher: JobDispatcherDep, jobs: JobServiceDep
 ) -> JobService | None:
@@ -458,11 +473,11 @@ def get_promotion_service(
     deployments: DeploymentServiceDep,
     environments: EnvironmentServiceDep,
     members: ProjectMemberServiceDep,
-    jobs: JobServiceDep,
     images: ImageLookupDep,
     settings: SettingsDep,
+    approval: DeployApprovalServiceDep,
 ) -> PromotionService:
-    return PromotionService(deployments, environments, members, jobs, images, settings)
+    return PromotionService(deployments, environments, members, images, settings, approval)
 
 
 PromotionServiceDep = Annotated[PromotionService, Depends(get_promotion_service)]
@@ -471,11 +486,11 @@ PromotionServiceDep = Annotated[PromotionService, Depends(get_promotion_service)
 def get_rollback_service(
     deployments: DeploymentServiceDep,
     members: ProjectMemberServiceDep,
-    jobs: JobServiceDep,
     environments: EnvironmentServiceDep,
     images: ImageLookupDep,
+    approval: DeployApprovalServiceDep,
 ) -> RollbackService:
-    return RollbackService(deployments, members, jobs, environments, images)
+    return RollbackService(deployments, members, environments, images, approval)
 
 
 def get_image_retention_service(settings: SettingsDep) -> ImageRetentionService:

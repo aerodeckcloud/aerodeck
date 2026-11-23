@@ -14,7 +14,7 @@ type EnvironmentRouteContext = {
  */
 export async function requireEnrolledEnvironmentIds(
   context: EnvironmentRouteContext,
-): Promise<{ projectId: string; environmentId: string } | NextResponse> {
+): Promise<{ projectId: string; environmentId: string; userId: string } | NextResponse> {
   const user = await requireSessionUser();
   if (user instanceof NextResponse) {
     return user;
@@ -30,5 +30,5 @@ export async function requireEnrolledEnvironmentIds(
   ) {
     return jsonError(404, "Environment was not found.", "not_found");
   }
-  return { projectId, environmentId };
+  return { projectId, environmentId, userId: user.id };
 }

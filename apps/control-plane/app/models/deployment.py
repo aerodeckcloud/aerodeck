@@ -76,6 +76,9 @@ class Deployment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     snapshot_names_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Set when this deployment's local image tag was removed by retention (#274).
     image_pruned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set while a production deploy is waiting for an owner. Status stays queued (#276).
+    approval_required_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[DeploymentStatus] = mapped_column(
         Enum(DeploymentStatus, name="deployment_status", native_enum=False, length=16),
         nullable=False,

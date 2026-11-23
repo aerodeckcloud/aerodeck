@@ -19,9 +19,8 @@ from app.services.deployments import DeploymentService
 from app.services.docker_policy import normalize_git_sha
 from app.services.environments import EnvironmentService
 from app.services.image_presence import ImageLookup, RetainedImage
-from app.services.jobs import JobService
+from app.services.deploy_approval import DeployApprovalService
 from app.services.project_members import ProjectMemberService
-from app.services.provisioning import JobKind
 
 logger = get_logger("services.promotions")
 
@@ -34,16 +33,16 @@ class PromotionService:
         deployments: DeploymentService,
         environments: EnvironmentService,
         members: ProjectMemberService,
-        jobs: JobService,
         images: ImageLookup,
         settings: Settings,
+        approval: DeployApprovalService,
     ) -> None:
         self._deployments = deployments
         self._environments = environments
         self._members = members
-        self._jobs = jobs
         self._images = images
         self._settings = settings
+        self._approval = approval
 
     async def promote(
         self,
@@ -103,11 +102,10 @@ class PromotionService:
             git_sha=sha,
             git_ref=source.git_ref,
         )
-        await self._jobs.enqueue(
-            JobKind.provision,
-            source.project_id,
-            target.id,
-            deployment_id=created.id,
+        await self._approval.enqueue_or_defer(
+            target,
+            actor_user_id,
+            created.id,
             promote_from_deployment_id=source.id,
         )
         logger.info(

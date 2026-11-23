@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { isDeploymentFinished, isDeploymentWaiting } from "./deployment-waiting";
+import { isAwaitingApproval, isDeploymentFinished, isDeploymentWaiting } from "./deployment-waiting";
 
 const ACTIVE = "11111111-1111-4111-8111-111111111111";
 
@@ -19,6 +19,38 @@ describe("isDeploymentWaiting", () => {
     assert.equal(isDeploymentWaiting("cancelled", ACTIVE), false);
     assert.equal(isDeploymentWaiting("failed", ACTIVE), false);
     assert.equal(isDeploymentWaiting("succeeded", ACTIVE), false);
+  });
+});
+
+describe("isAwaitingApproval", () => {
+  it("is true while a queued deploy has been asked for and not approved", () => {
+    assert.equal(
+      isAwaitingApproval({
+        status: "queued",
+        approval_required_at: "2026-11-23T00:00:00.000Z",
+        approved_at: null,
+      }),
+      true,
+    );
+  });
+
+  it("is false after an owner approves, and for a normal queued deploy", () => {
+    assert.equal(
+      isAwaitingApproval({
+        status: "queued",
+        approval_required_at: "2026-11-23T00:00:00.000Z",
+        approved_at: "2026-11-23T00:01:00.000Z",
+      }),
+      false,
+    );
+    assert.equal(isAwaitingApproval({ status: "queued" }), false);
+    assert.equal(
+      isAwaitingApproval({
+        status: "running",
+        approval_required_at: "2026-11-23T00:00:00.000Z",
+      }),
+      false,
+    );
   });
 });
 

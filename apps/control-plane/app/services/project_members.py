@@ -149,6 +149,22 @@ class ProjectMemberService:
                 f"Requires {minimum_role.value} role on project {project_id}."
             )
 
+    async def has_members(self, project_id: uuid.UUID) -> bool:
+        return await self._repo.count_for_project(project_id) > 0
+
+    async def is_owner(self, project_id: uuid.UUID, actor_user_id: uuid.UUID | None) -> bool:
+        """True when this user is an owner, or the project has no members yet.
+
+        A project with no members has nobody to approve a deploy, so callers
+        treat every actor as an owner and do not hold the row (#276).
+        """
+        if actor_user_id is None:
+            return False
+        if not await self.has_members(project_id):
+            return True
+        member = await self._repo.get(project_id, actor_user_id)
+        return member is not None and _ROLE_RANK[member.role] >= _ROLE_RANK[ProjectRole.owner]
+
     async def assign_owner_if_user_exists(
         self, project_id: uuid.UUID, user_id: uuid.UUID | None
     ) -> None:

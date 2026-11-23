@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
-from typing import Annotated, Protocol
+from typing import Annotated, Protocol, Self
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from app.models.project import (
     ROLLBACK_IMAGES_TO_KEEP_MAX,
@@ -52,6 +52,16 @@ class EnvironmentCreate(BaseModel):
     deploy_overlap: DeployOverlap = DeployOverlap.wait
     rollback_images_to_keep: RollbackImagesToKeep = 5
     release_command: ReleaseCommand = None
+    # Accepted and ignored. Create never starts paused; an owner pauses later (#276).
+    auto_deploy_paused: bool = False
+    # Accepted and ignored. A new prod environment always requires approval (#276).
+    prod_deploy_approval: bool | None = None
+
+    @model_validator(mode="after")
+    def default_release_controls(self) -> Self:
+        self.auto_deploy_paused = False
+        self.prod_deploy_approval = self.kind is EnvironmentKind.prod
+        return self
 
 
 class EnvironmentUpdate(BaseModel):
@@ -63,6 +73,8 @@ class EnvironmentUpdate(BaseModel):
     deploy_overlap: DeployOverlap | None = None
     rollback_images_to_keep: RollbackImagesToKeep | None = None
     release_command: ReleaseCommand = None
+    auto_deploy_paused: bool | None = None
+    prod_deploy_approval: bool | None = None
 
 
 class EnvironmentRead(BaseModel):
@@ -78,6 +90,8 @@ class EnvironmentRead(BaseModel):
     rollback_images_to_keep: int
     retained_rollback_images: int = 0
     release_command: str | None = None
+    auto_deploy_paused: bool
+    prod_deploy_approval: bool
     created_at: datetime
     updated_at: datetime
 
@@ -94,6 +108,8 @@ class EnvironmentSource(Protocol):
     deploy_overlap: str
     rollback_images_to_keep: int
     release_command: str | None
+    auto_deploy_paused: bool
+    prod_deploy_approval: bool
     created_at: datetime
     updated_at: datetime
 
