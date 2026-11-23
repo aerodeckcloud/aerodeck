@@ -202,16 +202,18 @@ async def provision_environment(
     deployments: DeploymentServiceDep,
     environments: EnvironmentServiceDep,
     approval: DeployApprovalServiceDep,
+    actor_user_id: ActorUserIdDep,
     body: ProvisionJobCreate | None = None,
 ) -> JobAccepted:
     deployment_id = body.deployment_id if body is not None else None
     env_vars = body.env_vars if body is not None else None
     addons = body.addons if body is not None else None
     if deployment_id is not None:
-        stored = await deployments.get(deployment_id)
+        # The caller decides approval. The user stored on the row is who created it.
+        await deployments.get(deployment_id)
         environment = await environments.get(project_id, environment_id)
         ticket = await approval.enqueue_or_defer(
-            environment, stored.actor_user_id, deployment_id, env_vars=env_vars, addons=addons
+            environment, actor_user_id, deployment_id, env_vars=env_vars, addons=addons
         )
         if ticket is None:
             return _approval_accepted(project_id, environment_id)

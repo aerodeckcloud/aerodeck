@@ -260,6 +260,40 @@ async def test_developer_prod_deploy_waits_until_an_owner_approves_or_rejects(
 
 
 @pytest.mark.asyncio
+async def test_developer_cannot_provision_an_owner_created_deployment(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    dispatcher = FakeDispatcher()
+    app.dependency_overrides[get_job_dispatcher] = lambda: dispatcher
+    owner = await _user(client, auth, "owner-caller@aerodeck.test")
+    developer = await _user(client, auth, "dev-caller@aerodeck.test")
+    project = await _project(client, owner, "approval-caller")
+    await client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"email": "dev-caller@aerodeck.test", "role": "developer"},
+        headers=owner,
+    )
+    prod = await _environment(client, owner, project["id"], slug="prod", kind="prod")
+    created = await _deploy(client, owner, project["id"], prod["id"])
+
+    pending = await client.post(
+        _provision(project["id"], prod["id"]),
+        json={"deployment_id": created["id"]},
+        headers=developer,
+    )
+    assert pending.status_code == 202, pending.text
+    assert pending.json()["approval_pending"] is True
+    assert pending.json()["job_id"] is None
+    assert dispatcher.calls == []
+
+    stored = await client.get(f"/api/v1/deployments/{created['id']}", headers=owner)
+    assert stored.status_code == 200, stored.text
+    assert stored.json()["actor_user_id"] == owner["X-AeroDeck-User-Id"]
+    assert stored.json()["approval_required_at"] is not None
+    assert stored.json()["status"] == "queued"
+
+
+@pytest.mark.asyncio
 async def test_paused_webhook_is_skipped_and_owner_can_still_deploy(
     app: FastAPI, client: AsyncClient, auth: dict[str, str]
 ) -> None:

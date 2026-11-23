@@ -2060,7 +2060,11 @@ export async function provisionControlPlaneEnvironment(
   projectId: string,
   environmentId: string,
   deploymentId: string,
-  options: ListOptions & { envVars?: Record<string, string>; addons?: AddonType[] } = {},
+  options: ListOptions & {
+    envVars?: Record<string, string>;
+    addons?: AddonType[];
+    actorUserId?: string;
+  } = {},
 ): Promise<{ approvalPending: boolean }> {
   if (
     !isControlPlaneUuid(projectId) ||
@@ -2085,15 +2089,19 @@ export async function provisionControlPlaneEnvironment(
   if (options.addons && options.addons.length > 0) {
     body.addons = options.addons;
   }
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${accessToken}`,
+    "content-type": "application/json",
+  };
+  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
+    headers["x-aerodeck-user-id"] = options.actorUserId;
+  }
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}/provision`,
     {
       method: "POST",
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${accessToken}`,
-        "content-type": "application/json",
-      },
+      headers,
       body: JSON.stringify(body),
       cache: "no-store",
     },
@@ -2258,7 +2266,12 @@ export async function createControlPlaneDeploymentAndProvision(
       input.projectId,
       input.environmentId,
       deployment.id,
-      { ...options, envVars: input.envVars, addons: input.addons },
+      {
+        ...options,
+        envVars: input.envVars,
+        addons: input.addons,
+        actorUserId: input.actorUserId,
+      },
     );
     if (accepted.approvalPending) {
       return await getControlPlaneDeployment(config, deployment.id, options);
