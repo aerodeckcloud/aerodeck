@@ -354,3 +354,27 @@ class EnvironmentVariableService:
                     environment_id,
                 )
         return decrypted
+
+    async def load_complete_entries(
+        self, project_id: uuid.UUID, environment_id: uuid.UUID
+    ) -> dict[str, EnvVarPlain] | None:
+        """Decrypt every variable. None when any row cannot be read (#273).
+
+        A snapshot must be complete: a later rollback deletes keys that are absent.
+        """
+        rows = await self._repo.list_for_environment(project_id, environment_id)
+        decrypted: dict[str, EnvVarPlain] = {}
+        for row in rows:
+            try:
+                decrypted[row.key] = EnvVarPlain(
+                    decrypt_env_value(row.encrypted_value, self._signing_key),
+                    row.is_secret,
+                )
+            except InvalidToken:
+                logger.warning(
+                    "event=env_vars_snapshot_incomplete environment=%s key=%s",
+                    environment_id,
+                    row.key,
+                )
+                return None
+        return decrypted

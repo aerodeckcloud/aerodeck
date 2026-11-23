@@ -492,6 +492,161 @@ async def test_waiting_rollback_cancel_leaves_variables_unchanged(
 
 
 @pytest.mark.asyncio
+async def test_waiting_rollback_restores_when_the_active_deploy_finishes(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    """Releasing a waiting rollback applies the sealed snapshot with the dispatch (#273)."""
+    dispatcher = FakeDispatcher()
+    app.dependency_overrides[get_job_dispatcher] = lambda: dispatcher
+    try:
+        project, env = await _project_env(client, auth, "snap-release")
+        base = f"/api/v1/projects/{project['id']}/environments/{env['id']}/env-vars"
+        await client.put(
+            base,
+            json={"items": [{"key": "KEEP", "value": "from-snapshot", "is_secret": False}]},
+            headers=auth,
+        )
+        source = (
+            await client.post(
+                "/api/v1/deployments",
+                json={
+                    "repo_url": "https://github.com/mangatohjunior/dev-portal",
+                    "project_id": project["id"],
+                    "environment_id": env["id"],
+                },
+                headers=auth,
+            )
+        ).json()
+        assert (
+            await client.post(f"/api/v1/deployments/{source['id']}/succeeded", headers=auth)
+        ).status_code == 200
+        await client.put(
+            base,
+            json={
+                "items": [
+                    {"key": "KEEP", "value": "drifted-value", "is_secret": True},
+                    {"key": "EXTRA", "value": "added-later", "is_secret": True},
+                ]
+            },
+            headers=auth,
+        )
+
+        active = (
+            await client.post(
+                "/api/v1/deployments",
+                json={
+                    "repo_url": "https://github.com/mangatohjunior/dev-portal",
+                    "project_id": project["id"],
+                    "environment_id": env["id"],
+                },
+                headers=auth,
+            )
+        ).json()
+        started = await client.post(
+            f"/api/v1/projects/{project['id']}/environments/{env['id']}/provision",
+            json={"deployment_id": active["id"]},
+            headers=auth,
+        )
+        assert started.status_code == 202, started.text
+
+        rolled = await client.post(f"/api/v1/deployments/{source['id']}/rollback", headers=auth)
+        assert rolled.status_code == 201, rolled.text
+        assert rolled.json()["variables_restored"] is False
+        assert rolled.json()["held_for_deployment_id"] == active["id"]
+
+        finished = await client.post(f"/api/v1/deployments/{active['id']}/succeeded", headers=auth)
+        assert finished.status_code == 200, finished.text
+
+        released = await client.get(f"/api/v1/deployments/{rolled.json()['id']}", headers=auth)
+        assert released.status_code == 200
+        assert released.json()["status"] == "running"
+        assert released.json()["held_for_deployment_id"] is None
+        assert json.loads(dispatcher.calls[-1]["meta"]["env_vars_json"]) == {"KEEP": "from-snapshot"}
+
+        sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
+        async with sessions() as session:
+            rows = (
+                await session.scalars(
+                    select(EnvironmentVariable).where(
+                        EnvironmentVariable.environment_id == uuid.UUID(env["id"])
+                    )
+                )
+            ).all()
+            values = {
+                row.key: decrypt_env_value(row.encrypted_value, SIGNING_KEY) for row in rows
+            }
+            secrets = {row.key: row.is_secret for row in rows}
+            assert values == {"KEEP": "from-snapshot"}
+            assert secrets == {"KEEP": False}
+    finally:
+        app.dependency_overrides.pop(get_job_dispatcher, None)
+
+
+@pytest.mark.asyncio
+async def test_unreadable_env_var_skips_snapshot_capture(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    """A partial snapshot must not be sealed; rollback then leaves every key (#273)."""
+    dispatcher = FakeDispatcher()
+    app.dependency_overrides[get_job_dispatcher] = lambda: dispatcher
+    try:
+        project, env = await _project_env(client, auth, "snap-partial")
+        base = f"/api/v1/projects/{project['id']}/environments/{env['id']}/env-vars"
+        await client.put(
+            base,
+            json={
+                "items": [
+                    {"key": "KEEP", "value": "readable", "is_secret": True},
+                    {"key": "BROKEN", "value": "cannot-read", "is_secret": True},
+                ]
+            },
+            headers=auth,
+        )
+        sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
+        async with sessions() as session:
+            row = (
+                await session.scalars(
+                    select(EnvironmentVariable).where(
+                        EnvironmentVariable.environment_id == uuid.UUID(env["id"]),
+                        EnvironmentVariable.key == "BROKEN",
+                    )
+                )
+            ).one()
+            row.encrypted_value = "not-a-fernet-token"
+            await session.commit()
+
+        dep = (
+            await client.post(
+                "/api/v1/deployments",
+                json={
+                    "repo_url": "https://github.com/mangatohjunior/dev-portal",
+                    "project_id": project["id"],
+                    "environment_id": env["id"],
+                },
+                headers=auth,
+            )
+        ).json()
+        succeeded = await client.post(f"/api/v1/deployments/{dep['id']}/succeeded", headers=auth)
+        assert succeeded.status_code == 200, succeeded.text
+        assert succeeded.json()["snapshot_variable_names"] is None
+
+        async with sessions() as session:
+            stored = await session.get(Deployment, uuid.UUID(dep["id"]))
+            assert stored is not None
+            assert stored.env_vars_snapshot is None
+            assert stored.snapshot_names_json is None
+
+        rolled = await client.post(f"/api/v1/deployments/{dep['id']}/rollback", headers=auth)
+        assert rolled.status_code == 201, rolled.text
+        assert rolled.json()["variables_restored"] is False
+
+        listed = (await client.get(base, headers=auth)).json()
+        assert [row["key"] for row in listed] == ["BROKEN", "KEEP"]
+    finally:
+        app.dependency_overrides.pop(get_job_dispatcher, None)
+
+
+@pytest.mark.asyncio
 async def test_rollback_can_skip_variable_restore(
     app: FastAPI, client: AsyncClient, auth: dict[str, str]
 ) -> None:

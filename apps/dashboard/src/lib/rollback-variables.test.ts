@@ -34,7 +34,7 @@ describe("rollbackConfirmMessage", () => {
     assert.match(message, /Remove: OLD_KEY/);
     assert.match(message, /Restore values for: SHARED/);
     assert.match(message, /Values are never shown/);
-    assert.match(message, /restore_variables: false/);
+    assert.doesNotMatch(message, /restore_variables/);
   });
 
   it("does not pretend the environment is empty when current vars failed to load", () => {

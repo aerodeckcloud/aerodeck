@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime
 from typing import Annotated, Self
@@ -5,7 +6,7 @@ from typing import Annotated, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.github import parse_github_repo
-from app.models.deployment import DeploymentStatus, DeploymentTrigger
+from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
 
 RepoUrl = Annotated[str, Field(min_length=1, max_length=512)]
 
@@ -74,3 +75,29 @@ class DeploymentRead(BaseModel):
     variables_restored: bool | None = None
     created_at: datetime
     updated_at: datetime
+
+
+def deployment_to_read(
+    deployment: Deployment,
+    *,
+    variables_restored: bool | None = None,
+) -> DeploymentRead:
+    """API model for a deployment row. Names only — never values or ciphertext."""
+    return DeploymentRead.model_validate(deployment).model_copy(
+        update={
+            "snapshot_variable_names": _snapshot_names(deployment.snapshot_names_json),
+            "variables_restored": variables_restored,
+        }
+    )
+
+
+def _snapshot_names(raw: str | None) -> list[str] | None:
+    if not raw:
+        return None
+    try:
+        names = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        return None
+    return list(names)

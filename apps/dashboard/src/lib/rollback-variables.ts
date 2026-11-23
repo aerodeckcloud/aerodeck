@@ -71,6 +71,5 @@ export function rollbackConfirmMessage(input: RollbackConfirmInput): string {
     lines.push("None — the snapshot is empty, so every current variable will be removed.");
   }
   lines.push("", "Values are never shown.");
-  lines.push("To roll back the image without restoring variables, use the API with restore_variables: false.");
   return lines.join("\n");
 }

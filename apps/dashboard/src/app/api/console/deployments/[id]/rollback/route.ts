@@ -26,20 +26,28 @@ export async function POST(
     return jsonError(400, "Deployment id must be a UUID.", "invalid_deployment_id");
   }
   let restoreVariables = true;
-  try {
-    const payload = (await request.json()) as { restore_variables?: unknown };
-    if ("restore_variables" in payload && typeof payload.restore_variables !== "boolean") {
+  const raw = await request.text();
+  if (raw.trim()) {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return jsonError(400, "Rollback body must be a JSON object.", "invalid_rollback_body");
+    }
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+      return jsonError(400, "Rollback body must be a JSON object.", "invalid_rollback_body");
+    }
+    const record = payload as { restore_variables?: unknown };
+    if ("restore_variables" in record && typeof record.restore_variables !== "boolean") {
       return jsonError(
         400,
         "restore_variables must be a boolean.",
         "invalid_restore_variables",
       );
     }
-    if (typeof payload.restore_variables === "boolean") {
-      restoreVariables = payload.restore_variables;
+    if (typeof record.restore_variables === "boolean") {
+      restoreVariables = record.restore_variables;
     }
-  } catch {
-    // Empty or non-JSON body keeps the default restore.
   }
   try {
     const deployment = await rollbackControlPlaneDeployment(config, id, {

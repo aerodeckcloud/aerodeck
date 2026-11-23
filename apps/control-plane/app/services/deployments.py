@@ -17,7 +17,7 @@ from app.models.deployment import (
 )
 from app.models.project import Environment
 from app.repositories.deployments import DeploymentRepository
-from app.schemas.deployment import DeploymentCreate, DeploymentRead
+from app.schemas.deployment import DeploymentCreate
 from app.services.deployment_terminal import DeploymentTerminalService
 
 logger = get_logger("services.deployments")
@@ -71,9 +71,9 @@ class EnvVarPlainEntry(Protocol):
 class EnvVarSnapshotter(Protocol):
     """Seal / name helpers for the release variable snapshot (#273)."""
 
-    async def load_decrypted_entries(
+    async def load_complete_entries(
         self, project_id: uuid.UUID, environment_id: uuid.UUID
-    ) -> dict[str, EnvVarPlainEntry]: ...
+    ) -> dict[str, EnvVarPlainEntry] | None: ...
 
     def seal_snapshot(self, entries: dict[str, EnvVarPlainEntry]) -> str: ...
 
@@ -240,20 +240,6 @@ class DeploymentService:
             await self._deployments.refresh(current)
         return current
 
-    def to_read(
-        self,
-        deployment: Deployment,
-        *,
-        variables_restored: bool | None = None,
-    ) -> DeploymentRead:
-        """Build the API model. Snapshot names only — never values or ciphertext."""
-        return DeploymentRead.model_validate(deployment).model_copy(
-            update={
-                "snapshot_variable_names": _parse_snapshot_names(deployment.snapshot_names_json),
-                "variables_restored": variables_restored,
-            }
-        )
-
     def read_snapshot_entries(
         self, source: Deployment
     ) -> dict[str, EnvVarPlainEntry] | None:
@@ -279,13 +265,12 @@ class DeploymentService:
     ) -> None:
         """Write the snapshot into the environment once the rollback job is dispatched (#273).
 
-        The caller holds the deploy lock. ``commit`` is False when this write must
-        share the dispatch commit so a concurrent provision cannot observe the
-        restored map without the job.
+        The caller already holds the deploy lock. ``commit`` is False when this
+        write must share the dispatch commit so a concurrent provision cannot
+        observe the restored map without the job.
         """
         if self._env_vars is None:
             return
-        await self._environments.lock_for_deploy(environment_id)
         await self._env_vars.replace_exact(project_id, environment_id, entries)
         if commit:
             await self.commit()
@@ -325,9 +310,16 @@ class DeploymentService:
             return
         if deployment.project_id is None or deployment.environment_id is None:
             return
-        entries = await self._env_vars.load_decrypted_entries(
+        entries = await self._env_vars.load_complete_entries(
             deployment.project_id, deployment.environment_id
         )
+        if entries is None:
+            # A partial map would delete the keys we could not read on rollback.
+            logger.warning(
+                "event=deployment_env_vars_snapshot_skipped deployment=%s reason=unreadable",
+                deployment.id,
+            )
+            return
         deployment.env_vars_snapshot = self._env_vars.seal_snapshot(entries)
         deployment.snapshot_names_json = json.dumps(sorted(entries))
         await self._deployments.save(deployment)
@@ -336,16 +328,3 @@ class DeploymentService:
             deployment.id,
             len(entries),
         )
-
-
-def _parse_snapshot_names(raw: str | None) -> list[str] | None:
-    """Read the plaintext name list. Never touches the sealed blob."""
-    if not raw:
-        return None
-    try:
-        names = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
-        return None
-    return list(names)

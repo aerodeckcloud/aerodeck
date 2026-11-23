@@ -37,6 +37,7 @@ from app.schemas.deployment import (
     DeploymentPromote,
     DeploymentRead,
     DeploymentRollback,
+    deployment_to_read,
 )
 from app.services.blueprint_inspector import inspect_github_repository_sync
 from app.services.docker_policy import normalize_git_sha
@@ -80,7 +81,7 @@ async def _as_sse(lines: AsyncIterator[str]) -> AsyncIterator[bytes]:
 async def list_deployments(page: PaginationDep, deployments: DeploymentServiceDep) -> Page[DeploymentRead]:
     items, total = await deployments.list(limit=page.limit, offset=page.offset)
     return Page(
-        items=[deployments.to_read(row) for row in items],
+        items=[deployment_to_read(row) for row in items],
         total=total,
         limit=page.limit,
         offset=page.offset,
@@ -139,7 +140,7 @@ async def create_deployment(
         trigger=DeploymentTrigger.manual,
         actor_user_id=await _known_actor(users, actor_user_id),
     )
-    payload = deployments.to_read(created)
+    payload = deployment_to_read(created)
     if payload.project_id is not None:
         await audit.record(
             project_id=payload.project_id,
@@ -160,7 +161,7 @@ async def create_deployment(
     responses=_NOT_FOUND,
 )
 async def get_deployment(deployment_id: uuid.UUID, deployments: DeploymentServiceDep) -> DeploymentRead:
-    return deployments.to_read(await deployments.get(deployment_id))
+    return deployment_to_read(await deployments.get(deployment_id))
 
 
 @router.post(
@@ -178,7 +179,7 @@ async def succeed_deployment(
     stored = await deployments.mark_succeeded(deployment_id)
     if jobs is not None:
         await jobs.release_waiting(stored)
-    return deployments.to_read(stored)
+    return deployment_to_read(stored)
 
 
 @router.post(
@@ -196,7 +197,7 @@ async def fail_deployment(
     stored = await deployments.mark_failed(deployment_id)
     if jobs is not None:
         await jobs.release_waiting(stored)
-    return deployments.to_read(stored)
+    return deployment_to_read(stored)
 
 
 @router.get(
@@ -298,7 +299,7 @@ async def _enqueue_copy(
     )
     refreshed = await deployments.get(created.id)
     await deployments.refresh(refreshed)
-    return deployments.to_read(refreshed)
+    return deployment_to_read(refreshed)
 
 
 @router.post(
@@ -366,7 +367,7 @@ async def cancel_deployment(
     # Same rule as the outcome routes: without a queue the waiter stays queued.
     if release is not None:
         await release.release_waiting(stored)
-    return deployments.to_read(stored)
+    return deployment_to_read(stored)
 
 
 @router.post(
@@ -396,7 +397,7 @@ async def promote_deployment(
         actor_user_id=actor_user_id,
         recorded_actor_id=await _known_actor(users, actor_user_id),
     )
-    return deployments.to_read(promoted)
+    return deployment_to_read(promoted)
 
 
 @router.post(
@@ -422,4 +423,4 @@ async def rollback_deployment(
         actor_user_id=await _known_actor(users, actor_user_id),
     )
     await deployments.refresh(stored)
-    return deployments.to_read(stored, variables_restored=variables_restored)
+    return deployment_to_read(stored, variables_restored=variables_restored)
