@@ -473,11 +473,11 @@ def get_promotion_service(
     deployments: DeploymentServiceDep,
     environments: EnvironmentServiceDep,
     members: ProjectMemberServiceDep,
-    jobs: JobServiceDep,
     images: ImageLookupDep,
     settings: SettingsDep,
+    approval: DeployApprovalServiceDep,
 ) -> PromotionService:
-    return PromotionService(deployments, environments, members, jobs, images, settings)
+    return PromotionService(deployments, environments, members, images, settings, approval)
 
 
 PromotionServiceDep = Annotated[PromotionService, Depends(get_promotion_service)]
@@ -486,11 +486,11 @@ PromotionServiceDep = Annotated[PromotionService, Depends(get_promotion_service)
 def get_rollback_service(
     deployments: DeploymentServiceDep,
     members: ProjectMemberServiceDep,
-    jobs: JobServiceDep,
     environments: EnvironmentServiceDep,
     images: ImageLookupDep,
+    approval: DeployApprovalServiceDep,
 ) -> RollbackService:
-    return RollbackService(deployments, members, jobs, environments, images)
+    return RollbackService(deployments, members, environments, images, approval)
 
 
 def get_image_retention_service(settings: SettingsDep) -> ImageRetentionService:

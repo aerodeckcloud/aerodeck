@@ -41,8 +41,8 @@ from app.services.environment_vars import (
     EnvironmentVarRead,
     EnvironmentVarUpsertRequest,
 )
-from app.services.deployments import is_awaiting_approval
 from app.services.environments import EnvironmentService
+from app.services.jobs import JobTicket
 from app.services.provisioning import JobKind
 from app.services.webhooks import WebhookRead, WebhookUpsertRequest
 
@@ -138,6 +138,16 @@ async def _read(environments: EnvironmentService, environment: EnvironmentSource
     return reads[0]
 
 
+def _accepted(ticket: JobTicket) -> JobAccepted:
+    return JobAccepted(
+        job_id=uuid.UUID(ticket.job_id) if ticket.job_id else None,
+        active_deployment_id=ticket.active_deployment_id,
+        kind=ticket.kind,
+        project_id=ticket.project_id,
+        environment_id=ticket.environment_id,
+    )
+
+
 async def _enqueue(
     kind: JobKind,
     project_id: uuid.UUID,
@@ -151,13 +161,7 @@ async def _enqueue(
     ticket = await jobs.enqueue(
         kind, project_id, environment_id, deployment_id=deployment_id, env_vars=env_vars, addons=addons
     )
-    return JobAccepted(
-        job_id=uuid.UUID(ticket.job_id) if ticket.job_id else None,
-        active_deployment_id=ticket.active_deployment_id,
-        kind=ticket.kind,
-        project_id=ticket.project_id,
-        environment_id=ticket.environment_id,
-    )
+    return _accepted(ticket)
 
 
 def _approval_accepted(project_id: uuid.UUID, environment_id: uuid.UUID) -> JobAccepted:
@@ -195,12 +199,13 @@ async def provision_environment(
     addons = body.addons if body is not None else None
     if deployment_id is not None:
         stored = await deployments.get(deployment_id)
-        if is_awaiting_approval(stored):
-            return _approval_accepted(project_id, environment_id)
         environment = await environments.get(project_id, environment_id)
-        if await approval.needs(environment, stored.actor_user_id):
-            await approval.defer(deployment_id, env_vars=env_vars, addons=addons)
+        ticket = await approval.enqueue_or_defer(
+            environment, stored.actor_user_id, deployment_id, env_vars=env_vars, addons=addons
+        )
+        if ticket is None:
             return _approval_accepted(project_id, environment_id)
+        return _accepted(ticket)
     return await _enqueue(
         JobKind.provision,
         project_id,

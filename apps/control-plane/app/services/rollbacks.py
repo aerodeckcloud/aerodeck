@@ -9,12 +9,11 @@ from app.core.logging import get_logger
 from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
 from app.models.project_member import ProjectRole
 from app.schemas.deployment import DeploymentCreate
+from app.services.deploy_approval import DeployApprovalService
 from app.services.deployments import DeploymentService
 from app.services.environments import EnvironmentService
 from app.services.image_presence import ImageLookup, RetainedImage
-from app.services.jobs import JobService
 from app.services.project_members import ProjectMemberService
-from app.services.provisioning import JobKind
 
 logger = get_logger("services.rollbacks")
 
@@ -24,15 +23,15 @@ class RollbackService:
         self,
         deployments: DeploymentService,
         members: ProjectMemberService,
-        jobs: JobService,
         environments: EnvironmentService,
         images: ImageLookup,
+        approval: DeployApprovalService,
     ) -> None:
         self._deployments = deployments
         self._members = members
-        self._jobs = jobs
         self._environments = environments
         self._images = images
+        self._approval = approval
 
     async def rollback(
         self,
@@ -76,17 +75,19 @@ class RollbackService:
             actor_user_id=recorded_actor_id,
         )
         replace_env_vars = entries if entries is not None else None
-        ticket = await self._jobs.enqueue(
-            JobKind.provision,
-            source.project_id,
-            source.environment_id,
-            deployment_id=created.id,
+        environment = await self._environments.get(source.project_id, source.environment_id)
+        ticket = await self._approval.enqueue_or_defer(
+            environment,
+            actor_user_id,
+            created.id,
             rollback_from_deployment_id=source.id,
             replace_env_vars=replace_env_vars,
         )
-        # A held rollback keeps the sealed map on the replay and does not touch
-        # the live variables until that job is actually dispatched.
-        variables_restored = ticket.job_id is not None and entries is not None
+        # A held rollback, including one waiting for an owner, keeps the sealed map
+        # on the replay and does not touch the live variables until the job starts.
+        variables_restored = (
+            ticket is not None and ticket.job_id is not None and entries is not None
+        )
 
         logger.info(
             "event=deployment_rollback source=%s deployment=%s variables_restored=%s",

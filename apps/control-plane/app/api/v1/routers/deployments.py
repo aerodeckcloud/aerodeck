@@ -46,7 +46,6 @@ from app.services.blueprint_inspector import inspect_github_repository_sync
 from app.services.docker_policy import normalize_git_sha
 from app.services.container_logs import ContainerLogsRead, dispatch_container_logs
 from app.services.deployment_logs import ensure_log_store_ready, iter_deployment_log_lines
-from app.services.provisioning import JobKind
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
 
@@ -282,7 +281,6 @@ def _require_linked(source) -> tuple[uuid.UUID, uuid.UUID]:
 async def _enqueue_copy(
     source,
     deployments: DeploymentServiceDep,
-    jobs: JobServiceDep,
     users: ConsoleUserServiceDep,
     environments: EnvironmentServiceDep,
     approval: DeployApprovalServiceDep,
@@ -302,16 +300,7 @@ async def _enqueue_copy(
         actor_user_id=known_actor,
     )
     environment = await environments.get(project_id, environment_id)
-    if await approval.needs(environment, known_actor):
-        await approval.defer(created.id, git_ref=git_ref)
-    else:
-        await jobs.enqueue(
-            JobKind.provision,
-            project_id,
-            environment_id,
-            deployment_id=created.id,
-            git_ref=git_ref,
-        )
+    await approval.enqueue_or_defer(environment, known_actor, created.id, git_ref=git_ref)
     refreshed = await deployments.get(created.id)
     await deployments.refresh(refreshed)
     return deployment_to_read(refreshed)
@@ -327,7 +316,6 @@ async def _enqueue_copy(
 async def redeploy_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
-    jobs: JobServiceDep,
     users: ConsoleUserServiceDep,
     environments: EnvironmentServiceDep,
     approval: DeployApprovalServiceDep,
@@ -344,7 +332,6 @@ async def redeploy_deployment(
     return await _enqueue_copy(
         source,
         deployments,
-        jobs,
         users,
         environments,
         approval,
@@ -363,7 +350,6 @@ async def redeploy_deployment(
 async def deploy_latest_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
-    jobs: JobServiceDep,
     users: ConsoleUserServiceDep,
     environments: EnvironmentServiceDep,
     approval: DeployApprovalServiceDep,
@@ -373,7 +359,6 @@ async def deploy_latest_deployment(
     return await _enqueue_copy(
         source,
         deployments,
-        jobs,
         users,
         environments,
         approval,

@@ -177,6 +177,14 @@ async def test_developer_prod_deploy_waits_until_an_owner_approves_or_rejects(
     refused = await client.post(f"/api/v1/deployments/{held['id']}/succeeded", headers=auth)
     assert refused.status_code == 409
 
+    missing_user = await client.post(f"/api/v1/deployments/{held['id']}/approve", headers=auth)
+    assert missing_user.status_code == 403
+    missing_reject = await client.post(f"/api/v1/deployments/{held['id']}/reject", headers=auth)
+    assert missing_reject.status_code == 403
+    still_held = await client.get(f"/api/v1/deployments/{held['id']}", headers=owner)
+    assert still_held.json()["status"] == "queued"
+    assert still_held.json()["approved_at"] is None
+
     forbidden = await client.post(f"/api/v1/deployments/{held['id']}/approve", headers=developer)
     assert forbidden.status_code == 403
     assert (await client.post(f"/api/v1/deployments/{held['id']}/reject", headers=developer)).status_code == 403
@@ -340,3 +348,46 @@ async def test_webhook_to_prod_waits_for_an_owner(
         (await client.get(f"/api/v1/projects/{project['id']}/audit-logs", headers=owner)).json()
     )
     assert len(dispatcher.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_developer_rollback_to_prod_waits_for_an_owner(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    dispatcher = FakeDispatcher()
+    app.dependency_overrides[get_job_dispatcher] = lambda: dispatcher
+    owner = await _user(client, auth, "owner-rollback@aerodeck.test")
+    developer = await _user(client, auth, "dev-rollback@aerodeck.test")
+    project = await _project(client, owner, "approval-rollback")
+    await client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"email": "dev-rollback@aerodeck.test", "role": "developer"},
+        headers=owner,
+    )
+    prod = await _environment(client, owner, project["id"], slug="prod", kind="prod")
+    source = await _deploy(client, owner, project["id"], prod["id"])
+    started = await client.post(
+        _provision(project["id"], prod["id"]),
+        json={"deployment_id": source["id"]},
+        headers=owner,
+    )
+    assert started.status_code == 202, started.text
+    finished = await client.post(f"/api/v1/deployments/{source['id']}/succeeded", headers=owner)
+    assert finished.status_code == 200, finished.text
+
+    rolled = await client.post(
+        f"/api/v1/deployments/{source['id']}/rollback",
+        json={"restore_variables": False},
+        headers=developer,
+    )
+    assert rolled.status_code == 201, rolled.text
+    body = rolled.json()
+    assert body["status"] == "queued"
+    assert body["approval_required_at"] is not None
+    assert body["trigger"] == "rollback"
+    assert len(dispatcher.calls) == 1
+
+    approved = await client.post(f"/api/v1/deployments/{body['id']}/approve", headers=owner)
+    assert approved.status_code == 200, approved.text
+    assert len(dispatcher.calls) == 2
+    assert dispatcher.calls[-1]["meta"]["rollback_from_deployment_id"] == source["id"]

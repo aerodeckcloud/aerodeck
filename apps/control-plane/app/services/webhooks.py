@@ -340,10 +340,25 @@ class WebhookService:
                 trigger=DeploymentTrigger.webhook,
             )
             addons = _parse_addons(webhook.addons_json) or None
-            if self._approval is not None and await self._approval.needs(environment, None):
-                await self._approval.defer(deployment.id, addons=addons)
-                webhook.last_delivery_id = delivery_id
-                webhook.last_triggered_at = datetime.now(UTC)
+            try:
+                if self._approval is None:
+                    ticket = await jobs.enqueue(
+                        JobKind.provision,
+                        webhook.project_id,
+                        webhook.environment_id,
+                        deployment_id=deployment.id,
+                        addons=addons,
+                    )
+                else:
+                    ticket = await self._approval.enqueue_or_defer(
+                        environment, None, deployment.id, addons=addons
+                    )
+            except ConflictError:
+                skipped_reason = "container swap already started"
+                continue
+            webhook.last_delivery_id = delivery_id
+            webhook.last_triggered_at = datetime.now(UTC)
+            if ticket is None:
                 pending_ids.append(deployment.id)
                 logger.info(
                     "github webhook stored deployment %s pending approval for %s (%s)",
@@ -352,19 +367,6 @@ class WebhookService:
                     webhook.branch,
                 )
                 continue
-            try:
-                await jobs.enqueue(
-                    JobKind.provision,
-                    webhook.project_id,
-                    webhook.environment_id,
-                    deployment_id=deployment.id,
-                    addons=addons,
-                )
-            except ConflictError:
-                skipped_reason = "container swap already started"
-                continue
-            webhook.last_delivery_id = delivery_id
-            webhook.last_triggered_at = datetime.now(UTC)
             triggered_ids.append(deployment.id)
             logger.info(
                 "github webhook triggered deployment %s for %s (%s)",

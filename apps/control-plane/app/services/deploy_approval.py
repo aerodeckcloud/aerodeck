@@ -13,8 +13,10 @@ from app.models.deployment import Deployment
 from app.models.project import Environment, EnvironmentKind
 from app.services.audit_logs import AuditLogService
 from app.services.deployments import DeploymentService, is_awaiting_approval
-from app.services.jobs import JobService
-from app.services.project_members import ForbiddenError, ProjectMemberService, ProjectRole
+from app.services.environment_vars import EnvVarPlain
+from app.services.jobs import JobService, JobTicket
+from app.services.project_members import ForbiddenError, ProjectMemberService
+from app.services.provisioning import JobKind
 
 AUTO_DEPLOY_SKIPPED = "deployment.auto_deploy_skipped"
 
@@ -47,6 +49,51 @@ class DeployApprovalService:
     async def needs(self, environment: Environment, actor_user_id: uuid.UUID | None) -> bool:
         return await needs_production_approval(self._members, environment, actor_user_id)
 
+    async def enqueue_or_defer(
+        self,
+        environment: Environment,
+        actor_user_id: uuid.UUID | None,
+        deployment_id: uuid.UUID,
+        *,
+        git_ref: str | None = None,
+        addons: list[str] | None = None,
+        env_vars: dict[str, str] | None = None,
+        rollback_from_deployment_id: uuid.UUID | None = None,
+        promote_from_deployment_id: uuid.UUID | None = None,
+        replace_env_vars: dict[str, EnvVarPlain] | None = None,
+    ) -> JobTicket | None:
+        """Start the provision, or hold it for an owner.
+
+        ``None`` means the row is waiting for approval and nothing was dispatched.
+        A row that is already waiting is left as it is.
+        """
+        stored = await self._deployments.get(deployment_id)
+        if is_awaiting_approval(stored):
+            return None
+        if await self.needs(environment, actor_user_id):
+            await self.defer(
+                deployment_id,
+                git_ref=git_ref,
+                addons=addons,
+                env_vars=env_vars,
+                rollback_from_deployment_id=rollback_from_deployment_id,
+                promote_from_deployment_id=promote_from_deployment_id,
+                replace_env_vars=replace_env_vars,
+            )
+            return None
+        return await self._jobs.enqueue(
+            JobKind.provision,
+            environment.project_id,
+            environment.id,
+            deployment_id=deployment_id,
+            git_ref=git_ref,
+            addons=addons,
+            env_vars=env_vars,
+            rollback_from_deployment_id=rollback_from_deployment_id,
+            promote_from_deployment_id=promote_from_deployment_id,
+            replace_env_vars=replace_env_vars,
+        )
+
     async def defer(
         self,
         deployment_id: uuid.UUID,
@@ -54,14 +101,18 @@ class DeployApprovalService:
         git_ref: str | None = None,
         addons: list[str] | None = None,
         env_vars: dict[str, str] | None = None,
+        rollback_from_deployment_id: uuid.UUID | None = None,
         promote_from_deployment_id: uuid.UUID | None = None,
+        replace_env_vars: dict[str, EnvVarPlain] | None = None,
     ) -> None:
         await self._jobs.defer_for_approval(
             deployment_id,
             git_ref=git_ref,
             addons=addons,
             env_vars=env_vars,
+            rollback_from_deployment_id=rollback_from_deployment_id,
             promote_from_deployment_id=promote_from_deployment_id,
+            replace_env_vars=replace_env_vars,
         )
 
     async def note_auto_deploy_skipped(self, environment: Environment) -> None:
@@ -112,7 +163,9 @@ class DeployApprovalService:
     ) -> Deployment:
         stored = await self._deployments.get(deployment_id)
         project_id = _require_project(stored)
-        await self._members.require_role(project_id, actor_user_id, ProjectRole.owner)
+        # require_role ignores a missing user id. Approve and reject must not.
+        if actor_user_id is None or not await self._members.is_owner(project_id, actor_user_id):
+            raise ForbiddenError(f"Requires owner role on project {project_id}.")
         if not is_awaiting_approval(stored):
             raise ConflictError("Deployment is not waiting for approval.")
         return stored

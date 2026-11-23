@@ -100,9 +100,10 @@ repeat of the same delivery is ignored. Manual deploy, repeat, deploy-latest,
 and promote still run while pause is on.
 Production environments can require an owner (`prod_deploy_approval`). Existing
 production environments stay off, so current webhooks keep deploying until an
-owner turns it on. A new production environment starts with it on. A developer
-or a webhook then stores the row as `queued` with `approval_required_at` set
-and does not start a job. An owner deploys immediately.
+owner turns it on. A new production environment starts with it on. A developer, a webhook, or a rollback then stores the row as `queued` with
+`approval_required_at` set and does not start a job. An owner deploys,
+promotes, and rolls back immediately. Approve and reject require the calling
+user id. A request with no user is refused.
 `POST /api/v1/deployments/{id}/approve` and `POST .../reject` are owner-only
 (console `POST /api/console/deployments/{id}/approve` and `.../reject`).
 Approve starts the job under the overlap setting and the audit row records the
