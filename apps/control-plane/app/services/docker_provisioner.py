@@ -85,10 +85,16 @@ class DockerProvisioner:
     def _docker_env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         return ensure_default_docker_config(os.environ, self.docker_host, extra)
 
+    def _image_exists(self, docker_bin: str, docker_env: dict[str, str], tag: str) -> bool:
+        inspected = self.runner.run([docker_bin, "image", "inspect", tag], env=docker_env, timeout=15)
+        return inspected.returncode == 0
+
     def provision(
         self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",
         environment_kind: str = "dev", region: str = "ams3", repo_url: str = "", env_vars_json: str = "",
         addons_json: str = "", image_deployment_id: str = "", rollback_from_deployment_id: str = "",
+        promote_from_deployment_id: str = "", promote_from_environment_id: str = "",
+        promote_from_environment_slug: str = "",
         git_ref: str = "", on_log: LogSink | None = None,
         on_checkout: Callable[[str], None] | None = None,
         on_swap: Callable[[], None] | None = None,
@@ -111,29 +117,47 @@ class DockerProvisioner:
             project_id=p_uuid, environment_id=e_uuid, addons=parse_addons_json(addons_json), on_log=on_log,
         )
         run_tag = tag
-        if rollback_from_deployment_id:
+        deploy_tag = (
+            deployment_image_tag_for(project_slug, environment_slug, str(p_uuid), str(e_uuid), image_deployment_id)
+            if image_deployment_id
+            else None
+        )
+        retained_image = bool(promote_from_deployment_id or rollback_from_deployment_id)
+        if promote_from_deployment_id:
+            # The image was built in another environment of this project (#272).
+            source_tag = deployment_image_tag_for(
+                project_slug, promote_from_environment_slug, str(p_uuid),
+                promote_from_environment_id, promote_from_deployment_id,
+            )
+            emit(f"Promoting retained Docker image {source_tag}...")
+            if not self._image_exists(docker_bin, docker_env, source_tag):
+                raise PermanentJobError(
+                    f"Promote image {source_tag} is no longer available on this host; deploy the commit instead"
+                )
+            # Tag it for this environment so it can be rolled back to and promoted again.
+            for target_tag in filter(None, (tag, deploy_tag)):
+                tag_res = self.runner.run([docker_bin, "tag", source_tag, target_tag], env=docker_env, timeout=30)
+                if tag_res.returncode != 0:
+                    raise classify_failure("docker tag", tag_res)
+        elif rollback_from_deployment_id:
             rollback_tag = deployment_image_tag_for(
                 project_slug, environment_slug, str(p_uuid), str(e_uuid), rollback_from_deployment_id
             )
             emit(f"Rolling back to retained Docker image {rollback_tag}...")
-            inspect_img = self.runner.run([docker_bin, "image", "inspect", rollback_tag], env=docker_env, timeout=15)
-            if inspect_img.returncode != 0:
+            if not self._image_exists(docker_bin, docker_env, rollback_tag):
                 raise PermanentJobError(
                     f"Rollback image {rollback_tag} is no longer available on this host; use Redeploy instead"
                 )
+            run_tag = rollback_tag
+        if retained_image:
+            # No checkout, so there is no Dockerfile to read the port from.
             target_port = self.container_port
-            with tempfile.TemporaryDirectory(prefix="aerodeck-rollback-") as tmp:
+            with tempfile.TemporaryDirectory(prefix="aerodeck-retained-") as tmp:
                 env_file = build_runtime_env_file(
                     Path(tmp), target_port, f"https://{route_hostname}" if route_hostname else None,
                     on_log, env_vars_json, addon_env,
                 )
-            run_tag = rollback_tag
         else:
-            deploy_tag = (
-                deployment_image_tag_for(project_slug, environment_slug, str(p_uuid), str(e_uuid), image_deployment_id)
-                if image_deployment_id
-                else None
-            )
             pinned_sha = normalize_git_sha(git_ref) if git_ref else None
             safe_ref = None if pinned_sha else validate_git_ref(git_ref)
             with tempfile.TemporaryDirectory(prefix="aerodeck-build-") as tmp:

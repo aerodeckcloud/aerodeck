@@ -21,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.errors import ConflictError, QueueUnavailableError, UnprocessableError
 from app.core.logging import get_logger
-from app.models.deployment import Deployment, DeploymentStatus
+from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
 from app.models.project import DeployOverlap, Environment
 from app.repositories.jobs import JobState
 from app.services.deployment_logs import (
@@ -131,6 +131,7 @@ class JobService:
         env_vars: dict[str, str] | None = None,
         addons: list[str] | None = None,
         rollback_from_deployment_id: uuid.UUID | None = None,
+        promote_from_deployment_id: uuid.UUID | None = None,
         git_ref: str | None = None,
     ) -> JobTicket:
         environment = await self._environments.get(project_id, environment_id)
@@ -151,6 +152,8 @@ class JobService:
             meta["addons_json"] = json.dumps(addons)
         if rollback_from_deployment_id is not None and kind is JobKind.provision:
             meta["rollback_from_deployment_id"] = str(rollback_from_deployment_id)
+        if promote_from_deployment_id is not None and kind is JobKind.provision:
+            meta.update(await self._promote_meta(project_id, promote_from_deployment_id))
         if git_ref and kind is JobKind.provision:
             meta["git_ref"] = git_ref
         linked_deployment_id: uuid.UUID | None = None
@@ -174,6 +177,7 @@ class JobService:
                     ProvisionReplay(
                         git_ref=git_ref,
                         rollback_from_deployment_id=rollback_from_deployment_id,
+                        promote_from_deployment_id=promote_from_deployment_id,
                         addons=addons,
                         sealed_env_vars=self._seal(env_vars),
                     ),
@@ -233,6 +237,12 @@ class JobService:
         waiter, replay_json = claimed
         try:
             replay = ProvisionReplay.from_json(replay_json)
+            if (
+                waiter.trigger == DeploymentTrigger.promote.value
+                and replay.promote_from_deployment_id is None
+            ):
+                # Starting it anyway would clone and build the default branch instead.
+                raise UnprocessableError("A waiting promotion lost the image it was to promote.")
             await self.enqueue(
                 JobKind.provision,
                 finished.project_id,
@@ -241,6 +251,7 @@ class JobService:
                 env_vars=self._unseal(replay.sealed_env_vars),
                 addons=replay.addons,
                 rollback_from_deployment_id=replay.rollback_from_deployment_id,
+                promote_from_deployment_id=replay.promote_from_deployment_id,
                 git_ref=replay.git_ref,
             )
         except ConflictError:
@@ -257,6 +268,26 @@ class JobService:
                 exc_info=release_exc,
             )
             await self._fail_unstarted(waiter.id)
+
+    async def _promote_meta(
+        self, project_id: uuid.UUID, source_deployment_id: uuid.UUID
+    ) -> dict[str, str]:
+        """What the worker needs to find the image another environment built (#272).
+
+        The image tag is derived from the environment that built it, so the
+        worker is told which one that was. It never receives a tag to trust.
+        """
+        source = await self._deployments.get(source_deployment_id)
+        if source.project_id != project_id or source.environment_id is None:
+            raise UnprocessableError(
+                "The promoted deployment is no longer linked to an environment of this project."
+            )
+        built_in = await self._environments.get(project_id, source.environment_id)
+        return {
+            "promote_from_deployment_id": str(source.id),
+            "promote_from_environment_id": str(built_in.id),
+            "promote_from_environment_slug": built_in.slug,
+        }
 
     async def _admit(self, environment: Environment, deployment_id: uuid.UUID) -> _Admission:
         """Decide what a new provision does. The caller holds the environment lock."""

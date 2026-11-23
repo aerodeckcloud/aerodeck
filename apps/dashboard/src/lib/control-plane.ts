@@ -901,8 +901,9 @@ export async function listControlPlaneProjectDeployments(
 async function triggerControlPlaneDeploymentAction(
   config: ControlPlaneConfig,
   deploymentId: string,
-  action: "redeploy" | "rollback" | "deploy-latest" | "cancel",
+  action: "redeploy" | "rollback" | "deploy-latest" | "cancel" | "promote",
   options: ListOptions & { actorUserId?: string } = {},
+  body?: Record<string, string>,
 ): Promise<Deployment> {
   if (!isControlPlaneUuid(deploymentId)) {
     throw new ControlPlaneError("deploymentId must be a uuid");
@@ -917,11 +918,15 @@ async function triggerControlPlaneDeploymentAction(
   if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
     headers["x-aerodeck-user-id"] = options.actorUserId;
   }
+  if (body) {
+    headers["content-type"] = "application/json";
+  }
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/${action}`,
     {
       method: "POST",
       headers,
+      ...(body ? { body: JSON.stringify(body) } : {}),
       cache: "no-store",
     },
   );
@@ -964,6 +969,21 @@ export function rollbackControlPlaneDeployment(
   options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   return triggerControlPlaneDeploymentAction(config, deploymentId, "rollback", options);
+}
+
+/** Run a succeeded deployment's image in another environment of its project (#272). */
+export function promoteControlPlaneDeployment(
+  config: ControlPlaneConfig,
+  deploymentId: string,
+  environmentId: string,
+  options: ListOptions & { actorUserId?: string } = {},
+): Promise<Deployment> {
+  if (!isControlPlaneUuid(environmentId)) {
+    return Promise.reject(new ControlPlaneError("environmentId must be a uuid"));
+  }
+  return triggerControlPlaneDeploymentAction(config, deploymentId, "promote", options, {
+    environment_id: environmentId,
+  });
 }
 
 export async function runControlPlaneContainerAction(

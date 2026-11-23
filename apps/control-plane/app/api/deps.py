@@ -47,12 +47,14 @@ from app.services.dns_records import (
 from app.services.environments import EnvironmentService
 from app.services.environment_vars import EnvironmentVariableRepository, EnvironmentVariableService
 from app.services.hypervisor import FirecrackerHypervisor, Hypervisor, MemoryHypervisor, SandboxUnavailableError
+from app.services.image_presence import ImageLookup, WorkerImageLookup
 from app.services.jobs import DeploymentEnqueueHooks, JobDispatcher, JobService
 from app.services.letsencrypt import LetsEncryptIssuer
 from app.services.notifications import NotificationChannelRepository, NotificationService
 from app.services.pr_previews import PrPreviewService
 from app.services.projects import ProjectService
 from app.services.project_members import ProjectMemberRepository, ProjectMemberService
+from app.services.promotions import PromotionService
 from app.services.routes import RouteService
 from app.services.sandbox_hosts import SandboxHostService
 from app.services.sandboxes import SandboxService
@@ -440,6 +442,26 @@ def get_release_job_service(
 
 
 ReleaseJobServiceDep = Annotated[JobService | None, Depends(get_release_job_service)]
+
+
+def get_image_lookup(settings: SettingsDep) -> ImageLookup:
+    return WorkerImageLookup(settings)
+
+
+ImageLookupDep = Annotated[ImageLookup, Depends(get_image_lookup)]
+
+
+def get_promotion_service(
+    deployments: DeploymentServiceDep,
+    environments: EnvironmentServiceDep,
+    members: ProjectMemberServiceDep,
+    jobs: JobServiceDep,
+    images: ImageLookupDep,
+) -> PromotionService:
+    return PromotionService(deployments, environments, members, jobs, images)
+
+
+PromotionServiceDep = Annotated[PromotionService, Depends(get_promotion_service)]
 
 # auto_error=False so a missing header becomes our {"detail", "code"} 401, not FastAPI's 403.
 _bearer = HTTPBearer(auto_error=False, description="Access token from POST /api/v1/auth/token")

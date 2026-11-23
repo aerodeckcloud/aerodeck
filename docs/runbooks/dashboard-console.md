@@ -53,8 +53,17 @@ Rows created before that migration leave those fields empty.
 **Redeploy** repeats that recorded commit (`POST /api/v1/deployments/{id}/redeploy`
 passes `git_ref` set to `git_sha`). A row with no commit returns 422 and does not
 enqueue. **Deploy latest** (`POST .../deploy-latest`) enqueues with no pin, so the
-worker clones the repository default branch. Both stay on the console routes;
-the mock deployment list never calls the control plane.
+worker clones the repository default branch. **Promote**
+(`POST /api/v1/deployments/{id}/promote` with `environment_id`, console
+`POST /api/console/deployments/{id}/promote`) runs that succeeded row's retained
+local image in another environment of the same project. The new row gets
+`trigger=promote`, copies `git_sha`, and the worker tags the image into the
+target without cloning. Production needs an owner; other kinds need a
+developer. A missing image, a non-succeeded row, the same environment, or
+another project returns 422. The target's wait/override setting still applies.
+Project history asks for the target environment; the browser does not call
+FastAPI. Redeploy, deploy-latest, rollback, and promote stay on the console
+routes; the mock deployment list never calls the control plane.
 `POST /api/v1/deployments/{id}/cancel` (console `POST /api/console/deployments/{id}/cancel`)
 marks a queued or running deployment `cancelled` and sets `finished_at` when the
 worker has not yet set `swap_started_at`. The Celery task is revoked if it has

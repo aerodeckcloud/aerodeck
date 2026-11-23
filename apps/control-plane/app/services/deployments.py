@@ -74,7 +74,15 @@ class DeploymentService:
         *,
         trigger: DeploymentTrigger | None = None,
         actor_user_id: uuid.UUID | None = None,
+        git_sha: str | None = None,
+        git_ref: str | None = None,
     ) -> Deployment:
+        """Store a deployment request.
+
+        ``git_sha`` and ``git_ref`` are set only when the commit is already
+        known, as it is for a promoted image (#272). Otherwise the worker
+        records them after checkout.
+        """
         parsed = parse_github_repo(data.repo_url)
         if parsed is None:
             raise ValueError("repo_url must be a GitHub repository URL")
@@ -95,6 +103,8 @@ class DeploymentService:
                     started_at=datetime.now(UTC),
                     trigger=trigger.value if trigger is not None else None,
                     actor_user_id=actor_user_id,
+                    git_sha=git_sha,
+                    git_ref=git_ref,
                 )
             )
         except IntegrityError as exc:

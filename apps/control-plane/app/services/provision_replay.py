@@ -18,6 +18,7 @@ logger = get_logger("services.provision_replay")
 class ProvisionReplay:
     git_ref: str | None = None
     rollback_from_deployment_id: uuid.UUID | None = None
+    promote_from_deployment_id: uuid.UUID | None = None
     addons: list[str] | None = None
     sealed_env_vars: str | None = None
 
@@ -27,6 +28,8 @@ class ProvisionReplay:
             payload["git_ref"] = self.git_ref
         if self.rollback_from_deployment_id is not None:
             payload["rollback_from_deployment_id"] = str(self.rollback_from_deployment_id)
+        if self.promote_from_deployment_id is not None:
+            payload["promote_from_deployment_id"] = str(self.promote_from_deployment_id)
         if self.addons:
             payload["addons"] = self.addons
         if self.sealed_env_vars:
@@ -53,6 +56,7 @@ class ProvisionReplay:
         return cls(
             git_ref=_text(payload.get("git_ref")),
             rollback_from_deployment_id=_uuid(payload.get("rollback_from_deployment_id")),
+            promote_from_deployment_id=_uuid(payload.get("promote_from_deployment_id")),
             addons=addons
             if isinstance(addons, list) and addons and all(isinstance(item, str) for item in addons)
             else None,

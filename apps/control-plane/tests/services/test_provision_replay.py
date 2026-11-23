@@ -13,6 +13,7 @@ def test_round_trip_keeps_every_field() -> None:
     replay = ProvisionReplay(
         git_ref="a" * 40,
         rollback_from_deployment_id=uuid.uuid4(),
+        promote_from_deployment_id=uuid.uuid4(),
         addons=["redis"],
         sealed_env_vars="sealed-token",
     )
