@@ -30,10 +30,7 @@ export function PublicShell({ children }: { children: React.ReactNode }) {
             <PublicMobileNav />
           </div>
         </div>
-        <span
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-primary/80 to-runway/90"
-          aria-hidden
-        />
+        <span className="deck-horizon" aria-hidden />
       </header>
 
       <main className="console-canvas flex-1">{children}</main>

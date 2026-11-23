@@ -1,7 +1,7 @@
 export function BrandMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 32 32" className={className} aria-hidden>
-      <rect width="32" height="32" rx="9" fill="oklch(0.16 0.05 262)" />
+      <rect width="32" height="32" rx="9" fill="var(--background)" />
       <rect
         x="0.75"
         y="0.75"
@@ -29,11 +29,11 @@ export function BrandMark({ className }: { className?: string }) {
       />
       <path
         d="M8 23.6h16"
-        stroke="oklch(0.84 0.15 78)"
+        stroke="var(--runway)"
         strokeWidth="1.7"
         strokeLinecap="round"
       />
-      <circle cx="16" cy="23.6" r="1.15" fill="oklch(0.84 0.15 78)" />
+      <circle cx="16" cy="23.6" r="1.15" fill="var(--runway)" />
     </svg>
   );
 }

@@ -83,7 +83,12 @@ export function AppShell({
           </button>
           <div className="hidden items-center gap-2 sm:flex">
             <span
-              className="size-1.5 rounded-full bg-primary shadow-[0_0_10px_var(--primary)]"
+              className={cn(
+                "size-1.5 rounded-full",
+                controlPlane
+                  ? "bg-primary shadow-[0_0_10px_var(--primary)]"
+                  : "bg-runway",
+              )}
               aria-hidden
             />
             <p className="font-mono text-[11px] tracking-[0.24em] text-muted-foreground uppercase">
@@ -120,10 +125,7 @@ export function AppShell({
               {controlPlane ? "Live" : "Mock"}
             </Badge>
           </div>
-          <span
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-primary/80 to-runway/90"
-            aria-hidden
-          />
+          <span className="deck-horizon" aria-hidden />
         </header>
 
         <main className="console-canvas flex-1 overflow-auto px-4 py-6 md:px-8 md:py-10">

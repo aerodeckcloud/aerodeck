@@ -139,6 +139,20 @@
   }
 }
 
+.deck-horizon {
+  pointer-events: none;
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 1px;
+  background-image: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in oklab, var(--primary) 80%, transparent),
+    color-mix(in oklab, var(--runway) 90%, transparent)
+  );
+}
+
 .console-canvas {
   background-color: var(--background);
   background-image:
