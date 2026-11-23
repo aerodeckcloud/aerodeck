@@ -97,7 +97,8 @@ An owner can pause automatic redeploys on an environment (`auto_deploy_paused`).
 A GitHub push then creates no deployment and writes one audit row,
 `deployment.auto_deploy_skipped`. The webhook secret is not in that row. A
 repeat of the same delivery is ignored. Manual deploy, repeat, deploy-latest,
-and promote still run while pause is on.
+and promote still run while pause is on. Only an owner can change
+`auto_deploy_paused` or `prod_deploy_approval`.
 Production environments can require an owner (`prod_deploy_approval`). Existing
 production environments stay off, so current webhooks keep deploying until an
 owner turns it on. A new production environment starts with it on. A developer, a webhook, or a rollback then stores the row as `queued` with

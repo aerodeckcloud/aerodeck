@@ -219,11 +219,14 @@ class DeploymentService:
             raise NotFoundError(f"Deployment {deployment_id} not found")
         return stored
 
-    async def mark_approved(self, deployment_id: uuid.UUID) -> Deployment:
-        stored = await self._deployments.mark_approved(deployment_id, datetime.now(UTC))
-        if stored is None:
+    async def mark_approved(self, deployment_id: uuid.UUID) -> Deployment | None:
+        """Approve only if this request still sees a waiting row. None if another request won."""
+        current = await self._lock_environment_of(deployment_id)
+        if current is None:
             raise NotFoundError(f"Deployment {deployment_id} not found")
-        return stored
+        if not is_awaiting_approval(current):
+            return None
+        return await self._deployments.mark_approved(deployment_id, datetime.now(UTC))
 
     async def mark_waiting(
         self, deployment_id: uuid.UUID, active_id: uuid.UUID, replay_json: str | None

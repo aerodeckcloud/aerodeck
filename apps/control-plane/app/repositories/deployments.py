@@ -199,13 +199,24 @@ class DeploymentRepository:
         return stored
 
     async def mark_approved(self, deployment_id: uuid.UUID, approved_at: datetime) -> Deployment | None:
-        stored = await self._session.get(Deployment, deployment_id)
-        if stored is None:
-            return None
-        stored.approved_at = approved_at
-        await self._session.flush()
-        await self._session.refresh(stored)
-        return stored
+        """Stamp approval only while the row is still waiting for an owner.
+
+        A second approve, or an approve after reject or dispatch, updates nothing.
+        """
+        updated = await self._session.scalar(
+            update(Deployment)
+            .where(
+                Deployment.id == deployment_id,
+                Deployment.approval_required_at.is_not(None),
+                Deployment.approved_at.is_(None),
+                Deployment.status == DeploymentStatus.queued,
+                Deployment.finished_at.is_(None),
+                Deployment.dispatched_at.is_(None),
+            )
+            .values(approved_at=approved_at)
+            .returning(Deployment)
+        )
+        return updated
 
     async def mark_waiting(
         self, deployment_id: uuid.UUID, active_id: uuid.UUID, replay_json: str | None

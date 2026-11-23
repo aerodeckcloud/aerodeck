@@ -130,6 +130,8 @@ class DeployApprovalService:
     async def approve(self, deployment_id: uuid.UUID, actor_user_id: uuid.UUID | None) -> Deployment:
         stored = await self._pending_for_owner(deployment_id, actor_user_id)
         approved = await self._deployments.mark_approved(deployment_id)
+        if approved is None:
+            raise ConflictError("Deployment is not waiting for approval.")
         await self._jobs.start_approved(approved)
         await self._audit.record(
             project_id=_require_project(stored),

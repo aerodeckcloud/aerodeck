@@ -6,13 +6,16 @@ import hashlib
 import hmac
 import json
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.deps import get_job_dispatcher
+from app.repositories.deployments import DeploymentRepository
 from app.repositories.jobs import JobState
 from app.services.provisioning import JobKind
 
@@ -193,6 +196,13 @@ async def test_developer_prod_deploy_waits_until_an_owner_approves_or_rejects(
     assert approved.status_code == 200, approved.text
     assert approved.json()["approved_at"] is not None
     assert len(dispatcher.calls) == 1
+    second_approve = await client.post(f"/api/v1/deployments/{held['id']}/approve", headers=owner)
+    assert second_approve.status_code == 409
+    assert len(dispatcher.calls) == 1
+    sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
+    async with sessions() as session:
+        lost = await DeploymentRepository(session).mark_approved(uuid.UUID(held["id"]), datetime.now(UTC))
+        assert lost is None
     finished = await client.post(f"/api/v1/deployments/{held['id']}/succeeded", headers=auth)
     assert finished.status_code == 200, finished.text
 
@@ -208,6 +218,9 @@ async def test_developer_prod_deploy_waits_until_an_owner_approves_or_rejects(
     rejected = await client.post(f"/api/v1/deployments/{again['id']}/reject", headers=owner)
     assert rejected.status_code == 200, rejected.text
     assert rejected.json()["status"] == "cancelled"
+    after_reject = await client.post(f"/api/v1/deployments/{again['id']}/approve", headers=owner)
+    assert after_reject.status_code == 409
+    assert len(dispatcher.calls) == 1
 
     owner_deploy = await _deploy(client, owner, project["id"], prod["id"])
     started = await client.post(
@@ -391,3 +404,40 @@ async def test_developer_rollback_to_prod_waits_for_an_owner(
     assert approved.status_code == 200, approved.text
     assert len(dispatcher.calls) == 2
     assert dispatcher.calls[-1]["meta"]["rollback_from_deployment_id"] == source["id"]
+
+
+@pytest.mark.asyncio
+async def test_only_an_owner_can_change_pause_or_production_approval(
+    client: AsyncClient, auth: dict[str, str]
+) -> None:
+    owner = await _user(client, auth, "owner-flags@aerodeck.test")
+    developer = await _user(client, auth, "dev-flags@aerodeck.test")
+    project = await _project(client, owner, "approval-flags")
+    await client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"email": "dev-flags@aerodeck.test", "role": "developer"},
+        headers=owner,
+    )
+    prod = await _environment(client, owner, project["id"], slug="prod", kind="prod")
+    env_url = f"/api/v1/projects/{project['id']}/environments/{prod['id']}"
+
+    renamed = await client.patch(env_url, json={"region": "fra1"}, headers=developer)
+    assert renamed.status_code == 200, renamed.text
+
+    paused = await client.patch(env_url, json={"auto_deploy_paused": True}, headers=developer)
+    assert paused.status_code == 403
+    approval = await client.patch(env_url, json={"prod_deploy_approval": False}, headers=developer)
+    assert approval.status_code == 403
+
+    unchanged = await client.get(env_url, headers=owner)
+    assert unchanged.json()["auto_deploy_paused"] is False
+    assert unchanged.json()["prod_deploy_approval"] is True
+
+    updated = await client.patch(
+        env_url,
+        json={"auto_deploy_paused": True, "prod_deploy_approval": False},
+        headers=owner,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["auto_deploy_paused"] is True
+    assert updated.json()["prod_deploy_approval"] is False

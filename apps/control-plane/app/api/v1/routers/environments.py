@@ -51,6 +51,7 @@ router = APIRouter(prefix="/projects/{project_id}/environments", tags=["environm
 _NOT_FOUND = {status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}}
 _CONFLICT = {status.HTTP_409_CONFLICT: {"model": ErrorResponse}}
 _UNAUTHENTICATED = {status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse}}
+_FORBIDDEN = {status.HTTP_403_FORBIDDEN: {"model": ErrorResponse}}
 _QUEUE_DOWN = {status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ErrorResponse}}
 
 
@@ -101,14 +102,18 @@ async def get_environment(
     response_model=EnvironmentRead,
     status_code=status.HTTP_200_OK,
     summary="Update an environment",
-    responses=_UNAUTHENTICATED | _NOT_FOUND,
+    responses=_UNAUTHENTICATED | _NOT_FOUND | _FORBIDDEN,
 )
 async def update_environment(
     project_id: uuid.UUID,
     environment_id: uuid.UUID,
     body: EnvironmentUpdate,
     environments: EnvironmentServiceDep,
+    members: ProjectMemberServiceDep,
+    actor_user_id: ActorUserIdDep,
 ) -> EnvironmentRead:
+    if {"auto_deploy_paused", "prod_deploy_approval"} & body.model_fields_set:
+        await members.require_role(project_id, actor_user_id, ProjectRole.owner)
     return await _read(environments, await environments.update(project_id, environment_id, body))
 
 
