@@ -66,8 +66,17 @@ describe("promotionRefusal", () => {
     assert.equal(promotionRefusal(403)?.code, "forbidden");
     assert.equal(promotionRefusal(409)?.code, "target_busy");
     assert.equal(promotionRefusal(422)?.code, "not_promotable");
+    assert.equal(promotionRefusal(422)?.detail, "This deployment cannot be promoted there.");
     assert.equal(promotionRefusal(503)?.code, "queue_unavailable");
     assert.equal(promotionRefusal(403)?.status, 403);
+  });
+
+  it("prefers the control-plane detail for a 422", () => {
+    assert.equal(
+      promotionRefusal(422, "Choose another environment. To run this release here again, use Rollback.")
+        ?.detail,
+      "Choose another environment. To run this release here again, use Rollback.",
+    );
   });
 
   it("leaves everything else to the generic handler", () => {

@@ -12,14 +12,26 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.api.deps import get_image_lookup, get_job_dispatcher
+from app.api.deps import get_image_lookup, get_job_dispatcher, get_settings
+from app.core.config import Settings
 from app.models.deployment import Deployment
 from app.repositories.jobs import JobState
 from app.services.docker_policy import CommandResult, LogSink
 from app.services.docker_provisioner import DockerProvisioner
 from app.services.image_presence import RetainedImage, WorkerImageLookup, image_present_sync
-from app.services.provisioning import JobKind, PermanentJobError
+from app.services.provisioning import JobKind, NoopProvisioner, PermanentJobError
+from app.tasks import environments as tasks
 from tests.conftest import make_settings
+
+
+@pytest.fixture
+def settings(database_url: str, tmp_path: Path) -> Settings:
+    """Promote only runs against the Docker backend."""
+    return make_settings(
+        database_url,
+        certificate_key_dir=str(tmp_path / "cert-keys"),
+        provisioner_backend="docker",
+    )
 
 REPO = "https://github.com/mangatohjunior/dev-portal"
 SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -326,6 +338,38 @@ async def test_promote_refuses_what_cannot_be_promoted(
 
 
 @pytest.mark.asyncio
+async def test_promote_requires_the_docker_backend(
+    app: FastAPI,
+    client: AsyncClient,
+    auth: dict[str, str],
+    dispatcher: FakeDispatcher,
+    images: FakeImageLookup,
+) -> None:
+    """Terraform/noop would drop promote_from_* and still report success."""
+    current = app.dependency_overrides[get_settings]()
+    app.dependency_overrides[get_settings] = lambda: current.model_copy(
+        update={"provisioner_backend": "noop"}
+    )
+    try:
+        project = await _project(client, auth, "promote-noop")
+        dev = await _environment(client, auth, project["id"], "dev")
+        staging = await _environment(client, auth, project["id"], "staging")
+        source = await _succeeded_build(app, client, auth, project["id"], dev["id"])
+        before = await _deployment_total(client, auth, project["id"])
+
+        refused = await client.post(
+            _promote(source["id"]), json={"environment_id": staging["id"]}, headers=auth
+        )
+
+        assert refused.status_code == 422, refused.text
+        assert "Docker provisioner" in refused.json()["detail"]
+        assert dispatcher.calls == []
+        assert await _deployment_total(client, auth, project["id"]) == before
+    finally:
+        app.dependency_overrides[get_settings] = lambda: current
+
+
+@pytest.mark.asyncio
 async def test_promote_goes_ahead_when_nobody_can_check_the_image(
     app: FastAPI,
     client: AsyncClient,
@@ -533,6 +577,17 @@ def test_worker_promotes_the_image_without_cloning_or_building() -> None:
     assert runner.calls[1] == ["docker", "tag", source_tag, "aerodeck/portal-prod:latest"]
     assert runner.calls[2] == ["docker", "tag", source_tag, "aerodeck/portal-prod:999999998888"]
     assert runner.calls[3][-1] == "aerodeck/portal-prod:latest"
+
+
+def test_worker_refuses_promote_without_a_docker_provisioner() -> None:
+    tasks.use_provisioner(NoopProvisioner())
+    try:
+        with pytest.raises(PermanentJobError, match="Docker provisioner"):
+            tasks._reject_promote_without_docker({"promote_from_deployment_id": SOURCE_ID})
+        # Ordinary provisions are unchanged.
+        tasks._reject_promote_without_docker({})
+    finally:
+        tasks.use_provisioner(NoopProvisioner())
 
 
 def test_worker_fails_a_promotion_whose_image_is_gone() -> None:

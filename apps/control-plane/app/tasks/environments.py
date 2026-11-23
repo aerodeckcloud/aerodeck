@@ -62,6 +62,18 @@ def use_provisioner(provisioner: Provisioner) -> None:
     _provisioner = provisioner
 
 
+def _reject_promote_without_docker(meta: dict[str, str]) -> None:
+    """Fail a promote job that would otherwise succeed without tagging an image (#272)."""
+    if not meta.get("promote_from_deployment_id"):
+        return
+    # Lazy import: docker_provisioner → docker_routes → deps → queue → this module.
+    from app.services.docker_provisioner import DockerProvisioner
+
+    if isinstance(_provisioner, DockerProvisioner):
+        return
+    raise PermanentJobError("Promote requires the Docker provisioner backend.")
+
+
 def _deployment_id_from_meta(
     meta: dict[str, str],
     *,
@@ -113,6 +125,8 @@ def _run(
     )
 
     attempt = task.request.retries + 1
+    # Promote only works on Docker. Check before kwargs are stripped for terraform/noop.
+    _reject_promote_without_docker(meta)
     # Always strip deployment_id so TerraformProvisioner never sees an unexpected kwarg.
     linked = _deployment_id_from_meta(meta, project_id=project_id, environment_id=environment_id)
     deployment_id = linked if kind is JobKind.provision else None

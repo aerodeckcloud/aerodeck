@@ -8,6 +8,7 @@ exactly as for any other deploy.
 
 import uuid
 
+from app.core.config import Settings
 from app.core.errors import NotFoundError, UnprocessableError
 from app.core.logging import get_logger
 from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
@@ -24,6 +25,8 @@ from app.services.provisioning import JobKind
 
 logger = get_logger("services.promotions")
 
+_DOCKER_REQUIRED = "Promote requires the Docker provisioner backend."
+
 
 class PromotionService:
     def __init__(
@@ -33,12 +36,14 @@ class PromotionService:
         members: ProjectMemberService,
         jobs: JobService,
         images: ImageLookup,
+        settings: Settings,
     ) -> None:
         self._deployments = deployments
         self._environments = environments
         self._members = members
         self._jobs = jobs
         self._images = images
+        self._settings = settings
 
     async def promote(
         self,
@@ -54,6 +59,10 @@ class PromotionService:
         ``recorded_actor_id`` is stored on the new row, and is set only when
         that user exists.
         """
+        # Only DockerProvisioner tags and runs a retained image. Terraform/noop
+        # would drop promote_from_* and still report success (#272).
+        if self._settings.provisioner_backend != "docker":
+            raise UnprocessableError(_DOCKER_REQUIRED)
         source = await self._deployments.get(deployment_id)
         if source.project_id is None or source.environment_id is None:
             raise UnprocessableError("Cannot promote a deployment that is not linked to an environment.")

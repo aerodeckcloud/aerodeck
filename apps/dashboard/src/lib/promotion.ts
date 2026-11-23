@@ -37,8 +37,7 @@ const REFUSALS: Record<number, PromotionRefusal> = {
   },
   422: {
     status: 422,
-    detail:
-      "This deployment cannot be promoted there. Its image may no longer be on the host; deploy the commit instead.",
+    detail: "This deployment cannot be promoted there.",
     code: "not_promotable",
   },
   503: {
@@ -49,6 +48,18 @@ const REFUSALS: Record<number, PromotionRefusal> = {
 };
 
 /** What the console tells the user when the control plane refuses a promotion. */
-export function promotionRefusal(upstreamStatus: number | undefined): PromotionRefusal | null {
-  return upstreamStatus === undefined ? null : (REFUSALS[upstreamStatus] ?? null);
+export function promotionRefusal(
+  upstreamStatus: number | undefined,
+  upstreamDetail?: string,
+): PromotionRefusal | null {
+  if (upstreamStatus === undefined) {
+    return null;
+  }
+  const base = REFUSALS[upstreamStatus];
+  if (!base) {
+    return null;
+  }
+  // Prefer the control-plane reason for 422 (same-env, missing image, wrong project, …).
+  const detail = upstreamStatus === 422 && upstreamDetail?.trim() ? upstreamDetail.trim() : base.detail;
+  return detail === base.detail ? base : { ...base, detail };
 }

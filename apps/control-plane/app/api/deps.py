@@ -457,8 +457,9 @@ def get_promotion_service(
     members: ProjectMemberServiceDep,
     jobs: JobServiceDep,
     images: ImageLookupDep,
+    settings: SettingsDep,
 ) -> PromotionService:
-    return PromotionService(deployments, environments, members, jobs, images)
+    return PromotionService(deployments, environments, members, jobs, images, settings)
 
 
 PromotionServiceDep = Annotated[PromotionService, Depends(get_promotion_service)]

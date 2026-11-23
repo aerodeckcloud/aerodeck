@@ -27,6 +27,7 @@ import {
 } from "@/lib/api";
 import { isDeploymentWaiting } from "@/lib/deployment-waiting";
 import { formatDuration, formatInstant } from "@/lib/format";
+import { nativeSelectClassName } from "@/lib/native-select";
 import { canPromote, promotionTargetLabel, promotionTargets } from "@/lib/promotion";
 import type { Deployment, DeploymentStatus, EnvironmentOption, ProjectSource } from "@/lib/types";
 
@@ -280,7 +281,7 @@ export function ProjectDeploymentsSection({
                               [dep.id]: event.target.value,
                             }))
                           }
-                          className="h-8 max-w-48 rounded-md border border-input bg-background px-2 text-xs"
+                          className={nativeSelectClassName("h-8 max-w-48 text-xs")}
                         >
                           <option value="">Promote to…</option>
                           {targets.map((env) => (

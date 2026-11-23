@@ -43,7 +43,7 @@ export async function POST(
     return NextResponse.json(deployment, { status: 201 });
   } catch (cause) {
     if (cause instanceof ControlPlaneError) {
-      const refused = promotionRefusal(cause.status);
+      const refused = promotionRefusal(cause.status, cause.message);
       if (refused) {
         return jsonError(refused.status, refused.detail, refused.code);
       }

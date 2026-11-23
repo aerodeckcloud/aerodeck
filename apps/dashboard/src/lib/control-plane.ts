@@ -931,10 +931,20 @@ async function triggerControlPlaneDeploymentAction(
     },
   );
   if (!response.ok) {
-    throw new ControlPlaneError(
-      `control plane deployment ${action} failed (${response.status})`,
-      response.status,
-    );
+    let detail = `control plane deployment ${action} failed (${response.status})`;
+    let code: string | undefined;
+    try {
+      const errBody = (await response.json()) as Record<string, unknown>;
+      if (typeof errBody.detail === "string" && errBody.detail.trim()) {
+        detail = errBody.detail.trim();
+      }
+      if (typeof errBody.code === "string" && errBody.code.trim()) {
+        code = errBody.code.trim();
+      }
+    } catch {
+      // Keep the status-only message when the body is not JSON.
+    }
+    throw new ControlPlaneError(detail, response.status, undefined, { code });
   }
   return parseDeployment(await response.json());
 }
