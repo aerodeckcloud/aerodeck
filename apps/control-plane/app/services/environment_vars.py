@@ -9,7 +9,7 @@ import re
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Protocol
+from typing import Literal, NamedTuple, Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -25,6 +25,13 @@ logger = get_logger("services.environment_vars")
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _ENCRYPTION_DOMAIN = b"aerodeck:env-vars:v1:"
+
+
+class EnvVarPlain(NamedTuple):
+    """Decrypted value plus the stored secret flag (for exact reinstate)."""
+
+    value: str
+    is_secret: bool
 
 
 class EnvironmentLookup(Protocol):
@@ -242,10 +249,10 @@ class EnvironmentVariableService:
         )
 
     def seal(self, values: dict[str, str]) -> str:
-        """Encrypt one-off variables of a deployment that has to wait (#271).
+        """Encrypt a plain string map (waiting one-off overlays).
 
-        Same key and cipher as saved variables. The token lives on the waiting
-        deployment row and is removed when the row starts or is cancelled.
+        Same key and cipher as saved variables. The token must never be logged
+        or returned to the client (#271).
         """
         return encrypt_env_value(json.dumps(values), self._signing_key)
 
@@ -254,15 +261,120 @@ class EnvironmentVariableService:
         values = json.loads(decrypt_env_value(token, self._signing_key))
         return {str(key): str(value) for key, value in values.items()}
 
+    def seal_snapshot(self, entries: dict[str, EnvVarPlain]) -> str:
+        """Encrypt a release snapshot including each key's ``is_secret`` (#273)."""
+        payload = {
+            key: {"value": entry.value, "is_secret": entry.is_secret}
+            for key, entry in entries.items()
+        }
+        return encrypt_env_value(json.dumps(payload, sort_keys=True), self._signing_key)
+
+    def try_unseal_snapshot(
+        self,
+        token: str,
+        *,
+        deployment_id: uuid.UUID | None = None,
+        environment_id: uuid.UUID | None = None,
+    ) -> dict[str, EnvVarPlain] | None:
+        """Decrypt a release snapshot. Returns None when the token is unreadable."""
+        try:
+            raw = json.loads(decrypt_env_value(token, self._signing_key))
+            if not isinstance(raw, dict):
+                raise TypeError("snapshot payload must be an object")
+            entries: dict[str, EnvVarPlain] = {}
+            for key, item in raw.items():
+                if isinstance(item, dict):
+                    entries[str(key)] = EnvVarPlain(
+                        str(item["value"]),
+                        bool(item.get("is_secret", True)),
+                    )
+                else:
+                    # Legacy plain string map (pre-is_secret snapshot shape).
+                    entries[str(key)] = EnvVarPlain(str(item), True)
+            return entries
+        except (InvalidToken, json.JSONDecodeError, TypeError, ValueError, KeyError):
+            logger.warning(
+                "event=env_vars_snapshot_unreadable deployment=%s environment=%s",
+                deployment_id,
+                environment_id,
+            )
+            return None
+
+    async def replace_exact(
+        self,
+        project_id: uuid.UUID,
+        environment_id: uuid.UUID,
+        entries: dict[str, EnvVarPlain],
+    ) -> list[str]:
+        """Make the environment match ``entries``, preserving each ``is_secret``."""
+        await self._environments.get(project_id, environment_id)
+        existing = await self._repo.list_for_environment(project_id, environment_id)
+        existing_by_key = {row.key: row for row in existing}
+        for key, entry in entries.items():
+            await self._repo.upsert(
+                project_id=project_id,
+                environment_id=environment_id,
+                key=key,
+                encrypted_value=encrypt_env_value(entry.value, self._signing_key),
+                is_secret=entry.is_secret,
+            )
+        for key, row in existing_by_key.items():
+            if key not in entries:
+                await self._repo.delete(row)
+        logger.info(
+            "event=env_vars_replaced environment=%s keys=%d",
+            environment_id,
+            len(entries),
+        )
+        return sorted(entries)
+
     async def load_decrypted_map(
         self, project_id: uuid.UUID, environment_id: uuid.UUID
     ) -> dict[str, str]:
+        return {
+            key: entry.value
+            for key, entry in (await self.load_decrypted_entries(project_id, environment_id)).items()
+        }
+
+    async def load_decrypted_entries(
+        self, project_id: uuid.UUID, environment_id: uuid.UUID
+    ) -> dict[str, EnvVarPlain]:
+        loaded = await self._decrypt_rows(project_id, environment_id, on_invalid="skip")
+        return loaded or {}
+
+    async def load_complete_entries(
+        self, project_id: uuid.UUID, environment_id: uuid.UUID
+    ) -> dict[str, EnvVarPlain] | None:
+        """Decrypt every variable. None when any row cannot be read (#273).
+
+        A snapshot must be complete: a later rollback deletes keys that are absent.
+        """
+        return await self._decrypt_rows(project_id, environment_id, on_invalid="abort")
+
+    async def _decrypt_rows(
+        self,
+        project_id: uuid.UUID,
+        environment_id: uuid.UUID,
+        *,
+        on_invalid: Literal["skip", "abort"],
+    ) -> dict[str, EnvVarPlain] | None:
+        """Decrypt stored variables. ``abort`` returns None on the first unreadable row."""
         rows = await self._repo.list_for_environment(project_id, environment_id)
-        decrypted: dict[str, str] = {}
+        decrypted: dict[str, EnvVarPlain] = {}
         for row in rows:
             try:
-                decrypted[row.key] = decrypt_env_value(row.encrypted_value, self._signing_key)
+                decrypted[row.key] = EnvVarPlain(
+                    decrypt_env_value(row.encrypted_value, self._signing_key),
+                    row.is_secret,
+                )
             except InvalidToken:
+                if on_invalid == "abort":
+                    logger.warning(
+                        "event=env_vars_snapshot_incomplete environment=%s key=%s",
+                        environment_id,
+                        row.key,
+                    )
+                    return None
                 logger.warning(
                     "skipped unreadable encrypted env var %s for environment %s",
                     row.key,

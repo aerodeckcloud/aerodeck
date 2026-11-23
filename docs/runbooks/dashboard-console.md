@@ -65,6 +65,16 @@ another project returns 422. The target's wait/override setting still applies.
 Project history asks for the target environment; the browser does not call
 FastAPI. Redeploy, deploy-latest, rollback, and promote stay on the console
 routes; the mock deployment list never calls the control plane.
+**Rollback** (`POST /api/v1/deployments/{id}/rollback`, console
+`POST /api/console/deployments/{id}/rollback`) retags the retained image and,
+by default, restores the encrypted variable snapshot captured when that row
+first succeeded. The confirm dialog lists variable names that would change
+and never values. The read model exposes `snapshot_variable_names` (names
+only) and, on the rollback response, `variables_restored`. Rows that
+succeeded before this story have no snapshot: the image still rolls back and
+`variables_restored` is false so current variables stay as they are. Pass
+`restore_variables: false` to skip the restore when a snapshot exists.
+
 `POST /api/v1/deployments/{id}/cancel` (console `POST /api/console/deployments/{id}/cancel`)
 marks a queued or running deployment `cancelled` and sets `finished_at` when the
 worker has not yet set `swap_started_at`. The Celery task is revoked if it has

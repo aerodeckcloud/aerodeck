@@ -24,6 +24,7 @@ from app.api.deps import (
     ReleaseJobServiceDep,
     PaginationDep,
     PromotionServiceDep,
+    RollbackServiceDep,
     SettingsDep,
 )
 from app.models.deployment import DeploymentStatus, DeploymentTrigger
@@ -31,7 +32,13 @@ from app.services.console_users import ConsoleUserService
 from app.schemas.auth import ErrorResponse
 from app.schemas.blueprint import DeploymentBlueprint, DeploymentInspectRequest
 from app.schemas.common import Page
-from app.schemas.deployment import DeploymentCreate, DeploymentPromote, DeploymentRead
+from app.schemas.deployment import (
+    DeploymentCreate,
+    DeploymentPromote,
+    DeploymentRead,
+    DeploymentRollback,
+    deployment_to_read,
+)
 from app.services.blueprint_inspector import inspect_github_repository_sync
 from app.services.docker_policy import normalize_git_sha
 from app.services.container_logs import ContainerLogsRead, dispatch_container_logs
@@ -74,7 +81,7 @@ async def _as_sse(lines: AsyncIterator[str]) -> AsyncIterator[bytes]:
 async def list_deployments(page: PaginationDep, deployments: DeploymentServiceDep) -> Page[DeploymentRead]:
     items, total = await deployments.list(limit=page.limit, offset=page.offset)
     return Page(
-        items=[DeploymentRead.model_validate(row) for row in items],
+        items=[deployment_to_read(row) for row in items],
         total=total,
         limit=page.limit,
         offset=page.offset,
@@ -133,7 +140,7 @@ async def create_deployment(
         trigger=DeploymentTrigger.manual,
         actor_user_id=await _known_actor(users, actor_user_id),
     )
-    payload = DeploymentRead.model_validate(created)
+    payload = deployment_to_read(created)
     if payload.project_id is not None:
         await audit.record(
             project_id=payload.project_id,
@@ -154,7 +161,7 @@ async def create_deployment(
     responses=_NOT_FOUND,
 )
 async def get_deployment(deployment_id: uuid.UUID, deployments: DeploymentServiceDep) -> DeploymentRead:
-    return DeploymentRead.model_validate(await deployments.get(deployment_id))
+    return deployment_to_read(await deployments.get(deployment_id))
 
 
 @router.post(
@@ -172,7 +179,7 @@ async def succeed_deployment(
     stored = await deployments.mark_succeeded(deployment_id)
     if jobs is not None:
         await jobs.release_waiting(stored)
-    return DeploymentRead.model_validate(stored)
+    return deployment_to_read(stored)
 
 
 @router.post(
@@ -190,7 +197,7 @@ async def fail_deployment(
     stored = await deployments.mark_failed(deployment_id)
     if jobs is not None:
         await jobs.release_waiting(stored)
-    return DeploymentRead.model_validate(stored)
+    return deployment_to_read(stored)
 
 
 @router.get(
@@ -292,7 +299,7 @@ async def _enqueue_copy(
     )
     refreshed = await deployments.get(created.id)
     await deployments.refresh(refreshed)
-    return DeploymentRead.model_validate(refreshed)
+    return deployment_to_read(refreshed)
 
 
 @router.post(
@@ -360,7 +367,7 @@ async def cancel_deployment(
     # Same rule as the outcome routes: without a queue the waiter stays queued.
     if release is not None:
         await release.release_waiting(stored)
-    return DeploymentRead.model_validate(stored)
+    return deployment_to_read(stored)
 
 
 @router.post(
@@ -389,50 +396,31 @@ async def promote_deployment(
         actor_user_id=actor_user_id,
         recorded_actor_id=await _known_actor(users, actor_user_id),
     )
-    return DeploymentRead.model_validate(promoted)
+    return deployment_to_read(promoted)
 
 
 @router.post(
     "/{deployment_id}/rollback",
     response_model=DeploymentRead,
     status_code=status.HTTP_201_CREATED,
-    summary="Roll back an environment to a previously succeeded deployment image (#253)",
-    responses=_NOT_FOUND | _UNAUTHENTICATED | _UNAVAILABLE,
+    summary="Roll back to a succeeded deployment image and its variable snapshot (#273)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _FORBIDDEN | _UNPROCESSABLE | _UNAVAILABLE,
 )
 async def rollback_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
-    jobs: JobServiceDep,
+    rollbacks: RollbackServiceDep,
     users: ConsoleUserServiceDep,
     actor_user_id: ActorUserIdDep,
+    body: DeploymentRollback | None = None,
 ) -> DeploymentRead:
-    source = await deployments.get(deployment_id)
-    if source.project_id is None or source.environment_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Cannot roll back a deployment that is not linked to an environment.",
-        )
-    if source.status is not DeploymentStatus.succeeded:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Only succeeded deployments can be rolled back to.",
-        )
-    created = await deployments.create(
-        DeploymentCreate(
-            repo_url=source.repo_url,
-            project_id=source.project_id,
-            environment_id=source.environment_id,
-        ),
-        trigger=DeploymentTrigger.rollback,
-        actor_user_id=await _known_actor(users, actor_user_id),
+    """Restore the release variables when a snapshot exists, then retag the image (#273)."""
+    request = body or DeploymentRollback()
+    stored, variables_restored = await rollbacks.rollback(
+        deployment_id,
+        restore_variables=request.restore_variables,
+        actor_user_id=actor_user_id,
+        recorded_actor_id=await _known_actor(users, actor_user_id),
     )
-    await jobs.enqueue(
-        JobKind.provision,
-        source.project_id,
-        source.environment_id,
-        deployment_id=created.id,
-        rollback_from_deployment_id=source.id,
-    )
-    refreshed = await deployments.get(created.id)
-    await deployments.refresh(refreshed)
-    return DeploymentRead.model_validate(refreshed)
+    await deployments.refresh(stored)
+    return deployment_to_read(stored, variables_restored=variables_restored)

@@ -61,6 +61,10 @@ export type Deployment = {
   /** Set while this row is waiting behind another deployment. Status stays queued. */
   held_for_deployment_id?: string | null;
   status: DeploymentStatus;
+  /** Sorted names from the encrypted release snapshot. Null when none (#273). */
+  snapshot_variable_names?: string[] | null;
+  /** Set on rollback responses: true when the snapshot was applied (#273). */
+  variables_restored?: boolean | null;
 };
 
 /** Control-plane Celery job status from `GET /api/v1/jobs/{id}`. */

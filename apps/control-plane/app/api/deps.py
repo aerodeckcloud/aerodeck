@@ -55,6 +55,7 @@ from app.services.pr_previews import PrPreviewService
 from app.services.projects import ProjectService
 from app.services.project_members import ProjectMemberRepository, ProjectMemberService
 from app.services.promotions import PromotionService
+from app.services.rollbacks import RollbackService
 from app.services.routes import RouteService
 from app.services.sandbox_hosts import SandboxHostService
 from app.services.sandboxes import SandboxService
@@ -271,8 +272,9 @@ def get_deployment_service(
     deployments: DeploymentRepositoryDep,
     environments: EnvironmentServiceDep,
     terminal: DeploymentTerminalServiceDep,
+    env_vars: EnvironmentVariableServiceDep,
 ) -> DeploymentService:
-    return DeploymentService(deployments, environments, terminal)
+    return DeploymentService(deployments, environments, terminal, env_vars)
 
 
 DeploymentServiceDep = Annotated[DeploymentService, Depends(get_deployment_service)]
@@ -463,6 +465,17 @@ def get_promotion_service(
 
 
 PromotionServiceDep = Annotated[PromotionService, Depends(get_promotion_service)]
+
+
+def get_rollback_service(
+    deployments: DeploymentServiceDep,
+    members: ProjectMemberServiceDep,
+    jobs: JobServiceDep,
+) -> RollbackService:
+    return RollbackService(deployments, members, jobs)
+
+
+RollbackServiceDep = Annotated[RollbackService, Depends(get_rollback_service)]
 
 # auto_error=False so a missing header becomes our {"detail", "code"} 401, not FastAPI's 403.
 _bearer = HTTPBearer(auto_error=False, description="Access token from POST /api/v1/auth/token")

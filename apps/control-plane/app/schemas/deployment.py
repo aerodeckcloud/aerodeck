@@ -1,6 +1,7 @@
+import json
 import uuid
 from datetime import datetime
-from typing import Annotated, Self
+from typing import Annotated, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -39,6 +40,16 @@ class DeploymentPromote(BaseModel):
     environment_id: uuid.UUID
 
 
+class DeploymentRollback(BaseModel):
+    """Whether to restore the variables that shipped with the release (#273)."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    # When the source has a snapshot, default True restores it once the image
+    # rollback is dispatched. A row that only waits does not change variables.
+    restore_variables: bool = True
+
+
 class DeploymentRead(BaseModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
@@ -58,5 +69,59 @@ class DeploymentRead(BaseModel):
     finished_at: datetime | None
     swap_started_at: datetime | None
     held_for_deployment_id: uuid.UUID | None
+    # Names only when a snapshot exists. Never values or ciphertext (#273).
+    snapshot_variable_names: list[str] | None = None
+    # Set on rollback responses: True when the snapshot was applied.
+    variables_restored: bool | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class DeploymentSource(Protocol):
+    """Attributes ``DeploymentRead`` copies, plus the plaintext name list (#273)."""
+
+    id: uuid.UUID
+    repo_url: str
+    owner: str
+    repo: str
+    project_id: uuid.UUID | None
+    environment_id: uuid.UUID | None
+    provision_job_id: uuid.UUID | None
+    git_sha: str | None
+    git_ref: str | None
+    trigger: str | None
+    actor_user_id: uuid.UUID | None
+    status: DeploymentStatus
+    started_at: datetime
+    finished_at: datetime | None
+    swap_started_at: datetime | None
+    held_for_deployment_id: uuid.UUID | None
+    snapshot_names_json: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+def deployment_to_read(
+    deployment: DeploymentSource,
+    *,
+    variables_restored: bool | None = None,
+) -> DeploymentRead:
+    """API model for a deployment row. Names only — never values or ciphertext."""
+    return DeploymentRead.model_validate(deployment).model_copy(
+        update={
+            "snapshot_variable_names": _snapshot_names(deployment.snapshot_names_json),
+            "variables_restored": variables_restored,
+        }
+    )
+
+
+def _snapshot_names(raw: str | None) -> list[str] | None:
+    if not raw:
+        return None
+    try:
+        names = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        return None
+    return list(names)

@@ -9,15 +9,16 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.db import create_engine
 from app.models import Base
-from app.models.deployment import Deployment, DeploymentStatus
+from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
 from app.models.environment_var import EnvironmentVariable
 from app.models.project import Environment, EnvironmentKind, Project
 from app.repositories.jobs import JobState
-from app.services.environment_vars import encrypt_env_value
+from app.services.environment_vars import decrypt_env_value, encrypt_env_value
 from app.services.provision_replay import ProvisionReplay
 from app.services.provisioning import JobKind
 from app.tasks import waiting_release
@@ -209,6 +210,104 @@ def test_worker_marks_the_waiter_failed_when_the_broker_refuses_it(
     newest = _read(worker_database, newest_id)
     assert newest.status is DeploymentStatus.failed
     assert newest.held_for_deployment_id is None
+
+
+def test_worker_restores_snapshot_when_it_releases_a_waiting_rollback(
+    worker_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker path must write the sealed replace map, not only the job payload (#273)."""
+    snapshot = encrypt_env_value(
+        json.dumps({"KEEP": {"value": "from-snapshot", "is_secret": False}}, sort_keys=True),
+        SIGNING_KEY,
+    )
+
+    async def _run() -> tuple[uuid.UUID, uuid.UUID]:
+        engine = create_engine(worker_database)
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        started = datetime.now(UTC) - timedelta(minutes=5)
+        async with sessions() as session:
+            project = Project(slug="worker-rollback", name="Worker rollback")
+            session.add(project)
+            await session.flush()
+            environment = Environment(
+                project_id=project.id, slug="dev", name="Dev", kind=EnvironmentKind.dev, region="ams3"
+            )
+            session.add(environment)
+            await session.flush()
+            session.add_all(
+                [
+                    EnvironmentVariable(
+                        project_id=project.id,
+                        environment_id=environment.id,
+                        key="KEEP",
+                        encrypted_value=encrypt_env_value("drifted-value", SIGNING_KEY),
+                        is_secret=True,
+                    ),
+                    EnvironmentVariable(
+                        project_id=project.id,
+                        environment_id=environment.id,
+                        key="EXTRA",
+                        encrypted_value=encrypt_env_value("added-later", SIGNING_KEY),
+                        is_secret=True,
+                    ),
+                ]
+            )
+            finished = _row(
+                project.id,
+                environment.id,
+                status=DeploymentStatus.succeeded,
+                started_at=started,
+                finished_at=datetime.now(UTC),
+            )
+            session.add(finished)
+            await session.flush()
+            waiter = _row(
+                project.id,
+                environment.id,
+                status=DeploymentStatus.queued,
+                started_at=started + timedelta(minutes=1),
+                held_for_deployment_id=finished.id,
+                trigger=DeploymentTrigger.rollback.value,
+                provision_replay_json=ProvisionReplay(
+                    rollback_from_deployment_id=finished.id,
+                    sealed_replace_env_vars=snapshot,
+                ).to_json(),
+            )
+            session.add(waiter)
+            await session.commit()
+            ids = (finished.id, environment.id)
+        await engine.dispose()
+        return ids
+
+    finished_id, environment_id = asyncio.run(_run())
+    dispatcher = RecordingDispatcher()
+    monkeypatch.setattr(waiting_release, "_dispatcher", lambda _settings: dispatcher)
+
+    waiting_release.try_release_waiting_sync(finished_id)
+
+    assert json.loads(dispatcher.calls[-1]["meta"]["env_vars_json"]) == {"KEEP": "from-snapshot"}
+
+    async def _vars() -> dict[str, tuple[str, bool]]:
+        engine = create_engine(worker_database)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            rows = (
+                await session.scalars(
+                    select(EnvironmentVariable).where(
+                        EnvironmentVariable.environment_id == environment_id
+                    )
+                )
+            ).all()
+            found = {
+                row.key: (decrypt_env_value(row.encrypted_value, SIGNING_KEY), row.is_secret)
+                for row in rows
+            }
+        await engine.dispose()
+        return found
+
+    assert asyncio.run(_vars()) == {"KEEP": ("from-snapshot", False)}
 
 
 def test_worker_does_not_promote_a_waiter_without_a_broker(worker_database: str) -> None:

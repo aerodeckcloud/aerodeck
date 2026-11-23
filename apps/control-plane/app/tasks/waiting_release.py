@@ -94,17 +94,20 @@ def _job_service(session: AsyncSession, settings: Settings, dispatcher: JobDispa
         ProjectService(ProjectRepository(session), deployments),
         deployments,
     )
+    # One service: the loader unseals the replay, and the deployment service
+    # writes that map when the waiting rollback is dispatched (#273).
+    env_vars = EnvironmentVariableService(
+        EnvironmentVariableRepository(session),
+        environments,
+        signing_key=settings.auth_signing_key.get_secret_value(),
+    )
     return JobService(
         dispatcher,
         environments,
-        DeploymentService(deployments, environments, terminal),
+        DeploymentService(deployments, environments, terminal, env_vars),
         redis_url=settings.redis_url,
         deployment_hooks=_same_session_hooks(session, terminal),
-        env_var_loader=EnvironmentVariableService(
-            EnvironmentVariableRepository(session),
-            environments,
-            signing_key=settings.auth_signing_key.get_secret_value(),
-        ),
+        env_var_loader=env_vars,
     )
 
 

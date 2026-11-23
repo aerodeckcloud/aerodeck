@@ -1,3 +1,4 @@
+import json
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -57,16 +58,53 @@ class EnvironmentLookup(Protocol):
     async def lock_for_deploy(self, environment_id: uuid.UUID) -> None: ...
 
 
+class EnvVarPlainEntry(Protocol):
+    """Value plus secret flag for an exact reinstate (#273)."""
+
+    @property
+    def value(self) -> str: ...
+
+    @property
+    def is_secret(self) -> bool: ...
+
+
+class EnvVarSnapshotter(Protocol):
+    """Seal / name helpers for the release variable snapshot (#273)."""
+
+    async def load_complete_entries(
+        self, project_id: uuid.UUID, environment_id: uuid.UUID
+    ) -> dict[str, EnvVarPlainEntry] | None: ...
+
+    def seal_snapshot(self, entries: dict[str, EnvVarPlainEntry]) -> str: ...
+
+    async def replace_exact(
+        self,
+        project_id: uuid.UUID,
+        environment_id: uuid.UUID,
+        entries: dict[str, EnvVarPlainEntry],
+    ) -> list[str]: ...
+
+    def try_unseal_snapshot(
+        self,
+        token: str,
+        *,
+        deployment_id: uuid.UUID | None = None,
+        environment_id: uuid.UUID | None = None,
+    ) -> dict[str, EnvVarPlainEntry] | None: ...
+
+
 class DeploymentService:
     def __init__(
         self,
         deployments: DeploymentRepository,
         environments: EnvironmentLookup,
         terminal: DeploymentTerminalService,
+        env_vars: EnvVarSnapshotter | None = None,
     ) -> None:
         self._deployments = deployments
         self._environments = environments
         self._terminal = terminal
+        self._env_vars = env_vars
 
     async def create(
         self,
@@ -202,6 +240,46 @@ class DeploymentService:
             await self._deployments.refresh(current)
         return current
 
+    def read_snapshot_entries(
+        self, source: Deployment
+    ) -> dict[str, EnvVarPlainEntry] | None:
+        """Decrypt the release snapshot without writing the environment (#273).
+
+        Returns None when the row has no snapshot or the ciphertext is unreadable.
+        """
+        if self._env_vars is None or not source.env_vars_snapshot:
+            return None
+        return self._env_vars.try_unseal_snapshot(
+            source.env_vars_snapshot,
+            deployment_id=source.id,
+            environment_id=source.environment_id,
+        )
+
+    async def apply_snapshot_entries(
+        self,
+        project_id: uuid.UUID,
+        environment_id: uuid.UUID,
+        entries: dict[str, EnvVarPlainEntry],
+        *,
+        commit: bool = True,
+    ) -> None:
+        """Write the snapshot into the environment once the rollback job is dispatched (#273).
+
+        The caller already holds the deploy lock. ``commit`` is False when this
+        write must share the dispatch commit so a concurrent provision cannot
+        observe the restored map without the job.
+        """
+        if self._env_vars is None:
+            return
+        await self._env_vars.replace_exact(project_id, environment_id, entries)
+        if commit:
+            await self.commit()
+        logger.info(
+            "event=deployment_env_vars_restored environment=%s keys=%d",
+            environment_id,
+            len(entries),
+        )
+
     async def _mark_terminal(
         self, deployment_id: uuid.UUID, status: DeploymentStatus
     ) -> Deployment:
@@ -210,7 +288,43 @@ class DeploymentService:
             # Nothing has run yet, so there is no outcome to record. Without this
             # a console that reported one would close the row and it would never start.
             raise ConflictError(NOT_STARTED_DETAIL)
+        was_terminal = current is not None and current.status in (
+            DeploymentStatus.succeeded,
+            DeploymentStatus.failed,
+            DeploymentStatus.cancelled,
+        )
         stored = await self._terminal.mark(deployment_id, status)
         if stored is None:
             raise NotFoundError(f"Deployment {deployment_id} not found")
+        if (
+            not was_terminal
+            and status is DeploymentStatus.succeeded
+            and stored.env_vars_snapshot is None
+        ):
+            await self._capture_env_snapshot(stored)
         return stored
+
+    async def _capture_env_snapshot(self, deployment: Deployment) -> None:
+        """Seal the environment's variables onto a newly succeeded release (#273)."""
+        if self._env_vars is None:
+            return
+        if deployment.project_id is None or deployment.environment_id is None:
+            return
+        entries = await self._env_vars.load_complete_entries(
+            deployment.project_id, deployment.environment_id
+        )
+        if entries is None:
+            # A partial map would delete the keys we could not read on rollback.
+            logger.warning(
+                "event=deployment_env_vars_snapshot_skipped deployment=%s reason=unreadable",
+                deployment.id,
+            )
+            return
+        deployment.env_vars_snapshot = self._env_vars.seal_snapshot(entries)
+        deployment.snapshot_names_json = json.dumps(sorted(entries))
+        await self._deployments.save(deployment)
+        logger.info(
+            "event=deployment_env_vars_snapshot deployment=%s keys=%d",
+            deployment.id,
+            len(entries),
+        )

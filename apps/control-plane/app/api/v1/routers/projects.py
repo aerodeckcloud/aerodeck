@@ -14,7 +14,7 @@ from app.api.deps import (
 from app.models.project_member import ProjectRole
 from app.schemas.auth import ErrorResponse
 from app.schemas.common import Page
-from app.schemas.deployment import DeploymentRead
+from app.schemas.deployment import DeploymentRead, deployment_to_read
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
 from app.services.audit_logs import AuditEventRead
 from app.services.notifications import (
@@ -135,7 +135,7 @@ async def list_project_deployments(
         offset=page.offset,
     )
     return Page(
-        items=[DeploymentRead.model_validate(row) for row in items],
+        items=[deployment_to_read(row) for row in items],
         total=total,
         limit=page.limit,
         offset=page.offset,

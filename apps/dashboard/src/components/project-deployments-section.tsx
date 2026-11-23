@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   deployLatestDeployment,
+  fetchEnvironmentVars,
   fetchProjectDeployments,
   promoteDeployment,
   redeployDeployment,
@@ -29,6 +30,7 @@ import { isDeploymentWaiting } from "@/lib/deployment-waiting";
 import { formatDuration, formatInstant } from "@/lib/format";
 import { nativeSelectClassName } from "@/lib/native-select";
 import { canPromote, promotionTargetLabel, promotionTargets } from "@/lib/promotion";
+import { rollbackConfirmMessage, rollbackRestoreWarning } from "@/lib/rollback-variables";
 import type { Deployment, DeploymentStatus, EnvironmentOption, ProjectSource } from "@/lib/types";
 
 function statusBadge(status: DeploymentStatus, heldFor?: string | null) {
@@ -117,11 +119,41 @@ export function ProjectDeploymentsSection({
 
   const envNameById = new Map(environments.map((env) => [env.id, env.slug]));
 
+  async function confirmRollback(dep: Deployment): Promise<boolean> {
+    let currentNames: string[] | null = [];
+    if (dep.snapshot_variable_names != null && dep.project_id && dep.environment_id) {
+      try {
+        const vars = await fetchEnvironmentVars(dep.project_id, dep.environment_id);
+        currentNames = vars.map((row) => row.key);
+      } catch {
+        // Do not treat a failed load as an empty environment (false "Add" list).
+        currentNames = null;
+      }
+    }
+    return window.confirm(
+      rollbackConfirmMessage({
+        snapshotNames: dep.snapshot_variable_names,
+        currentNames,
+      }),
+    );
+  }
+
   async function handleAction(
     deploymentId: string,
     action: "redeploy" | "deploy-latest" | "rollback" | "promote",
   ) {
     setError(null);
+    let rollbackSource: Deployment | null = null;
+    if (action === "rollback") {
+      const dep = deployments.find((row) => row.id === deploymentId);
+      if (!dep) {
+        return;
+      }
+      if (!(await confirmRollback(dep))) {
+        return;
+      }
+      rollbackSource = dep;
+    }
     setBusyId(`${deploymentId}:${action}`);
     try {
       let next: Deployment;
@@ -130,7 +162,15 @@ export function ProjectDeploymentsSection({
       } else if (action === "deploy-latest") {
         next = await deployLatestDeployment(deploymentId);
       } else if (action === "rollback") {
-        next = await rollbackDeployment(deploymentId);
+        next = await rollbackDeployment(deploymentId, { restoreVariables: true });
+        const warning = rollbackRestoreWarning({
+          sourceNames: rollbackSource?.snapshot_variable_names,
+          variablesRestored: next.variables_restored,
+          heldForDeploymentId: next.held_for_deployment_id,
+        });
+        if (warning) {
+          window.alert(warning);
+        }
       } else {
         const targetId = promoteTargetById[deploymentId];
         if (!targetId) {

@@ -577,10 +577,20 @@ export async function deployLatestDeployment(deploymentId: string): Promise<Depl
   return readJson(response);
 }
 
-export async function rollbackDeployment(deploymentId: string): Promise<Deployment> {
+export async function rollbackDeployment(
+  deploymentId: string,
+  options: { restoreVariables?: boolean } = {},
+): Promise<Deployment> {
   const response = await fetch(
     `/api/console/deployments/${encodeURIComponent(deploymentId)}/rollback`,
-    { method: "POST", credentials: "same-origin" },
+    {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        restore_variables: options.restoreVariables ?? true,
+      }),
+    },
   );
   return readJson(response);
 }
