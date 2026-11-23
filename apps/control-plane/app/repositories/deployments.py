@@ -31,7 +31,12 @@ class DeploymentRepository:
                 Deployment.status.in_((DeploymentStatus.queued, DeploymentStatus.running)),
                 Deployment.swap_started_at.is_(None),
             )
-            .values(status=DeploymentStatus.cancelled, finished_at=finished_at)
+            # A cancelled row never starts, so what it kept for a later start goes too.
+            .values(
+                status=DeploymentStatus.cancelled,
+                finished_at=finished_at,
+                provision_replay_json=None,
+            )
             .returning(Deployment)
         )
         return updated
@@ -102,3 +107,109 @@ class DeploymentRepository:
             base.order_by(Deployment.started_at.desc(), Deployment.id.desc()).limit(limit).offset(offset)
         )
         return rows.all(), int(total or 0)
+
+    async def list_active(
+        self, environment_id: uuid.UUID, exclude_id: uuid.UUID
+    ) -> Sequence[Deployment]:
+        """Deploys that occupy the environment, oldest first.
+
+        A row is active once the queue accepted its job (``dispatched_at``) and
+        until it ends. The worker stamps ``finished_at`` when a provision ends
+        while the row stays ``running`` until the console reports the outcome,
+        so the finish time counts as the end as well.
+        """
+        rows = await self._session.scalars(
+            select(Deployment)
+            .where(
+                Deployment.environment_id == environment_id,
+                Deployment.status.in_((DeploymentStatus.queued, DeploymentStatus.running)),
+                Deployment.dispatched_at.is_not(None),
+                Deployment.finished_at.is_(None),
+                Deployment.id != exclude_id,
+            )
+            .order_by(Deployment.started_at.asc(), Deployment.id.asc())
+        )
+        return rows.all()
+
+    async def mark_dispatched(self, deployment_id: uuid.UUID, dispatched_at: datetime) -> None:
+        stored = await self._session.get(Deployment, deployment_id)
+        if stored is None:
+            return
+        stored.dispatched_at = dispatched_at
+        await self._session.flush()
+        await self._session.refresh(stored)
+
+    async def mark_waiting(
+        self, deployment_id: uuid.UUID, active_id: uuid.UUID, replay_json: str | None
+    ) -> None:
+        """Hold the row behind ``active_id`` and keep what it needs to start later."""
+        stored = await self._session.get(Deployment, deployment_id)
+        if stored is None:
+            return
+        stored.status = DeploymentStatus.queued
+        stored.held_for_deployment_id = active_id
+        stored.provision_replay_json = replay_json
+        await self._session.flush()
+        await self._session.refresh(stored)
+
+    async def cancel_waiting(
+        self, environment_id: uuid.UUID, finished_at: datetime, *, keep_id: uuid.UUID | None
+    ) -> int:
+        """Cancel the waiting rows of an environment, except ``keep_id``. Returns how many."""
+        statement = update(Deployment).where(
+            Deployment.environment_id == environment_id,
+            Deployment.held_for_deployment_id.is_not(None),
+            Deployment.status == DeploymentStatus.queued,
+        )
+        if keep_id is not None:
+            statement = statement.where(Deployment.id != keep_id)
+        result = await self._session.execute(
+            statement.values(
+                status=DeploymentStatus.cancelled,
+                finished_at=finished_at,
+                provision_replay_json=None,
+            )
+        )
+        return int(result.rowcount or 0)
+
+    async def claim_newest_waiter(
+        self, environment_id: uuid.UUID, finished_id: uuid.UUID, finished_at: datetime
+    ) -> tuple[Deployment, str | None] | None:
+        """Take the newest row waiting on ``finished_id`` and cancel the older ones.
+
+        Returns the row, no longer waiting, with the payload it had kept. The
+        payload is removed from every row touched here.
+        """
+        rows = list(
+            (
+                await self._session.scalars(
+                    select(Deployment)
+                    .where(
+                        Deployment.environment_id == environment_id,
+                        Deployment.held_for_deployment_id == finished_id,
+                        Deployment.status == DeploymentStatus.queued,
+                    )
+                    .order_by(Deployment.started_at.desc(), Deployment.id.desc())
+                )
+            ).all()
+        )
+        if not rows:
+            return None
+        newest = rows[0]
+        replay_json = newest.provision_replay_json
+        for row in rows[1:]:
+            row.status = DeploymentStatus.cancelled
+            row.finished_at = finished_at
+            row.provision_replay_json = None
+        newest.status = DeploymentStatus.running
+        newest.held_for_deployment_id = None
+        newest.provision_replay_json = None
+        await self._session.flush()
+        await self._session.refresh(newest)
+        return newest, replay_json
+
+    async def commit(self) -> None:
+        await self._session.commit()
+
+    async def refresh(self, deployment: Deployment) -> None:
+        await self._session.refresh(deployment)

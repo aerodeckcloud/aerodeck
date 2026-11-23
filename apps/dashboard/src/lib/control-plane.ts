@@ -371,6 +371,7 @@ export type UpdateControlPlaneEnvironmentInput = {
   name?: string;
   kind?: string;
   region?: string;
+  deploy_overlap?: "wait" | "override";
 };
 
 export async function updateControlPlaneEnvironment(
@@ -391,6 +392,9 @@ export async function updateControlPlaneEnvironment(
   }
   if (input.region !== undefined) {
     body.region = input.region;
+  }
+  if (input.deploy_overlap !== undefined) {
+    body.deploy_overlap = input.deploy_overlap;
   }
   return controlPlaneRequest(
     config,
@@ -2116,9 +2120,13 @@ function parseAcceptedJob(
     throw new ControlPlaneError("control plane job accept response was not a job");
   }
   const row = value as Record<string, unknown>;
+  const started = typeof row.job_id === "string" && isControlPlaneUuid(row.job_id);
+  const waiting =
+    !started &&
+    typeof row.active_deployment_id === "string" &&
+    isControlPlaneUuid(row.active_deployment_id);
   if (
-    typeof row.job_id !== "string" ||
-    !isControlPlaneUuid(row.job_id) ||
+    (!started && !waiting) ||
     typeof row.kind !== "string" ||
     !JOB_KINDS.has(row.kind as JobKind) ||
     row.kind !== expected.kind ||
@@ -2134,7 +2142,8 @@ function parseAcceptedJob(
     throw new ControlPlaneError("control plane job accept response was not a job");
   }
   return {
-    job_id: row.job_id,
+    job_id: started ? (row.job_id as string) : null,
+    ...(waiting ? { active_deployment_id: row.active_deployment_id as string } : {}),
     kind: row.kind as JobKind,
     project_id: row.project_id,
     environment_id: row.environment_id,
@@ -2324,6 +2333,11 @@ function parseEnvironmentOption(
   ) {
     throw new ControlPlaneError("control plane environments response was not a page");
   }
+  const overlap =
+    row.deploy_overlap === undefined || row.deploy_overlap === null ? "wait" : row.deploy_overlap;
+  if (overlap !== "wait" && overlap !== "override") {
+    throw new ControlPlaneError("control plane environments response was not a page");
+  }
   if (row.project_id !== project.id) {
     throw new ControlPlaneError("control plane environments response was not a page");
   }
@@ -2336,6 +2350,7 @@ function parseEnvironmentOption(
     name: row.name,
     kind: row.kind,
     region: row.region,
+    deploy_overlap: overlap,
   };
 }
 
@@ -2785,6 +2800,7 @@ function parseDeployment(value: unknown): Deployment {
   const actorUserId = optionalUuidField(row.actor_user_id);
   const finishedAt = optionalTimestamp(row.finished_at);
   const swapStartedAt = optionalTimestamp(row.swap_started_at);
+  const heldFor = optionalUuidField(row.held_for_deployment_id);
   return {
     id: row.id,
     repo_url: row.repo_url,
@@ -2799,6 +2815,7 @@ function parseDeployment(value: unknown): Deployment {
     started_at: row.started_at,
     ...(finishedAt !== undefined ? { finished_at: finishedAt } : {}),
     ...(swapStartedAt !== undefined ? { swap_started_at: swapStartedAt } : {}),
+    ...(heldFor !== undefined ? { held_for_deployment_id: heldFor } : {}),
     status: row.status as DeploymentStatus,
   };
 }

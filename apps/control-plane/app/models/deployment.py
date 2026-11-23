@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKeyConstraint, String, Uuid
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKeyConstraint, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -61,6 +61,14 @@ class Deployment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Set immediately before the live container is removed. Cancel is refused after this (#270).
     swap_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when the queue accepts the provision job. Only such a row counts as the
+    # active deploy, so a row that was created and never started holds nothing (#271).
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set while this row waits behind another deploy. Status stays queued (#271).
+    held_for_deployment_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    # What a waiting row needs to start later: git ref, rollback source, addon names,
+    # and one-off variables as an encrypted token. Cleared when the row stops waiting.
+    provision_replay_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[DeploymentStatus] = mapped_column(
         Enum(DeploymentStatus, name="deployment_status", native_enum=False, length=16),
         nullable=False,

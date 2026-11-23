@@ -21,6 +21,7 @@ from app.api.deps import (
     ConsoleUserServiceDep,
     DeploymentServiceDep,
     JobServiceDep,
+    ReleaseJobServiceDep,
     PaginationDep,
     SettingsDep,
 )
@@ -41,6 +42,8 @@ router = APIRouter(prefix="/deployments", tags=["deployments"])
 _NOT_FOUND = {status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}}
 _UNAUTHENTICATED = {status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse}}
 _UNAVAILABLE = {status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ErrorResponse}}
+# A deployment held behind another one has no outcome yet (#271).
+_NOT_STARTED = {status.HTTP_409_CONFLICT: {"model": ErrorResponse}}
 
 
 async def _known_actor(users: ConsoleUserService, actor_user_id: uuid.UUID | None) -> uuid.UUID | None:
@@ -152,10 +155,17 @@ async def get_deployment(deployment_id: uuid.UUID, deployments: DeploymentServic
     response_model=DeploymentRead,
     status_code=status.HTTP_200_OK,
     summary="Record that a deployment finished",
-    responses=_NOT_FOUND | _UNAUTHENTICATED,
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED,
 )
-async def succeed_deployment(deployment_id: uuid.UUID, deployments: DeploymentServiceDep) -> DeploymentRead:
-    return DeploymentRead.model_validate(await deployments.mark_succeeded(deployment_id))
+async def succeed_deployment(
+    deployment_id: uuid.UUID,
+    deployments: DeploymentServiceDep,
+    jobs: ReleaseJobServiceDep,
+) -> DeploymentRead:
+    stored = await deployments.mark_succeeded(deployment_id)
+    if jobs is not None:
+        await jobs.release_waiting(stored)
+    return DeploymentRead.model_validate(stored)
 
 
 @router.post(
@@ -163,10 +173,17 @@ async def succeed_deployment(deployment_id: uuid.UUID, deployments: DeploymentSe
     response_model=DeploymentRead,
     status_code=status.HTTP_200_OK,
     summary="Record that a deployment failed",
-    responses=_NOT_FOUND | _UNAUTHENTICATED,
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED,
 )
-async def fail_deployment(deployment_id: uuid.UUID, deployments: DeploymentServiceDep) -> DeploymentRead:
-    return DeploymentRead.model_validate(await deployments.mark_failed(deployment_id))
+async def fail_deployment(
+    deployment_id: uuid.UUID,
+    deployments: DeploymentServiceDep,
+    jobs: ReleaseJobServiceDep,
+) -> DeploymentRead:
+    stored = await deployments.mark_failed(deployment_id)
+    if jobs is not None:
+        await jobs.release_waiting(stored)
+    return DeploymentRead.model_validate(stored)
 
 
 @router.get(
@@ -267,6 +284,7 @@ async def _enqueue_copy(
         git_ref=git_ref,
     )
     refreshed = await deployments.get(created.id)
+    await deployments.refresh(refreshed)
     return DeploymentRead.model_validate(refreshed)
 
 
@@ -328,9 +346,13 @@ async def cancel_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
     jobs: JobServiceDep,
+    release: ReleaseJobServiceDep,
 ) -> DeploymentRead:
     stored = await deployments.cancel(deployment_id)
     await jobs.revoke_quietly(stored.provision_job_id)
+    # Same rule as the outcome routes: without a queue the waiter stays queued.
+    if release is not None:
+        await release.release_waiting(stored)
     return DeploymentRead.model_validate(stored)
 
 
@@ -376,4 +398,5 @@ async def rollback_deployment(
         rollback_from_deployment_id=source.id,
     )
     refreshed = await deployments.get(created.id)
+    await deployments.refresh(refreshed)
     return DeploymentRead.model_validate(refreshed)

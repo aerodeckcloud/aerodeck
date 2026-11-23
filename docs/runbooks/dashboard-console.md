@@ -63,6 +63,36 @@ job leaves the live container alone. After `swap_started_at` is set the API
 returns 409 and the swap continues. Succeeded, failed, and cancelled rows return
 422. Deployment detail shows Cancel only for queued and running control-plane
 rows.
+Each environment row can set what happens when a deploy is already queued or
+running. **Wait for the current deploy** (the default) keeps the new row
+`queued` with `held_for_deployment_id` and does not start a job. Older waiting
+rows are cancelled so only the newest starts after the active deploy finishes.
+**Replace the current deploy** cancels the active row when `swap_started_at`
+is still empty, and returns 409 once the swap has started. Push webhooks use
+the same setting. The browser PATCHes
+`/api/console/projects/{id}/environments/{environmentId}` and does not call
+FastAPI.
+A deploy counts as active from the moment the queue accepts its job
+(`dispatched_at`) until it ends. Rows from before this setting existed, and
+rows whose provision never ran, have no `dispatched_at` and never hold a new
+deploy. A deploy that was already running when the control plane was upgraded
+is not counted either, so one overlap is possible right after the upgrade.
+The worker sets `finished_at` when the provision ends and then starts the
+waiting row, so a deploy nobody watches in the console still lets the next one
+start. The console outcome routes (`succeeded`, `failed`, `cancel`) start it
+too; whichever comes second finds nothing left to start. A waiting row that
+cannot be started (the queue refuses the job, for example) is marked `failed`.
+A waiting row keeps what it needs to start later in `provision_replay_json`:
+the git ref, the rollback source, the addon names, and any one-off variables
+sent with the deploy. The variables are stored only as a token encrypted with
+the same key as saved environment variables. The payload is removed when the
+row starts, is cancelled, or fails.
+A waiting row has no outcome yet. Its log stream shows `Waiting for the current
+deployment to finish...` in place of the stub, and `succeeded` and `failed`
+return 409 until it starts. Deployment detail shows a Waiting badge, re-reads
+the row every few seconds, and reports an outcome only once it has started.
+Without a queue (`AERODECK_REDIS_URL` unset) no route starts a waiting row; it
+stays `queued` until it is cancelled.
 When the console client is set and a deployment has `provision_job_id`, detail
 shows a Provision job panel that polls `GET /api/console/jobs/{id}` (→
 `GET /api/v1/jobs/{id}`) about every 5s until succeeded/failed, a poll

@@ -127,7 +127,8 @@ async def _enqueue(
         kind, project_id, environment_id, deployment_id=deployment_id, env_vars=env_vars, addons=addons
     )
     return JobAccepted(
-        job_id=uuid.UUID(ticket.job_id),
+        job_id=uuid.UUID(ticket.job_id) if ticket.job_id else None,
+        active_deployment_id=ticket.active_deployment_id,
         kind=ticket.kind,
         project_id=ticket.project_id,
         environment_id=ticket.environment_id,
@@ -144,7 +145,7 @@ async def _enqueue(
         "Optional body `deployment_id` ties the job to a console deployment so the worker "
         "publishes progress onto `GET /api/v1/deployments/{id}/logs`."
     ),
-    responses=_UNAUTHENTICATED | _NOT_FOUND | _QUEUE_DOWN,
+    responses=_UNAUTHENTICATED | _NOT_FOUND | _CONFLICT | _QUEUE_DOWN,
 )
 async def provision_environment(
     project_id: uuid.UUID,

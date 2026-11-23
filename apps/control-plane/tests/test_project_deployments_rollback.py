@@ -194,11 +194,17 @@ async def test_project_deployments_redeploy_and_rollback_endpoints(
         assert redeployed.json()["trigger"] == "manual"
         assert dispatcher.calls[0]["meta"]["git_ref"] == sha
         assert "rollback_from_deployment_id" not in dispatcher.calls[0]["meta"]
+        assert (
+            await client.post(f"/api/v1/deployments/{redeployed.json()['id']}/succeeded", headers=auth)
+        ).status_code == 200
 
         latest = await client.post(f"/api/v1/deployments/{dep['id']}/deploy-latest", headers=auth)
         assert latest.status_code == 201, latest.text
         assert latest.json()["trigger"] == "manual"
         assert "git_ref" not in dispatcher.calls[1]["meta"]
+        assert (
+            await client.post(f"/api/v1/deployments/{latest.json()['id']}/succeeded", headers=auth)
+        ).status_code == 200
 
         rolled_back = await client.post(f"/api/v1/deployments/{dep['id']}/rollback", headers=auth)
         assert rolled_back.status_code == 201

@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   ENVIRONMENT_KIND_INVALID,
   ENVIRONMENT_NAME_INVALID,
+  ENVIRONMENT_OVERLAP_INVALID,
   ENVIRONMENT_PROJECT_ID_INVALID,
   ENVIRONMENT_PROJECT_REQUIRED,
   ENVIRONMENT_REGION_INVALID,
@@ -144,6 +145,18 @@ describe("parseEnvironmentUpdateFields", () => {
     assert.deepEqual(parseEnvironmentUpdateFields({ region: "ams3" }), {
       ok: true,
       value: { region: "ams3" },
+    });
+  });
+
+  it("accepts wait or override as the only change", () => {
+    assert.deepEqual(parseEnvironmentUpdateFields({ deploy_overlap: "override" }), {
+      ok: true,
+      value: { deploy_overlap: "override" },
+    });
+    assert.deepEqual(parseEnvironmentUpdateFields({ deploy_overlap: "soon" }), {
+      ok: false,
+      error: ENVIRONMENT_OVERLAP_INVALID,
+      code: "invalid_overlap",
     });
   });
 

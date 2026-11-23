@@ -22,7 +22,7 @@ from app.repositories.deployments import DeploymentRepository
 from app.repositories.clients import ClientRepository, SettingsClientRepository
 from app.repositories.dns_records import DnsRecordRepository
 from app.repositories.environments import EnvironmentRepository
-from app.repositories.jobs import CeleryJobDispatcher
+from app.repositories.jobs import CeleryJobDispatcher, JobState
 from app.repositories.projects import ProjectRepository
 from app.repositories.routes import RouteRepository
 from app.repositories.sandbox_hosts import SandboxHostRepository
@@ -374,9 +374,33 @@ def get_certificate_service(
 CertificateServiceDep = Annotated[CertificateService, Depends(get_certificate_service)]
 
 
+_QUEUE_UNSET = "Job queue is not configured (AERODECK_REDIS_URL is unset)"
+
+
+class UnconfiguredJobDispatcher:
+    """Stands in for the broker when Redis is unset. Every call answers 503."""
+
+    def dispatch(self, kind: object, *, project_id: str, environment_id: str, **meta: str) -> str:
+        _ = (kind, project_id, environment_id, meta)
+        raise QueueUnavailableError(_QUEUE_UNSET)
+
+    def state(self, job_id: str) -> JobState:
+        _ = job_id
+        raise QueueUnavailableError(_QUEUE_UNSET)
+
+    def revoke(self, job_id: str) -> None:
+        _ = job_id
+        raise QueueUnavailableError(_QUEUE_UNSET)
+
+
 def get_job_dispatcher(settings: SettingsDep) -> JobDispatcher:
+    """The broker, or a stand-in that raises 503 when it is used.
+
+    Resolving this never fails: holding a deployment behind the active one
+    writes only to the database, so it must work without a queue.
+    """
     if settings.redis_url is None:
-        raise QueueUnavailableError("Job queue is not configured (AERODECK_REDIS_URL is unset)")
+        return UnconfiguredJobDispatcher()
     return CeleryJobDispatcher(create_celery_app(settings))
 
 
@@ -404,6 +428,18 @@ def get_job_service(
 
 
 JobServiceDep = Annotated[JobService, Depends(get_job_service)]
+
+
+def get_release_job_service(
+    dispatcher: JobDispatcherDep, jobs: JobServiceDep
+) -> JobService | None:
+    """None without a queue, so a waiting deploy is not promoted with nowhere to run."""
+    if isinstance(dispatcher, UnconfiguredJobDispatcher):
+        return None
+    return jobs
+
+
+ReleaseJobServiceDep = Annotated[JobService | None, Depends(get_release_job_service)]
 
 # auto_error=False so a missing header becomes our {"detail", "code"} 401, not FastAPI's 403.
 _bearer = HTTPBearer(auto_error=False, description="Access token from POST /api/v1/auth/token")

@@ -56,6 +56,8 @@ class DeploymentTerminalService:
             )
             return deployment
         deployment.status = status
+        # A finished row never starts, so what it kept for a later start goes too (#271).
+        deployment.provision_replay_json = None
         if deployment.finished_at is None:
             deployment.finished_at = datetime.now(UTC)
         stored = await self._deployments.save(deployment)

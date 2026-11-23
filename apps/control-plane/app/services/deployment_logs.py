@@ -40,6 +40,8 @@ DONE_LINE = "Done"
 # only after a successful provision; failures publish the class-name line and stop.
 # Enqueue seeds QUEUED before the worker runs so empty-stream stub Done cannot win the race.
 PROVISION_QUEUED_LINE = "Queued environment provision..."
+# A deployment held behind another one publishes this for the same reason (#271).
+PROVISION_WAITING_LINE = "Waiting for the current deployment to finish..."
 PROVISION_START_LINE = "Starting environment provision..."
 PROVISION_SUCCESS_LINE = "Environment provision finished."
 PROVISION_QUEUE_FAILED_LINE = "Provision queue failed"

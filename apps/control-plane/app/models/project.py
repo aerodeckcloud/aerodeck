@@ -15,6 +15,13 @@ class EnvironmentKind(enum.StrEnum):
     prod = "prod"
 
 
+class DeployOverlap(enum.StrEnum):
+    """What a new provision does while another deploy is still queued or running (#271)."""
+
+    wait = "wait"
+    override = "override"
+
+
 class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "projects"
 
@@ -47,6 +54,10 @@ class Environment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Enum(EnvironmentKind, name="environment_kind", native_enum=False, length=16), nullable=False
     )
     region: Mapped[str] = mapped_column(String(16), nullable=False, default="nyc3")
+    # wait: queue behind the active deploy. override: cancel it if swap has not started (#271).
+    deploy_overlap: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=DeployOverlap.wait.value, server_default=DeployOverlap.wait.value
+    )
 
     project: Mapped[Project] = relationship(back_populates="environments")
     routes: Mapped[list["Route"]] = relationship(
