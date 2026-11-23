@@ -17,7 +17,9 @@ from app.api.deps import (
     SettingsDep,
     WebhookServiceDep,
 )
+from app.models.project import EnvironmentKind
 from app.models.project_member import ProjectRole
+from app.services.project_members import ForbiddenError
 from app.schemas.auth import ErrorResponse
 from app.schemas.common import Page
 from app.schemas.environment import (
@@ -112,8 +114,18 @@ async def update_environment(
     members: ProjectMemberServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> EnvironmentRead:
-    if {"auto_deploy_paused", "prod_deploy_approval"} & body.model_fields_set:
-        await members.require_role(project_id, actor_user_id, ProjectRole.owner)
+    current = await environments.get(project_id, environment_id)
+    resulting_kind = body.kind if body.kind is not None else current.kind
+    crosses_prod = resulting_kind != current.kind and (
+        resulting_kind == EnvironmentKind.prod or current.kind == EnvironmentKind.prod
+    )
+    if {"auto_deploy_paused", "prod_deploy_approval"} & body.model_fields_set or crosses_prod:
+        if actor_user_id is None or not await members.is_owner(project_id, actor_user_id):
+            raise ForbiddenError(f"Requires owner role on project {project_id}.")
+    # Entering production turns approval on unless an owner set the flag in this request.
+    entering_prod = resulting_kind == EnvironmentKind.prod and current.kind != EnvironmentKind.prod
+    if entering_prod and "prod_deploy_approval" not in body.model_fields_set:
+        body.prod_deploy_approval = True
     return await _read(environments, await environments.update(project_id, environment_id, body))
 
 

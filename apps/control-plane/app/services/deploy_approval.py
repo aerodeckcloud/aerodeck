@@ -148,7 +148,9 @@ class DeployApprovalService:
 
     async def reject(self, deployment_id: uuid.UUID, actor_user_id: uuid.UUID | None) -> Deployment:
         stored = await self._pending_for_owner(deployment_id, actor_user_id)
-        cancelled = await self._deployments.cancel(deployment_id)
+        cancelled = await self._deployments.cancel_awaiting_approval(deployment_id)
+        if cancelled is None:
+            raise ConflictError("Deployment is not waiting for approval.")
         await self._audit.record(
             project_id=_require_project(stored),
             environment_id=stored.environment_id,

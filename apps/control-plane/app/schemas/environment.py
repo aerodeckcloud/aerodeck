@@ -53,13 +53,12 @@ class EnvironmentCreate(BaseModel):
     rollback_images_to_keep: RollbackImagesToKeep = 5
     release_command: ReleaseCommand = None
     auto_deploy_paused: bool = False
-    # None means "use the default": true for a new prod environment, false otherwise (#276).
+    # Accepted and ignored. A new prod environment always requires approval (#276).
     prod_deploy_approval: bool | None = None
 
     @model_validator(mode="after")
     def default_prod_approval(self) -> Self:
-        if self.prod_deploy_approval is None:
-            self.prod_deploy_approval = self.kind is EnvironmentKind.prod
+        self.prod_deploy_approval = self.kind is EnvironmentKind.prod
         return self
 
 

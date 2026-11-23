@@ -98,7 +98,11 @@ A GitHub push then creates no deployment and writes one audit row,
 `deployment.auto_deploy_skipped`. The webhook secret is not in that row. A
 repeat of the same delivery is ignored. Manual deploy, repeat, deploy-latest,
 and promote still run while pause is on. Only an owner can change
-`auto_deploy_paused` or `prod_deploy_approval`.
+`auto_deploy_paused` or `prod_deploy_approval`, and a request with no user is
+refused. A create request cannot turn approval off: a new production
+environment always starts with it on. Changing an environment into or out of
+production also requires an owner. Moving an environment to production turns
+approval on unless that owner set the flag in the same request.
 Production environments can require an owner (`prod_deploy_approval`). Existing
 production environments stay off, so current webhooks keep deploying until an
 owner turns it on. A new production environment starts with it on. A developer, a webhook, or a rollback then stores the row as `queued` with

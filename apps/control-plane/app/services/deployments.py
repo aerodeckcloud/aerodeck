@@ -228,6 +228,15 @@ class DeploymentService:
             return None
         return await self._deployments.mark_approved(deployment_id, datetime.now(UTC))
 
+    async def cancel_awaiting_approval(self, deployment_id: uuid.UUID) -> Deployment | None:
+        """Cancel only if this request still sees a waiting row. None if another request won."""
+        current = await self._lock_environment_of(deployment_id)
+        if current is None:
+            raise NotFoundError(f"Deployment {deployment_id} not found")
+        if not is_awaiting_approval(current):
+            return None
+        return await self._deployments.cancel_awaiting_approval(deployment_id, datetime.now(UTC))
+
     async def mark_waiting(
         self, deployment_id: uuid.UUID, active_id: uuid.UUID, replay_json: str | None
     ) -> None:

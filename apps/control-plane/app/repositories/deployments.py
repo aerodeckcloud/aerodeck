@@ -8,6 +8,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.deployment import Deployment, DeploymentStatus
 
 
+def _awaiting_approval(deployment_id: uuid.UUID) -> tuple[ColumnElement[bool], ...]:
+    """Rows still waiting for an owner. Shared by approve and reject (#276)."""
+    return (
+        Deployment.id == deployment_id,
+        Deployment.approval_required_at.is_not(None),
+        Deployment.approved_at.is_(None),
+        Deployment.status == DeploymentStatus.queued,
+        Deployment.finished_at.is_(None),
+        Deployment.dispatched_at.is_(None),
+    )
+
+
 class DeploymentRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -205,15 +217,28 @@ class DeploymentRepository:
         """
         updated = await self._session.scalar(
             update(Deployment)
-            .where(
-                Deployment.id == deployment_id,
-                Deployment.approval_required_at.is_not(None),
-                Deployment.approved_at.is_(None),
-                Deployment.status == DeploymentStatus.queued,
-                Deployment.finished_at.is_(None),
-                Deployment.dispatched_at.is_(None),
-            )
+            .where(*_awaiting_approval(deployment_id))
             .values(approved_at=approved_at)
+            .returning(Deployment)
+        )
+        return updated
+
+    async def cancel_awaiting_approval(
+        self, deployment_id: uuid.UUID, finished_at: datetime
+    ) -> Deployment | None:
+        """Cancel only while the row is still waiting for an owner.
+
+        An approved or dispatched row is left alone, so a late reject cannot
+        stop a deploy that already won the race.
+        """
+        updated = await self._session.scalar(
+            update(Deployment)
+            .where(*_awaiting_approval(deployment_id))
+            .values(
+                status=DeploymentStatus.cancelled,
+                finished_at=finished_at,
+                provision_replay_json=None,
+            )
             .returning(Deployment)
         )
         return updated

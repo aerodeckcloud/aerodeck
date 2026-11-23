@@ -105,17 +105,33 @@ async def test_new_prod_requires_approval_and_existing_flags_stay_off(
 ) -> None:
     project = await _project(client, auth, "approval-defaults")
     prod = await _environment(client, auth, project["id"], slug="prod", kind="prod")
+    forced_response = await client.post(
+        f"/api/v1/projects/{project['id']}/environments",
+        json={
+            "slug": "prod-off",
+            "name": "Prod off",
+            "kind": "prod",
+            "region": "ams3",
+            "prod_deploy_approval": False,
+        },
+        headers=auth,
+    )
+    assert forced_response.status_code == 201, forced_response.text
+    forced = forced_response.json()
     dev = await _environment(client, auth, project["id"], slug="dev", kind="dev")
 
     assert prod["prod_deploy_approval"] is True
+    assert forced["prod_deploy_approval"] is True
     assert prod["auto_deploy_paused"] is False
     assert dev["prod_deploy_approval"] is False
     assert dev["auto_deploy_paused"] is False
 
+    # No members yet, so any real user counts as the owner. A missing user does not.
+    owner = await _user(client, auth, "owner-defaults@aerodeck.test")
     updated = await client.patch(
         f"/api/v1/projects/{project['id']}/environments/{prod['id']}",
         json={"auto_deploy_paused": True, "prod_deploy_approval": False},
-        headers=auth,
+        headers=owner,
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["auto_deploy_paused"] is True
@@ -196,13 +212,21 @@ async def test_developer_prod_deploy_waits_until_an_owner_approves_or_rejects(
     assert approved.status_code == 200, approved.text
     assert approved.json()["approved_at"] is not None
     assert len(dispatcher.calls) == 1
+    late_reject = await client.post(f"/api/v1/deployments/{held['id']}/reject", headers=owner)
+    assert late_reject.status_code == 409
+    still_running = await client.get(f"/api/v1/deployments/{held['id']}", headers=owner)
+    assert still_running.json()["status"] != "cancelled"
+    assert len(dispatcher.calls) == 1
     second_approve = await client.post(f"/api/v1/deployments/{held['id']}/approve", headers=owner)
     assert second_approve.status_code == 409
     assert len(dispatcher.calls) == 1
     sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
     async with sessions() as session:
-        lost = await DeploymentRepository(session).mark_approved(uuid.UUID(held["id"]), datetime.now(UTC))
+        repo = DeploymentRepository(session)
+        lost = await repo.mark_approved(uuid.UUID(held["id"]), datetime.now(UTC))
+        not_cancelled = await repo.cancel_awaiting_approval(uuid.UUID(held["id"]), datetime.now(UTC))
         assert lost is None
+        assert not_cancelled is None
     finished = await client.post(f"/api/v1/deployments/{held['id']}/succeeded", headers=auth)
     assert finished.status_code == 200, finished.text
 
@@ -424,6 +448,8 @@ async def test_only_an_owner_can_change_pause_or_production_approval(
     renamed = await client.patch(env_url, json={"region": "fra1"}, headers=developer)
     assert renamed.status_code == 200, renamed.text
 
+    missing_user = await client.patch(env_url, json={"auto_deploy_paused": True}, headers=auth)
+    assert missing_user.status_code == 403
     paused = await client.patch(env_url, json={"auto_deploy_paused": True}, headers=developer)
     assert paused.status_code == 403
     approval = await client.patch(env_url, json={"prod_deploy_approval": False}, headers=developer)
@@ -441,3 +467,15 @@ async def test_only_an_owner_can_change_pause_or_production_approval(
     assert updated.status_code == 200, updated.text
     assert updated.json()["auto_deploy_paused"] is True
     assert updated.json()["prod_deploy_approval"] is False
+
+    staging = await _environment(client, owner, project["id"], slug="staging", kind="staging")
+    staging_url = f"/api/v1/projects/{project['id']}/environments/{staging['id']}"
+    entered = await client.patch(staging_url, json={"kind": "prod"}, headers=developer)
+    assert entered.status_code == 403
+    assert (await client.get(staging_url, headers=owner)).json()["kind"] == "staging"
+    became_prod = await client.patch(staging_url, json={"kind": "prod"}, headers=owner)
+    assert became_prod.status_code == 200, became_prod.text
+    assert became_prod.json()["kind"] == "prod"
+    assert became_prod.json()["prod_deploy_approval"] is True
+    left = await client.patch(staging_url, json={"kind": "staging"}, headers=developer)
+    assert left.status_code == 403
