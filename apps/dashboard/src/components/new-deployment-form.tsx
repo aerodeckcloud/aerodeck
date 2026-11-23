@@ -9,6 +9,7 @@ import {
   parseDotenvText,
 } from "@/components/deployment-blueprint-fields";
 import { DeployBuildStep } from "@/components/deploy-build-step";
+import { DeployResourcesStep } from "@/components/deploy-resources-step";
 import { EnvironmentSelect } from "@/components/environment-select";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +30,7 @@ import {
   ProvisionEnqueueFailed,
   upsertEnvironmentVars,
 } from "@/lib/api";
+import { knownDetectedAddons } from "@/lib/deploy-addons";
 import { applyBuildConfirmation, launchBuildFields } from "@/lib/deploy-build";
 import { environmentOptionKey } from "@/lib/environment-option";
 import { parseGithubRepo } from "@/lib/github";
@@ -49,11 +51,12 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
   const [repoUrl, setRepoUrl] = useState("");
   const [envVarsText, setEnvVarsText] = useState("");
   const [blueprint, setBlueprint] = useState<DeploymentBlueprint | null>(null);
-  const [step, setStep] = useState<"repository" | "build" | "launch">("repository");
+  const [step, setStep] = useState<"repository" | "build" | "resources" | "launch">("repository");
   const [portDraft, setPortDraft] = useState("");
   const [serviceDraft, setServiceDraft] = useState("");
   const [portInvalid, setPortInvalid] = useState(false);
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  const [detectedAddons, setDetectedAddons] = useState<AddonType[]>([]);
   const [selectedAddons, setSelectedAddons] = useState<AddonType[]>([]);
   const [inspecting, setInspecting] = useState(false);
 
@@ -113,7 +116,9 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
         initialFields[item.key] = item.default ?? "";
       }
       setFieldValues(initialFields);
-      setSelectedAddons(bp.addons.map((a) => a.type));
+      const detected = knownDetectedAddons(bp.addons.map((addon) => addon.type));
+      setDetectedAddons(detected);
+      setSelectedAddons(detected);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to inspect repository.");
     } finally {
@@ -157,6 +162,11 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
       setBlueprint({ ...blueprint, build: confirmed });
       setPortDraft(String(confirmed.port));
       setServiceDraft(confirmed.service ?? "");
+      setStep("resources");
+      return;
+    }
+
+    if (isControlPlane && blueprint && step === "resources") {
       setStep("launch");
       return;
     }
@@ -245,13 +255,15 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
       <div className="h-1 bg-gradient-to-r from-primary via-runway to-primary/40" />
       <CardHeader className="border-b">
         <CardTitle>
-          {step === "build" ? "Build" : step === "launch" ? "Deploy" : "Repository"}
+          {step === "build" ? "Build" : step === "resources" ? "Databases" : step === "launch" ? "Deploy" : "Repository"}
         </CardTitle>
         <CardDescription>
           {step === "build"
             ? "Detected from the scan. Change the port, and the Compose service when this repository has one."
-            : step === "launch"
-              ? "Environment, addons, and variables follow the build you confirmed."
+            : step === "resources"
+              ? "Databases from the scan. A scan that found none still lets you add Postgres, Redis, or MongoDB."
+              : step === "launch"
+              ? "Environment and variables follow the databases you confirmed."
               : isControlPlane
                 ? "The GitHub repository to scan. A successful scan opens the build before anything else."
                 : "HTTPS GitHub URL. Validated in the browser, then POSTed to /api/mock/v1/deployments."}
@@ -280,6 +292,7 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
                     setServiceDraft("");
                     setPortInvalid(false);
                     setFieldValues({});
+                    setDetectedAddons([]);
                     setSelectedAddons([]);
                   }
                   if (repoInvalid) {
@@ -311,7 +324,15 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
               onServiceChange={setServiceDraft}
               portInvalid={portInvalid}
               disabled={submitting || inspecting || enqueueBlocked}
-              confirmed={step === "launch"}
+              confirmed={step === "resources" || step === "launch"}
+            />
+          ) : null}
+          {isControlPlane && blueprint && step === "resources" ? (
+            <DeployResourcesStep
+              detected={detectedAddons}
+              selected={selectedAddons}
+              onToggle={toggleAddon}
+              disabled={submitting || inspecting || enqueueBlocked}
             />
           ) : null}
           {isControlPlane && blueprint && step === "launch" ? (
@@ -340,8 +361,6 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
                 onFieldChange={(key, value) =>
                   setFieldValues((prev) => ({ ...prev, [key]: value }))
                 }
-                selectedAddons={selectedAddons}
-                onToggleAddon={toggleAddon}
                 extraEnvText={envVarsText}
                 onExtraEnvTextChange={setEnvVarsText}
                 savedEnvKeys={savedEnvKeys}
@@ -366,9 +385,14 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
           ) : null}
         </CardContent>
         <CardFooter className="justify-end gap-2">
-          {step === "launch" ? (
+          {step === "resources" ? (
             <Button type="button" variant="outline" size="lg" onClick={() => setStep("build")}>
               Change build
+            </Button>
+          ) : null}
+          {step === "launch" ? (
+            <Button type="button" variant="outline" size="lg" onClick={() => setStep("resources")}>
+              Change databases
             </Button>
           ) : null}
           {isControlPlane && !blueprint ? (
@@ -380,7 +404,7 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
               {inspecting ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Search data-icon="inline-start" />}
               {inspecting ? "Scanning…" : "Scan repository"}
             </Button>
-          ) : isControlPlane && step === "build" ? (
+          ) : isControlPlane && (step === "build" || step === "resources") ? (
             <Button type="submit" size="lg" disabled={submitting || inspecting || enqueueBlocked}>
               Continue
             </Button>
