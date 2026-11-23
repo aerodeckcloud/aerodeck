@@ -381,7 +381,7 @@ export type UpdateControlPlaneEnvironmentInput = {
 export async function updateControlPlaneEnvironment(
   config: ControlPlaneConfig,
   input: UpdateControlPlaneEnvironmentInput,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<EnvironmentOption> {
   if (!isControlPlaneUuid(input.projectId) || !isControlPlaneUuid(input.environmentId)) {
     throw new ControlPlaneError("control plane environment ids were not uuids");
@@ -1949,7 +1949,7 @@ type ControlPlaneRequestSpec<T> = {
 async function controlPlaneRequest<T>(
   config: ControlPlaneConfig,
   spec: ControlPlaneRequestSpec<T>,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<T> {
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
@@ -1958,6 +1958,9 @@ async function controlPlaneRequest<T>(
     accept: "application/json",
     authorization: `Bearer ${accessToken}`,
   };
+  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
+    headers["x-aerodeck-user-id"] = options.actorUserId;
+  }
   let body: string | undefined;
   if (spec.body !== undefined) {
     headers["content-type"] = "application/json";

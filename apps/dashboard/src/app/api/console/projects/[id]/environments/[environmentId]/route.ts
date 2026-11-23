@@ -98,15 +98,26 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 
   try {
-    const environment = await updateControlPlaneEnvironment(config, {
-      projectId: gated.projectId,
-      environmentId: gated.environmentId,
-      ...parsed.value,
-    });
+    const environment = await updateControlPlaneEnvironment(
+      config,
+      {
+        projectId: gated.projectId,
+        environmentId: gated.environmentId,
+        ...parsed.value,
+      },
+      { actorUserId: gated.userId },
+    );
     return NextResponse.json(environment);
   } catch (cause) {
     if (cause instanceof ControlPlaneError && cause.status === 404) {
       return jsonError(404, "Environment was not found.", "not_found");
+    }
+    if (cause instanceof ControlPlaneError && cause.status === 403) {
+      return jsonError(
+        403,
+        "Only an owner can change pause, production approval, or whether this environment is production.",
+        "forbidden",
+      );
     }
     if (cause instanceof ControlPlaneError && cause.status === 422) {
       return jsonError(400, ENVIRONMENT_FIELDS_INVALID, "invalid_fields");

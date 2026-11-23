@@ -792,6 +792,66 @@ describe("updateControlPlaneEnvironment", () => {
     assert.equal(environment.project_slug, "payments");
     assert.equal(posted, JSON.stringify({ name: "Production EU", region: "ams3" }));
   });
+
+  it("sends the actor when pause, approval, or kind changes", async () => {
+    clearControlPlaneTokenCache();
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    const environmentId = "22222222-2222-4222-8222-222222222222";
+    const actorUserId = "44444444-4444-4444-8444-444444444444";
+    let actorHeader = "";
+    let posted = "";
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      if (url.endsWith(`/api/v1/projects/${projectId}`) && (init?.method ?? "GET") === "GET") {
+        return jsonResponse({
+          id: projectId,
+          slug: "payments",
+          name: "Payments",
+          description: null,
+          created_at: "2026-10-19T00:00:00.000Z",
+          updated_at: "2026-10-19T00:00:00.000Z",
+        });
+      }
+      assert.equal(init?.method, "PATCH");
+      actorHeader = new Headers(init?.headers).get("x-aerodeck-user-id") ?? "";
+      posted = String(init?.body ?? "");
+      return jsonResponse({
+        id: environmentId,
+        project_id: projectId,
+        slug: "prod",
+        name: "Production",
+        kind: "prod",
+        region: "ams3",
+        auto_deploy_paused: true,
+        prod_deploy_approval: false,
+        created_at: "2026-10-19T00:00:00.000Z",
+        updated_at: "2026-10-19T01:00:00.000Z",
+      });
+    };
+    await updateControlPlaneEnvironment(
+      config,
+      {
+        projectId,
+        environmentId,
+        kind: "prod",
+        auto_deploy_paused: true,
+        prod_deploy_approval: false,
+      },
+      { fetch: fetchImpl, actorUserId },
+    );
+    assert.equal(actorHeader, actorUserId);
+    assert.equal(
+      posted,
+      JSON.stringify({
+        kind: "prod",
+        auto_deploy_paused: true,
+        prod_deploy_approval: false,
+      }),
+    );
+  });
 });
 
 describe("deleteControlPlaneEnvironment", () => {

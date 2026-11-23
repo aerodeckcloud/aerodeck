@@ -99,7 +99,8 @@ A GitHub push then creates no deployment and writes one audit row,
 repeat of the same delivery is ignored. Manual deploy, repeat, deploy-latest,
 and promote still run while pause is on. Only an owner can change
 `auto_deploy_paused` or `prod_deploy_approval`, and a request with no user is
-refused. A create request cannot turn approval off or start paused: a new
+refused. The console sends the signed-in user on that update. Someone who is
+not an owner sees a forbidden message instead of a control-plane failure. A create request cannot turn approval off or start paused: a new
 environment always starts with automatic deploys on, and a new production
 environment always starts with approval on. Changing an environment into or out of
 production also requires an owner. Moving an environment to production turns
