@@ -31,7 +31,12 @@ from app.services.console_users import ConsoleUserService
 from app.schemas.auth import ErrorResponse
 from app.schemas.blueprint import DeploymentBlueprint, DeploymentInspectRequest
 from app.schemas.common import Page
-from app.schemas.deployment import DeploymentCreate, DeploymentPromote, DeploymentRead
+from app.schemas.deployment import (
+    DeploymentCreate,
+    DeploymentPromote,
+    DeploymentRead,
+    DeploymentRollback,
+)
 from app.services.blueprint_inspector import inspect_github_repository_sync
 from app.services.docker_policy import normalize_git_sha
 from app.services.container_logs import ContainerLogsRead, dispatch_container_logs
@@ -74,7 +79,7 @@ async def _as_sse(lines: AsyncIterator[str]) -> AsyncIterator[bytes]:
 async def list_deployments(page: PaginationDep, deployments: DeploymentServiceDep) -> Page[DeploymentRead]:
     items, total = await deployments.list(limit=page.limit, offset=page.offset)
     return Page(
-        items=[DeploymentRead.model_validate(row) for row in items],
+        items=[deployments.to_read(row) for row in items],
         total=total,
         limit=page.limit,
         offset=page.offset,
@@ -154,7 +159,7 @@ async def create_deployment(
     responses=_NOT_FOUND,
 )
 async def get_deployment(deployment_id: uuid.UUID, deployments: DeploymentServiceDep) -> DeploymentRead:
-    return DeploymentRead.model_validate(await deployments.get(deployment_id))
+    return deployments.to_read(await deployments.get(deployment_id))
 
 
 @router.post(
@@ -172,7 +177,7 @@ async def succeed_deployment(
     stored = await deployments.mark_succeeded(deployment_id)
     if jobs is not None:
         await jobs.release_waiting(stored)
-    return DeploymentRead.model_validate(stored)
+    return deployments.to_read(stored)
 
 
 @router.post(
@@ -190,7 +195,7 @@ async def fail_deployment(
     stored = await deployments.mark_failed(deployment_id)
     if jobs is not None:
         await jobs.release_waiting(stored)
-    return DeploymentRead.model_validate(stored)
+    return deployments.to_read(stored)
 
 
 @router.get(
@@ -405,7 +410,9 @@ async def rollback_deployment(
     jobs: JobServiceDep,
     users: ConsoleUserServiceDep,
     actor_user_id: ActorUserIdDep,
+    body: DeploymentRollback | None = None,
 ) -> DeploymentRead:
+    """Restore the release variables when a snapshot exists, then retag the image (#273)."""
     source = await deployments.get(deployment_id)
     if source.project_id is None or source.environment_id is None:
         raise HTTPException(
@@ -417,6 +424,10 @@ async def rollback_deployment(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Only succeeded deployments can be rolled back to.",
         )
+    request = body or DeploymentRollback()
+    variables_restored = False
+    if request.restore_variables:
+        variables_restored = await deployments.restore_variables_from_snapshot(source)
     created = await deployments.create(
         DeploymentCreate(
             repo_url=source.repo_url,
@@ -435,4 +446,4 @@ async def rollback_deployment(
     )
     refreshed = await deployments.get(created.id)
     await deployments.refresh(refreshed)
-    return DeploymentRead.model_validate(refreshed)
+    return deployments.to_read(refreshed, variables_restored=variables_restored)

@@ -271,8 +271,9 @@ def get_deployment_service(
     deployments: DeploymentRepositoryDep,
     environments: EnvironmentServiceDep,
     terminal: DeploymentTerminalServiceDep,
+    env_vars: EnvironmentVariableServiceDep,
 ) -> DeploymentService:
-    return DeploymentService(deployments, environments, terminal)
+    return DeploymentService(deployments, environments, terminal, env_vars)
 
 
 DeploymentServiceDep = Annotated[DeploymentService, Depends(get_deployment_service)]

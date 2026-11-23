@@ -903,7 +903,7 @@ async function triggerControlPlaneDeploymentAction(
   deploymentId: string,
   action: "redeploy" | "rollback" | "deploy-latest" | "cancel" | "promote",
   options: ListOptions & { actorUserId?: string } = {},
-  body?: Record<string, string>,
+  body?: Record<string, unknown>,
 ): Promise<Deployment> {
   if (!isControlPlaneUuid(deploymentId)) {
     throw new ControlPlaneError("deploymentId must be a uuid");
@@ -976,9 +976,18 @@ export function deployLatestControlPlaneDeployment(
 export function rollbackControlPlaneDeployment(
   config: ControlPlaneConfig,
   deploymentId: string,
-  options: ListOptions & { actorUserId?: string } = {},
+  options: ListOptions & { actorUserId?: string; restoreVariables?: boolean } = {},
 ): Promise<Deployment> {
-  return triggerControlPlaneDeploymentAction(config, deploymentId, "rollback", options);
+  const { restoreVariables, ...listOptions } = options;
+  const body =
+    restoreVariables === undefined ? undefined : { restore_variables: restoreVariables };
+  return triggerControlPlaneDeploymentAction(
+    config,
+    deploymentId,
+    "rollback",
+    listOptions,
+    body,
+  );
 }
 
 /** Run a succeeded deployment's image in another environment of its project (#272). */
@@ -2808,6 +2817,35 @@ function optionalTimestamp(value: unknown): string | null | undefined {
   throw new ControlPlaneError("control plane deployment response was not a deployment");
 }
 
+function optionalBoolean(value: unknown): boolean | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  throw new ControlPlaneError("control plane deployment response was not a deployment");
+}
+
+function optionalStringList(value: unknown): string[] | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (
+    Array.isArray(value) &&
+    value.every((entry) => typeof entry === "string")
+  ) {
+    return value as string[];
+  }
+  throw new ControlPlaneError("control plane deployment response was not a deployment");
+}
+
 function parseDeployment(value: unknown): Deployment {
   if (!value || typeof value !== "object") {
     throw new ControlPlaneError("control plane deployment response was not a deployment");
@@ -2831,6 +2869,8 @@ function parseDeployment(value: unknown): Deployment {
   const finishedAt = optionalTimestamp(row.finished_at);
   const swapStartedAt = optionalTimestamp(row.swap_started_at);
   const heldFor = optionalUuidField(row.held_for_deployment_id);
+  const snapshotNames = optionalStringList(row.snapshot_variable_names);
+  const variablesRestored = optionalBoolean(row.variables_restored);
   return {
     id: row.id,
     repo_url: row.repo_url,
@@ -2847,6 +2887,8 @@ function parseDeployment(value: unknown): Deployment {
     ...(swapStartedAt !== undefined ? { swap_started_at: swapStartedAt } : {}),
     ...(heldFor !== undefined ? { held_for_deployment_id: heldFor } : {}),
     status: row.status as DeploymentStatus,
+    ...(snapshotNames !== undefined ? { snapshot_variable_names: snapshotNames } : {}),
+    ...(variablesRestored !== undefined ? { variables_restored: variablesRestored } : {}),
   };
 }
 

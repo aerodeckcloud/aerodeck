@@ -135,7 +135,7 @@ async def list_project_deployments(
         offset=page.offset,
     )
     return Page(
-        items=[DeploymentRead.model_validate(row) for row in items],
+        items=[deployments.to_read(row) for row in items],
         total=total,
         limit=page.limit,
         offset=page.offset,

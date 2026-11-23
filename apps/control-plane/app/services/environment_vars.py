@@ -242,10 +242,10 @@ class EnvironmentVariableService:
         )
 
     def seal(self, values: dict[str, str]) -> str:
-        """Encrypt one-off variables of a deployment that has to wait (#271).
+        """Encrypt a variable map (waiting one-offs or a release snapshot).
 
-        Same key and cipher as saved variables. The token lives on the waiting
-        deployment row and is removed when the row starts or is cancelled.
+        Same key and cipher as saved variables. The token must never be logged
+        or returned to the client (#271, #273).
         """
         return encrypt_env_value(json.dumps(values), self._signing_key)
 
@@ -253,6 +253,49 @@ class EnvironmentVariableService:
         """Reverse ``seal``. Raises ``InvalidToken`` when the signing key changed."""
         values = json.loads(decrypt_env_value(token, self._signing_key))
         return {str(key): str(value) for key, value in values.items()}
+
+    def snapshot_names(self, token: str | None) -> list[str] | None:
+        """Sorted variable names in a sealed snapshot. Never the values (#273)."""
+        if not token:
+            return None
+        try:
+            return sorted(self.unseal(token))
+        except (InvalidToken, json.JSONDecodeError, TypeError, ValueError):
+            logger.warning("event=env_vars_snapshot_unreadable")
+            return None
+
+    async def replace_all(
+        self,
+        project_id: uuid.UUID,
+        environment_id: uuid.UUID,
+        values: dict[str, str],
+    ) -> list[str]:
+        """Make the environment match ``values`` exactly. Returns the keys written.
+
+        Keys not in ``values`` are deleted. Restored values are marked secret so
+        a snapshot never weakens a key that was secret before (#273).
+        """
+        await self._environments.get(project_id, environment_id)
+        existing = await self._repo.list_for_environment(project_id, environment_id)
+        existing_keys = {row.key for row in existing}
+        for key, value in values.items():
+            await self._repo.upsert(
+                project_id=project_id,
+                environment_id=environment_id,
+                key=key,
+                encrypted_value=encrypt_env_value(value, self._signing_key),
+                is_secret=True,
+            )
+        for key in existing_keys - values.keys():
+            row = await self._repo.get_by_key(project_id, environment_id, key)
+            if row is not None:
+                await self._repo.delete(row)
+        logger.info(
+            "event=env_vars_replaced environment=%s keys=%d",
+            environment_id,
+            len(values),
+        )
+        return sorted(values)
 
     async def load_decrypted_map(
         self, project_id: uuid.UUID, environment_id: uuid.UUID

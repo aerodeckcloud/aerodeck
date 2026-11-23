@@ -69,6 +69,9 @@ class Deployment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # What a waiting row needs to start later: git ref, rollback source, addon names,
     # and one-off variables as an encrypted token. Cleared when the row stops waiting.
     provision_replay_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Encrypted copy of the environment's variables when this row succeeded (#273).
+    # Same Fernet helper as saved env vars. Null on rows that never captured one.
+    env_vars_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[DeploymentStatus] = mapped_column(
         Enum(DeploymentStatus, name="deployment_status", native_enum=False, length=16),
         nullable=False,

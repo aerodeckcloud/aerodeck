@@ -9,7 +9,7 @@ import { jsonControlPlaneError, jsonError } from "@/lib/mock-http";
 import { requireSessionUser } from "@/lib/session";
 
 export async function POST(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   await connection();
@@ -25,8 +25,20 @@ export async function POST(
   if (!isControlPlaneUuid(id)) {
     return jsonError(400, "Deployment id must be a UUID.", "invalid_deployment_id");
   }
+  let restoreVariables = true;
   try {
-    const deployment = await rollbackControlPlaneDeployment(config, id, { actorUserId: user.id });
+    const payload = (await request.json()) as { restore_variables?: unknown };
+    if (typeof payload.restore_variables === "boolean") {
+      restoreVariables = payload.restore_variables;
+    }
+  } catch {
+    // Empty or non-JSON body keeps the default restore.
+  }
+  try {
+    const deployment = await rollbackControlPlaneDeployment(config, id, {
+      actorUserId: user.id,
+      restoreVariables,
+    });
     return NextResponse.json(deployment, { status: 201 });
   } catch (cause) {
     return jsonControlPlaneError(cause, "console_deployment_rollback_failed");

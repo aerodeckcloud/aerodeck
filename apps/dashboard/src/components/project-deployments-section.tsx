@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   deployLatestDeployment,
+  fetchEnvironmentVars,
   fetchProjectDeployments,
   promoteDeployment,
   redeployDeployment,
@@ -29,6 +30,7 @@ import { isDeploymentWaiting } from "@/lib/deployment-waiting";
 import { formatDuration, formatInstant } from "@/lib/format";
 import { nativeSelectClassName } from "@/lib/native-select";
 import { canPromote, promotionTargetLabel, promotionTargets } from "@/lib/promotion";
+import { rollbackConfirmMessage, rollbackVariableDiff } from "@/lib/rollback-variables";
 import type { Deployment, DeploymentStatus, EnvironmentOption, ProjectSource } from "@/lib/types";
 
 function statusBadge(status: DeploymentStatus, heldFor?: string | null) {
@@ -117,6 +119,22 @@ export function ProjectDeploymentsSection({
 
   const envNameById = new Map(environments.map((env) => [env.id, env.slug]));
 
+  async function confirmRollback(dep: Deployment): Promise<boolean> {
+    let currentNames: string[] = [];
+    if (dep.snapshot_variable_names != null && dep.project_id && dep.environment_id) {
+      try {
+        const vars = await fetchEnvironmentVars(dep.project_id, dep.environment_id);
+        currentNames = vars.map((row) => row.key);
+      } catch {
+        // Still confirm with snapshot names alone when the current list cannot load.
+      }
+    }
+    const message = rollbackConfirmMessage(
+      rollbackVariableDiff(dep.snapshot_variable_names, currentNames),
+    );
+    return window.confirm(message);
+  }
+
   async function handleAction(
     deploymentId: string,
     action: "redeploy" | "deploy-latest" | "rollback" | "promote",
@@ -130,7 +148,16 @@ export function ProjectDeploymentsSection({
       } else if (action === "deploy-latest") {
         next = await deployLatestDeployment(deploymentId);
       } else if (action === "rollback") {
-        next = await rollbackDeployment(deploymentId);
+        const dep = deployments.find((row) => row.id === deploymentId);
+        if (!dep) {
+          setBusyId(null);
+          return;
+        }
+        if (!(await confirmRollback(dep))) {
+          setBusyId(null);
+          return;
+        }
+        next = await rollbackDeployment(deploymentId, { restoreVariables: true });
       } else {
         const targetId = promoteTargetById[deploymentId];
         if (!targetId) {

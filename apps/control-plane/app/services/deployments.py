@@ -16,7 +16,7 @@ from app.models.deployment import (
 )
 from app.models.project import Environment
 from app.repositories.deployments import DeploymentRepository
-from app.schemas.deployment import DeploymentCreate
+from app.schemas.deployment import DeploymentCreate, DeploymentRead
 from app.services.deployment_terminal import DeploymentTerminalService
 
 logger = get_logger("services.deployments")
@@ -57,16 +57,36 @@ class EnvironmentLookup(Protocol):
     async def lock_for_deploy(self, environment_id: uuid.UUID) -> None: ...
 
 
+class EnvVarSnapshotter(Protocol):
+    """Seal / name helpers for the release variable snapshot (#273)."""
+
+    async def load_decrypted_map(
+        self, project_id: uuid.UUID, environment_id: uuid.UUID
+    ) -> dict[str, str]: ...
+
+    def seal(self, values: dict[str, str]) -> str: ...
+
+    def snapshot_names(self, token: str | None) -> list[str] | None: ...
+
+    async def replace_all(
+        self, project_id: uuid.UUID, environment_id: uuid.UUID, values: dict[str, str]
+    ) -> list[str]: ...
+
+    def unseal(self, token: str) -> dict[str, str]: ...
+
+
 class DeploymentService:
     def __init__(
         self,
         deployments: DeploymentRepository,
         environments: EnvironmentLookup,
         terminal: DeploymentTerminalService,
+        env_vars: EnvVarSnapshotter | None = None,
     ) -> None:
         self._deployments = deployments
         self._environments = environments
         self._terminal = terminal
+        self._env_vars = env_vars
 
     async def create(
         self,
@@ -202,6 +222,42 @@ class DeploymentService:
             await self._deployments.refresh(current)
         return current
 
+    def to_read(
+        self,
+        deployment: Deployment,
+        *,
+        variables_restored: bool | None = None,
+    ) -> DeploymentRead:
+        """Build the API model. Snapshot names only — never values or ciphertext."""
+        names = None
+        if self._env_vars is not None:
+            names = self._env_vars.snapshot_names(deployment.env_vars_snapshot)
+        return DeploymentRead.model_validate(deployment).model_copy(
+            update={
+                "snapshot_variable_names": names,
+                "variables_restored": variables_restored,
+            }
+        )
+
+    async def restore_variables_from_snapshot(self, source: Deployment) -> bool:
+        """Replace the environment's variables with the release snapshot.
+
+        Returns True when a snapshot was applied. False when the row has none
+        (pre-story deployments) so the caller can leave variables alone (#273).
+        """
+        if self._env_vars is None or not source.env_vars_snapshot:
+            return False
+        if source.project_id is None or source.environment_id is None:
+            return False
+        values = self._env_vars.unseal(source.env_vars_snapshot)
+        await self._env_vars.replace_all(source.project_id, source.environment_id, values)
+        logger.info(
+            "event=deployment_env_vars_restored deployment=%s keys=%d",
+            source.id,
+            len(values),
+        )
+        return True
+
     async def _mark_terminal(
         self, deployment_id: uuid.UUID, status: DeploymentStatus
     ) -> Deployment:
@@ -210,7 +266,35 @@ class DeploymentService:
             # Nothing has run yet, so there is no outcome to record. Without this
             # a console that reported one would close the row and it would never start.
             raise ConflictError(NOT_STARTED_DETAIL)
+        was_terminal = current is not None and current.status in (
+            DeploymentStatus.succeeded,
+            DeploymentStatus.failed,
+            DeploymentStatus.cancelled,
+        )
         stored = await self._terminal.mark(deployment_id, status)
         if stored is None:
             raise NotFoundError(f"Deployment {deployment_id} not found")
+        if (
+            not was_terminal
+            and status is DeploymentStatus.succeeded
+            and stored.env_vars_snapshot is None
+        ):
+            await self._capture_env_snapshot(stored)
         return stored
+
+    async def _capture_env_snapshot(self, deployment: Deployment) -> None:
+        """Seal the environment's variables onto a newly succeeded release (#273)."""
+        if self._env_vars is None:
+            return
+        if deployment.project_id is None or deployment.environment_id is None:
+            return
+        values = await self._env_vars.load_decrypted_map(
+            deployment.project_id, deployment.environment_id
+        )
+        deployment.env_vars_snapshot = self._env_vars.seal(values)
+        await self._deployments.save(deployment)
+        logger.info(
+            "event=deployment_env_vars_snapshot deployment=%s keys=%d",
+            deployment.id,
+            len(values),
+        )

@@ -39,6 +39,15 @@ class DeploymentPromote(BaseModel):
     environment_id: uuid.UUID
 
 
+class DeploymentRollback(BaseModel):
+    """Whether to restore the variables that shipped with the release (#273)."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    # When the source has a snapshot, default True restores it before the image swap.
+    restore_variables: bool = True
+
+
 class DeploymentRead(BaseModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
@@ -58,5 +67,9 @@ class DeploymentRead(BaseModel):
     finished_at: datetime | None
     swap_started_at: datetime | None
     held_for_deployment_id: uuid.UUID | None
+    # Names only when a snapshot exists. Never values or ciphertext (#273).
+    snapshot_variable_names: list[str] | None = None
+    # Set on rollback responses: True when the snapshot was applied.
+    variables_restored: bool | None = None
     created_at: datetime
     updated_at: datetime
