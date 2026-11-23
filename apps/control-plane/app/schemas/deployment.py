@@ -78,9 +78,27 @@ class DeploymentRead(BaseModel):
 
 
 class DeploymentSource(Protocol):
-    """Fields the read model copies. Not the ORM entity (#273)."""
+    """Attributes ``DeploymentRead`` copies, plus the plaintext name list (#273)."""
 
+    id: uuid.UUID
+    repo_url: str
+    owner: str
+    repo: str
+    project_id: uuid.UUID | None
+    environment_id: uuid.UUID | None
+    provision_job_id: uuid.UUID | None
+    git_sha: str | None
+    git_ref: str | None
+    trigger: str | None
+    actor_user_id: uuid.UUID | None
+    status: DeploymentStatus
+    started_at: datetime
+    finished_at: datetime | None
+    swap_started_at: datetime | None
+    held_for_deployment_id: uuid.UUID | None
     snapshot_names_json: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 def deployment_to_read(

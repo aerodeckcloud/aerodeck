@@ -469,10 +469,10 @@ PromotionServiceDep = Annotated[PromotionService, Depends(get_promotion_service)
 
 def get_rollback_service(
     deployments: DeploymentServiceDep,
-    environments: EnvironmentServiceDep,
+    members: ProjectMemberServiceDep,
     jobs: JobServiceDep,
 ) -> RollbackService:
-    return RollbackService(deployments, environments, jobs)
+    return RollbackService(deployments, members, jobs)
 
 
 RollbackServiceDep = Annotated[RollbackService, Depends(get_rollback_service)]

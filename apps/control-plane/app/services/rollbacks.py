@@ -7,10 +7,11 @@ import uuid
 from app.core.errors import UnprocessableError
 from app.core.logging import get_logger
 from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
+from app.models.project_member import ProjectRole
 from app.schemas.deployment import DeploymentCreate
 from app.services.deployments import DeploymentService
-from app.services.environments import EnvironmentService
 from app.services.jobs import JobService
+from app.services.project_members import ProjectMemberService
 from app.services.provisioning import JobKind
 
 logger = get_logger("services.rollbacks")
@@ -20,11 +21,11 @@ class RollbackService:
     def __init__(
         self,
         deployments: DeploymentService,
-        environments: EnvironmentService,
+        members: ProjectMemberService,
         jobs: JobService,
     ) -> None:
         self._deployments = deployments
-        self._environments = environments
+        self._members = members
         self._jobs = jobs
 
     async def rollback(
@@ -33,6 +34,7 @@ class RollbackService:
         *,
         restore_variables: bool,
         actor_user_id: uuid.UUID | None,
+        recorded_actor_id: uuid.UUID | None,
     ) -> tuple[Deployment, bool]:
         """Enqueue the image retag. Apply the snapshot only when that job is dispatched.
 
@@ -48,10 +50,10 @@ class RollbackService:
         if source.status is not DeploymentStatus.succeeded:
             raise UnprocessableError("Only succeeded deployments can be rolled back to.")
 
-        await self._environments.lock_for_deploy(source.environment_id)
-
         entries = None
         if restore_variables:
+            # Same bar as saving variables: a viewer must not rewrite project secrets (#273).
+            await self._members.require_role(source.project_id, actor_user_id, ProjectRole.developer)
             entries = self._deployments.read_snapshot_entries(source)
 
         created = await self._deployments.create(
@@ -61,7 +63,7 @@ class RollbackService:
                 environment_id=source.environment_id,
             ),
             trigger=DeploymentTrigger.rollback,
-            actor_user_id=actor_user_id,
+            actor_user_id=recorded_actor_id,
         )
         replace_env_vars = entries if entries is not None else None
         ticket = await self._jobs.enqueue(

@@ -404,7 +404,7 @@ async def promote_deployment(
     response_model=DeploymentRead,
     status_code=status.HTTP_201_CREATED,
     summary="Roll back to a succeeded deployment image and its variable snapshot (#273)",
-    responses=_NOT_FOUND | _UNAUTHENTICATED | _UNPROCESSABLE | _UNAVAILABLE,
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _FORBIDDEN | _UNPROCESSABLE | _UNAVAILABLE,
 )
 async def rollback_deployment(
     deployment_id: uuid.UUID,
@@ -419,7 +419,8 @@ async def rollback_deployment(
     stored, variables_restored = await rollbacks.rollback(
         deployment_id,
         restore_variables=request.restore_variables,
-        actor_user_id=await _known_actor(users, actor_user_id),
+        actor_user_id=actor_user_id,
+        recorded_actor_id=await _known_actor(users, actor_user_id),
     )
     await deployments.refresh(stored)
     return deployment_to_read(stored, variables_restored=variables_restored)

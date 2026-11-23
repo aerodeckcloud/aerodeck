@@ -701,6 +701,86 @@ async def test_rollback_can_skip_variable_restore(
         app.dependency_overrides.pop(get_job_dispatcher, None)
 
 
+@pytest.mark.asyncio
+async def test_rollback_restore_requires_a_developer(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    """A viewer or non-member must not rewrite project secrets via rollback (#273)."""
+
+    async def user(email: str) -> dict[str, str]:
+        created = await client.post(
+            "/api/v1/console-users",
+            json={"email": email, "password": "correct-horse-battery-staple"},
+            headers=auth,
+        )
+        assert created.status_code == 201, created.text
+        return {**auth, "X-AeroDeck-User-Id": created.json()["id"]}
+
+    owner = await user("rollback-owner@aerodeck.test")
+    viewer = await user("rollback-viewer@aerodeck.test")
+    stranger = await user("rollback-stranger@aerodeck.test")
+    project = (
+        await client.post("/api/v1/projects", json={"slug": "snap-rbac", "name": "snap-rbac"}, headers=owner)
+    ).json()
+    added = await client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"email": "rollback-viewer@aerodeck.test", "role": "viewer"},
+        headers=owner,
+    )
+    assert added.status_code == 200, added.text
+    env = (
+        await client.post(
+            f"/api/v1/projects/{project['id']}/environments",
+            json={"slug": "dev", "name": "Dev", "kind": "dev", "region": "ams3"},
+            headers=owner,
+        )
+    ).json()
+    base = f"/api/v1/projects/{project['id']}/environments/{env['id']}/env-vars"
+    await client.put(
+        base,
+        json={"items": [{"key": "KEEP", "value": "from-snapshot", "is_secret": True}]},
+        headers=owner,
+    )
+    dep = (
+        await client.post(
+            "/api/v1/deployments",
+            json={
+                "repo_url": "https://github.com/mangatohjunior/dev-portal",
+                "project_id": project["id"],
+                "environment_id": env["id"],
+            },
+            headers=owner,
+        )
+    ).json()
+    assert (await client.post(f"/api/v1/deployments/{dep['id']}/succeeded", headers=owner)).status_code == 200
+    await client.put(
+        base,
+        json={"items": [{"key": "KEEP", "value": "drifted", "is_secret": True}]},
+        headers=owner,
+    )
+
+    for headers in (viewer, stranger):
+        refused = await client.post(
+            f"/api/v1/deployments/{dep['id']}/rollback",
+            json={"restore_variables": True},
+            headers=headers,
+        )
+        assert refused.status_code == 403, refused.text
+        assert refused.json()["code"] == "forbidden"
+
+    sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
+    async with sessions() as session:
+        row = (
+            await session.scalars(
+                select(EnvironmentVariable).where(
+                    EnvironmentVariable.environment_id == uuid.UUID(env["id"]),
+                    EnvironmentVariable.key == "KEEP",
+                )
+            )
+        ).one()
+        assert decrypt_env_value(row.encrypted_value, SIGNING_KEY) == "drifted"
+
+
 def test_snapshot_uses_same_fernet_helper_as_env_vars() -> None:
     sealed = encrypt_env_value(json.dumps({"X": "1"}), SIGNING_KEY)
     assert json.loads(decrypt_env_value(sealed, SIGNING_KEY)) == {"X": "1"}
