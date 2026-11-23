@@ -26,6 +26,7 @@ class FakeCommandRunner:
     def __init__(self, *, create_dockerfile: bool = True, fail_on: dict[str, CommandResult] | None = None) -> None:
         self.calls: list[list[str]] = []
         self.envs: list[dict[str, str] | None] = []
+        self.timeouts: list[int] = []
         self.create_dockerfile = create_dockerfile
         self.fail_on = fail_on or {}
 
@@ -38,8 +39,9 @@ class FakeCommandRunner:
         timeout: int = 600,
         on_line: LogSink | None = None,
     ) -> CommandResult:
-        _ = (cwd, timeout)
+        _ = cwd
         self.calls.append(args)
+        self.timeouts.append(timeout)
         self.envs.append(env)
         key = " ".join(args[:2])
         if key in self.fail_on:
@@ -63,6 +65,10 @@ class FakeCommandRunner:
             return CommandResult(0, "", "")
         if args[:2] == ["docker", "run"]:
             return CommandResult(0, "abc123container\n", "")
+        if args[:2] == ["docker", "exec"]:
+            if on_line:
+                on_line("migrated")
+            return CommandResult(0, "migrated", "")
         if args[:2] == ["docker", "inspect"]:
             return CommandResult(0, "true\n", "")
         if args[:2] == ["docker", "start"]:
@@ -78,6 +84,7 @@ def _make_provisioner(
     docker_runtime: str | None = None,
     allowed_owners: tuple[str, ...] = (),
     route_base_domain: str | None = None,
+    release_command_timeout_seconds: int = 300,
     health_checker: HealthChecker | None = None,
     route_registrar: RouteRegistrar | None = None,
 ) -> DockerProvisioner:
@@ -97,6 +104,7 @@ def _make_provisioner(
         docker_runtime=docker_runtime,
         allowed_owners=allowed_owners,
         health_timeout_seconds=10,
+        release_command_timeout_seconds=release_command_timeout_seconds,
         route_base_domain=route_base_domain,
         port_allocator=lambda _h, _s, _e: port,
         health_checker=health_checker or (lambda _h, _p, _t: True),
@@ -397,3 +405,122 @@ def test_provision_rejects_host_network_and_forbidden_dockerfile_directives() ->
             repo_url="https://github.com/mangatohjunior/evil-dockerfile",
         )
     assert [c[:2] for c in runner.calls] == [["git", "clone"], ["git", "-C"]]
+
+
+def test_release_command_runs_after_health_and_before_traffic() -> None:
+    runner = FakeCommandRunner(create_dockerfile=True)
+    registered: list[str] = []
+    provisioner = _make_provisioner(
+        runner,
+        release_command_timeout_seconds=7,
+        route_base_domain="dev.app.aero-deck.app",
+        route_registrar=lambda **_kw: registered.append(runner.calls[-1][1]),
+    )
+    streamed: list[str] = []
+    secret = "postgres://secret-user:secret-pass@db/app"
+
+    provisioner.provision(
+        project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+        environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+        project_slug="payments",
+        environment_slug="dev",
+        repo_url="https://github.com/mangatohjunior/demo-app",
+        env_vars_json='{"DATABASE_URL":"%s"}' % secret,
+        release_command="python manage.py migrate",
+        on_log=streamed.append,
+    )
+
+    assert [c[:2] for c in runner.calls] == [
+        ["git", "clone"],
+        ["git", "-C"],
+        ["docker", "build"],
+        ["docker", "run"],
+        ["docker", "exec"],
+        ["docker", "rm"],
+        ["docker", "rename"],
+    ]
+    exec_cmd = runner.calls[4]
+    assert exec_cmd[2].startswith("aerodeck-app-f27ee337-bacbb040-new-")
+    assert "--" in exec_cmd
+    assert exec_cmd[exec_cmd.index("--") + 1 :] == ["python", "manage.py", "migrate"]
+    assert "sh" not in exec_cmd and "-c" not in exec_cmd and "-e" not in exec_cmd
+    assert runner.timeouts[4] == 7
+    assert registered == ["exec"]
+    assert runner.calls[5] == ["docker", "rm", "-f", "aerodeck-app-f27ee337-bacbb040"]
+    blob = " ".join(" ".join(call) for call in runner.calls)
+    assert secret not in blob
+    assert secret not in "\n".join(streamed)
+    assert "migrated" in streamed
+    assert any("Running release command before traffic moves" in line for line in streamed)
+
+
+def test_empty_release_command_keeps_the_current_swap_order() -> None:
+    runner = FakeCommandRunner(create_dockerfile=True)
+    provisioner = _make_provisioner(runner)
+    provisioner.provision(
+        project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+        environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+        project_slug="payments",
+        environment_slug="dev",
+        repo_url="https://github.com/mangatohjunior/demo-app",
+        release_command="   ",
+    )
+    assert [c[:2] for c in runner.calls] == [
+        ["git", "clone"],
+        ["git", "-C"],
+        ["docker", "build"],
+        ["docker", "run"],
+        ["docker", "rm"],
+        ["docker", "rename"],
+    ]
+
+
+def test_failed_release_command_removes_only_the_candidate() -> None:
+    runner = FakeCommandRunner(fail_on={"docker exec": CommandResult(1, "nope", "")})
+    provisioner = _make_provisioner(runner)
+    with pytest.raises(PermanentJobError, match="release command failed \\(exit 1\\)"):
+        provisioner.provision(
+            project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+            environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+            project_slug="payments",
+            environment_slug="dev",
+            repo_url="https://github.com/mangatohjunior/demo-app",
+            release_command="python manage.py migrate",
+        )
+    removed = [call[-1] for call in runner.calls if call[:2] == ["docker", "rm"]]
+    assert len(removed) == 1
+    assert "-new-" in removed[0]
+    assert "aerodeck-app-f27ee337-bacbb040" not in removed
+    assert not any(call[:2] == ["docker", "rename"] for call in runner.calls)
+
+
+def test_release_command_timeout_fails_without_moving_traffic() -> None:
+    class ExecTimeout(FakeCommandRunner):
+        def run(
+            self,
+            args: list[str],
+            *,
+            cwd: Path | None = None,
+            env: dict[str, str] | None = None,
+            timeout: int = 600,
+            on_line: LogSink | None = None,
+        ) -> CommandResult:
+            if args[:2] == ["docker", "exec"]:
+                self.calls.append(args)
+                raise TransientJobError(f"command timed out after {timeout}s: docker")
+            return super().run(args, cwd=cwd, env=env, timeout=timeout, on_line=on_line)
+
+    runner = ExecTimeout()
+    provisioner = _make_provisioner(runner, release_command_timeout_seconds=7)
+    with pytest.raises(PermanentJobError, match="timed out after 7s"):
+        provisioner.provision(
+            project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+            environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+            project_slug="payments",
+            environment_slug="dev",
+            repo_url="https://github.com/mangatohjunior/demo-app",
+            release_command="python manage.py migrate",
+        )
+    removed = [call[-1] for call in runner.calls if call[:2] == ["docker", "rm"]]
+    assert len(removed) == 1 and "-new-" in removed[0]
+    assert not any(call[:2] == ["docker", "rename"] for call in runner.calls)

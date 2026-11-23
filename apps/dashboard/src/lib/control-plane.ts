@@ -373,6 +373,7 @@ export type UpdateControlPlaneEnvironmentInput = {
   region?: string;
   deploy_overlap?: "wait" | "override";
   rollback_images_to_keep?: number;
+  release_command?: string | null;
 };
 
 export async function updateControlPlaneEnvironment(
@@ -384,7 +385,7 @@ export async function updateControlPlaneEnvironment(
     throw new ControlPlaneError("control plane environment ids were not uuids");
   }
   const project = await getControlPlaneProject(config, input.projectId, options);
-  const body: Record<string, string | number> = {};
+  const body: Record<string, string | number | null> = {};
   if (input.name !== undefined) {
     body.name = input.name;
   }
@@ -399,6 +400,9 @@ export async function updateControlPlaneEnvironment(
   }
   if (input.rollback_images_to_keep !== undefined) {
     body.rollback_images_to_keep = input.rollback_images_to_keep;
+  }
+  if (input.release_command !== undefined) {
+    body.release_command = input.release_command;
   }
   return controlPlaneRequest(
     config,
@@ -2383,6 +2387,7 @@ function parseEnvironmentOption(
   }
   const rollbackImagesToKeep = readRollbackImageCount(row.rollback_images_to_keep);
   const retainedRollbackImages = readRetainedRollbackImages(row.retained_rollback_images);
+  const releaseCommand = readReleaseCommand(row.release_command);
   if (row.project_id !== project.id) {
     throw new ControlPlaneError("control plane environments response was not a page");
   }
@@ -2398,7 +2403,18 @@ function parseEnvironmentOption(
     deploy_overlap: overlap,
     rollback_images_to_keep: rollbackImagesToKeep,
     retained_rollback_images: retainedRollbackImages,
+    release_command: releaseCommand,
   };
+}
+
+function readReleaseCommand(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new ControlPlaneError("control plane environments response was not a page");
+  }
+  return value;
 }
 
 function readRollbackImageCount(value: unknown): number {

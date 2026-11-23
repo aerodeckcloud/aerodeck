@@ -18,6 +18,7 @@ import { deleteEnvironment, queueEnvironmentReconcile, updateEnvironment } from 
 import {
   ENVIRONMENT_KINDS,
   ENVIRONMENT_REGIONS,
+  RELEASE_COMMAND_MAX,
   ROLLBACK_IMAGES_DEFAULT,
   ROLLBACK_IMAGES_MAX,
   ROLLBACK_IMAGES_MIN,
@@ -51,6 +52,7 @@ export function EnvironmentEditRow({
   const [keep, setKeep] = useState(
     String(environment.rollback_images_to_keep ?? ROLLBACK_IMAGES_DEFAULT),
   );
+  const [command, setCommand] = useState(environment.release_command ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -74,6 +76,7 @@ export function EnvironmentEditRow({
       region?: string;
       deploy_overlap?: DeployOverlap;
       rollback_images_to_keep?: number;
+      release_command?: string | null;
     } = {};
     if (name.trim() !== environment.name) {
       fields.name = name;
@@ -90,6 +93,10 @@ export function EnvironmentEditRow({
     const keepCount = Number(keep);
     if (keepCount !== (environment.rollback_images_to_keep ?? ROLLBACK_IMAGES_DEFAULT)) {
       fields.rollback_images_to_keep = keepCount;
+    }
+    const nextCommand = command.trim();
+    if (nextCommand !== (environment.release_command ?? "")) {
+      fields.release_command = nextCommand === "" ? null : nextCommand;
     }
     const parsed = parseEnvironmentUpdateFields(fields);
     if (!parsed.ok) {
@@ -109,6 +116,7 @@ export function EnvironmentEditRow({
       setRegion(updated.region);
       setOverlap(updated.deploy_overlap ?? "wait");
       setKeep(String(updated.rollback_images_to_keep ?? ROLLBACK_IMAGES_DEFAULT));
+      setCommand(updated.release_command ?? "");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Update failed.");
     } finally {
@@ -223,6 +231,27 @@ export function EnvironmentEditRow({
             clearError();
           }}
         />
+      </div>
+      <div className="grid gap-2 sm:col-span-2">
+        <Label htmlFor={`${idPrefix}-release`}>Release command</Label>
+        <Input
+          id={`${idPrefix}-release`}
+          value={command}
+          maxLength={RELEASE_COMMAND_MAX}
+          placeholder="python manage.py migrate"
+          disabled={busy}
+          spellCheck={false}
+          onChange={(event) => {
+            setCommand(event.currentTarget.value);
+            clearError();
+          }}
+        />
+        <p className="text-sm text-muted-foreground">
+          Optional. An executable and its arguments, not a shell script. It runs in the new
+          container after the health check and before traffic moves. If it fails or times out,
+          the current release stays up. Rolling an image back does not undo migrations this
+          command applied.
+        </p>
       </div>
       <div className="flex flex-wrap items-end gap-2">
         <Button type="submit" size="sm" disabled={busy}>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import socket
 import subprocess
 import time
@@ -125,6 +126,62 @@ def validate_binary(binary: str, label: str) -> str:
     if not binary or not _SAFE_BIN_RE.fullmatch(binary):
         raise PermanentJobError(f"unsafe executable path for {label}")
     return binary
+
+
+RELEASE_COMMAND_MAX_LENGTH = 500
+_SHELL_CHARS = frozenset(";|&<>`")
+_RELEASE_COMMAND_REJECTED = "release command must be an executable and arguments, not a shell script"
+
+
+def _unquoted_shell_syntax(command: str) -> bool:
+    """True when a character would be interpreted by a shell outside quotes."""
+    quote: str | None = None
+    escaped = False
+    for char in command:
+        if escaped:
+            escaped = False
+            continue
+        if quote is not None:
+            if char == quote:
+                quote = None
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char in _SHELL_CHARS:
+            return True
+    return quote is not None
+
+
+def parse_release_command(raw: str | None) -> list[str]:
+    """Split an operator command into argv. An empty command runs nothing.
+
+    The result is passed to ``docker exec`` as a list. A shell is never started,
+    and tokens that only work in a shell are rejected (#275).
+    """
+    if raw is None:
+        return []
+    command = raw.strip()
+    if not command:
+        return []
+    if len(command) > RELEASE_COMMAND_MAX_LENGTH:
+        raise PermanentJobError(
+            f"release command must be at most {RELEASE_COMMAND_MAX_LENGTH} characters"
+        )
+    if any(char in command for char in "\n\r\x00"):
+        raise PermanentJobError(_RELEASE_COMMAND_REJECTED)
+    if _unquoted_shell_syntax(command):
+        raise PermanentJobError(_RELEASE_COMMAND_REJECTED)
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError as exc:
+        raise PermanentJobError(_RELEASE_COMMAND_REJECTED) from exc
+    if not argv or any("\x00" in token for token in argv):
+        raise PermanentJobError(_RELEASE_COMMAND_REJECTED)
+    return argv
 
 
 def normalize_git_sha(raw: str | None) -> str | None:

@@ -97,3 +97,56 @@ async def test_list_counts_only_this_project(client: AsyncClient, auth: dict[str
 
     assert listing.json()["total"] == 2
     assert [e["slug"] for e in listing.json()["items"]] == ["dev", "prod"]
+
+
+async def test_release_command_is_optional_and_cleared_by_a_blank_value(
+    client: AsyncClient, auth: dict[str, str], project: dict
+) -> None:
+    created = await client.post(
+        envs_url(project), json={"slug": "dev", "name": "Dev", "kind": "dev"}, headers=auth
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["release_command"] is None
+
+    patched = await client.patch(
+        f"{envs_url(project)}/{body['id']}",
+        json={"release_command": "python manage.py migrate"},
+        headers=auth,
+    )
+    assert patched.status_code == 200
+    assert patched.json()["release_command"] == "python manage.py migrate"
+
+    cleared = await client.patch(
+        f"{envs_url(project)}/{body['id']}", json={"release_command": ""}, headers=auth
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["release_command"] is None
+
+    nulled = await client.patch(
+        f"{envs_url(project)}/{body['id']}",
+        json={"release_command": "python manage.py migrate"},
+        headers=auth,
+    )
+    assert nulled.status_code == 200
+    gone = await client.patch(
+        f"{envs_url(project)}/{body['id']}", json={"release_command": None}, headers=auth
+    )
+    assert gone.status_code == 200
+    assert gone.json()["release_command"] is None
+
+
+@pytest.mark.parametrize("command", ["x" * 501, "echo a && echo b"])
+async def test_release_command_rejects_a_shell_or_an_overlong_value(
+    client: AsyncClient, auth: dict[str, str], project: dict, command: str
+) -> None:
+    created = await client.post(
+        envs_url(project), json={"slug": "dev", "name": "Dev", "kind": "dev"}, headers=auth
+    )
+    assert created.status_code == 201
+    rejected = await client.patch(
+        f"{envs_url(project)}/{created.json()['id']}",
+        json={"release_command": command},
+        headers=auth,
+    )
+    assert rejected.status_code == 422

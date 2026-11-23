@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from app.models.project import (
     ROLLBACK_IMAGES_TO_KEEP_MAX,
@@ -11,6 +11,8 @@ from app.models.project import (
     EnvironmentKind,
 )
 from app.schemas.common import Slug
+from app.services.docker_policy import parse_release_command
+from app.services.provisioning import PermanentJobError
 
 Name = Annotated[str, Field(min_length=1, max_length=120)]
 # DigitalOcean region slug, e.g. nyc3, ams3, fra1. Validated against the live list in Epic 2.
@@ -19,6 +21,25 @@ Region = Annotated[str, Field(min_length=4, max_length=16, pattern=r"^[a-z]{3}[0
 RollbackImagesToKeep = Annotated[
     int, Field(ge=ROLLBACK_IMAGES_TO_KEEP_MIN, le=ROLLBACK_IMAGES_TO_KEEP_MAX)
 ]
+
+
+def _release_command_or_none(value: object) -> str | None:
+    """Blank clears the column. Anything else must be an executable plus arguments."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("release command must be a string")
+    if not value.strip():
+        return None
+    try:
+        parse_release_command(value)
+    except PermanentJobError as exc:
+        raise ValueError(str(exc)) from exc
+    return value.strip()
+
+
+# Executable plus arguments. Blank clears the column. A shell script is rejected (#275).
+ReleaseCommand = Annotated[str | None, BeforeValidator(_release_command_or_none)]
 
 
 class EnvironmentCreate(BaseModel):
@@ -30,6 +51,7 @@ class EnvironmentCreate(BaseModel):
     region: Region = "nyc3"
     deploy_overlap: DeployOverlap = DeployOverlap.wait
     rollback_images_to_keep: RollbackImagesToKeep = 5
+    release_command: ReleaseCommand = None
 
 
 class EnvironmentUpdate(BaseModel):
@@ -40,6 +62,7 @@ class EnvironmentUpdate(BaseModel):
     region: Region | None = None
     deploy_overlap: DeployOverlap | None = None
     rollback_images_to_keep: RollbackImagesToKeep | None = None
+    release_command: ReleaseCommand = None
 
 
 class EnvironmentRead(BaseModel):
@@ -54,6 +77,7 @@ class EnvironmentRead(BaseModel):
     deploy_overlap: DeployOverlap
     rollback_images_to_keep: int
     retained_rollback_images: int = 0
+    release_command: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -69,6 +93,7 @@ class EnvironmentSource(Protocol):
     region: str
     deploy_overlap: str
     rollback_images_to_keep: int
+    release_command: str | None
     created_at: datetime
     updated_at: datetime
 
