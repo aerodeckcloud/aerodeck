@@ -1,13 +1,13 @@
 "use client";
 
-import { Database, KeyRound, Sparkles } from "lucide-react";
+import { KeyRound, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { AddonType, DeploymentBlueprint } from "@/lib/types";
+import type { DeploymentBlueprint } from "@/lib/types";
 
 export function parseDotenvText(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -45,8 +45,6 @@ type DeploymentBlueprintFieldsProps = {
   blueprint: DeploymentBlueprint | null;
   fieldValues: Record<string, string>;
   onFieldChange: (key: string, value: string) => void;
-  selectedAddons: AddonType[];
-  onToggleAddon: (addon: AddonType) => void;
   extraEnvText: string;
   onExtraEnvTextChange: (value: string) => void;
   savedEnvKeys?: Set<string>;
@@ -57,8 +55,6 @@ export function DeploymentBlueprintFields({
   blueprint,
   fieldValues,
   onFieldChange,
-  selectedAddons,
-  onToggleAddon,
   extraEnvText,
   onExtraEnvTextChange,
   savedEnvKeys,
@@ -85,66 +81,6 @@ export function DeploymentBlueprintFields({
           </div>
         </div>
       ) : null}
-
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-1.5">
-          <Database className="size-4 text-primary" />
-          <Label>Database addons (auto-inject credentials)</Label>
-        </div>
-        <div className="grid gap-2 sm:grid-cols-3">
-          {(
-            [
-              {
-                type: "postgres" as const,
-                title: "PostgreSQL 16",
-                envVar: "DATABASE_URL",
-                subtitle: "Dedicated postgres:16-alpine container",
-              },
-              {
-                type: "redis" as const,
-                title: "Redis 7",
-                envVar: "REDIS_URL",
-                subtitle: "Dedicated redis:7-alpine cache/queue",
-              },
-              {
-                type: "mongodb" as const,
-                title: "MongoDB 7",
-                envVar: "MONGODB_URI",
-                subtitle: "Dedicated mongo:7 document database",
-              },
-            ] as const
-          ).map((item) => {
-            const active = selectedAddons.includes(item.type);
-            return (
-              <label
-                key={item.type}
-                className={`flex cursor-pointer items-start gap-2.5 rounded-lg border p-3 text-xs transition-colors ${
-                  active
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/40"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={active}
-                  disabled={disabled}
-                  onChange={() => onToggleAddon(item.type)}
-                  className="mt-0.5 size-4 accent-primary"
-                />
-                <div className="flex flex-col gap-0.5">
-                  <span className="font-medium text-foreground">
-                    {item.title}{" "}
-                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
-                      {item.envVar}
-                    </code>
-                  </span>
-                  <span className="text-muted-foreground">{item.subtitle}</span>
-                </div>
-              </label>
-            );
-          })}
-        </div>
-      </div>
 
       {blueprint && blueprint.env.length > 0 ? (
         <div className="flex flex-col gap-3 rounded-lg border border-border/80 p-3">
