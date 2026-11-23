@@ -9,11 +9,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { deployLatestDeployment, fetchProjectDeployments, redeployDeployment, rollbackDeployment } from "@/lib/api";
+import { isDeploymentWaiting } from "@/lib/deployment-waiting";
 import { formatDuration, formatInstant } from "@/lib/format";
 import type { Deployment, DeploymentStatus, EnvironmentOption, ProjectSource } from "@/lib/types";
 
 function statusBadge(status: DeploymentStatus, heldFor?: string | null) {
-  if (heldFor && (status === "queued" || status === "running")) {
+  if (isDeploymentWaiting(status, heldFor)) {
     return (
       <Badge variant="secondary">
         <Loader2 className="size-3" />

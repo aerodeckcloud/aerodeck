@@ -1,7 +1,8 @@
 "use client";
 
 import { Ban, CheckCircle2, ExternalLink, Loader2, Rocket, XCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
 
 import { DeploymentEnvironmentLink } from "@/components/deployment-environment-link";
 import { LinkButton } from "@/components/link-button";
@@ -21,10 +22,12 @@ import {
 import {
   cancelDeployment,
   deploymentLogsUrl,
+  fetchDeployment,
   fetchProjectDetail,
   markDeploymentFailed,
   markDeploymentSucceeded,
 } from "@/lib/api";
+import { isDeploymentFinished, isDeploymentWaiting } from "@/lib/deployment-waiting";
 import { useEnvironmentCatalog } from "@/lib/use-environment-catalog";
 import type { Deployment, DeploymentStatus, ProjectSource } from "@/lib/types";
 
@@ -34,6 +37,9 @@ type DeploymentStatusViewProps = {
 };
 
 type TerminalOutcome = "succeeded" | "failed";
+
+/** How often a waiting deployment is re-read to see whether it has started. */
+const WAITING_POLL_MS = 5_000;
 
 function logSourceCopy(source: ProjectSource): { sseLabel: string; targetLabel: string } {
   if (source === "control-plane") {
@@ -48,7 +54,15 @@ function logSourceCopy(source: ProjectSource): { sseLabel: string; targetLabel: 
   };
 }
 
-function statusBadge(status: DeploymentStatus) {
+function statusBadge(status: DeploymentStatus, waiting: boolean) {
+  if (waiting) {
+    return (
+      <Badge variant="secondary">
+        <Loader2 />
+        Waiting
+      </Badge>
+    );
+  }
   if (status === "cancelled") {
     return (
       <Badge variant="secondary">
@@ -83,12 +97,48 @@ function statusBadge(status: DeploymentStatus) {
 
 export function DeploymentStatusView({ deployment, logSource }: DeploymentStatusViewProps) {
   const [status, setStatus] = useState<DeploymentStatus>(deployment.status);
+  const [heldFor, setHeldFor] = useState<string | null>(
+    deployment.held_for_deployment_id ?? null,
+  );
+  const [provisionJobId, setProvisionJobId] = useState<string | null>(
+    deployment.provision_job_id ?? null,
+  );
   const [liveHostname, setLiveHostname] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const hasLinkedEnv = Boolean(deployment.project_id && deployment.environment_id);
   const environments = useEnvironmentCatalog(logSource === "control-plane" && hasLinkedEnv);
   const copy = logSourceCopy(logSource);
+  const waiting = logSource === "control-plane" && isDeploymentWaiting(status, heldFor);
+
+  const applyStored = useCallback((stored: Deployment) => {
+    setStatus(stored.status);
+    setHeldFor(stored.held_for_deployment_id ?? null);
+    setProvisionJobId(stored.provision_job_id ?? null);
+  }, []);
+
+  // A waiting deployment starts on its own, so re-read it until it does.
+  useEffect(() => {
+    if (!waiting) {
+      return;
+    }
+    let stopped = false;
+    const timer = setInterval(() => {
+      void fetchDeployment(deployment.id, true)
+        .then((stored) => {
+          if (!stopped) {
+            applyStored(stored);
+          }
+        })
+        .catch(() => {
+          // Best-effort: the next tick tries again.
+        });
+    }, WAITING_POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [waiting, deployment.id, applyStored]);
 
   useEffect(() => {
     if (logSource !== "control-plane" || !deployment.project_id || !deployment.environment_id) {
@@ -113,8 +163,26 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
     };
   }, [logSource, deployment.project_id, deployment.environment_id, status]);
 
+  /** False when the deployment has no outcome to record: still waiting, or already finished. */
+  async function hasStarted(): Promise<boolean> {
+    if (!waiting) {
+      return true;
+    }
+    // The page may be behind: the deployment can start between two polls.
+    try {
+      const stored = await fetchDeployment(deployment.id, true);
+      applyStored(stored);
+      return (
+        !isDeploymentFinished(stored.status) &&
+        !isDeploymentWaiting(stored.status, stored.held_for_deployment_id)
+      );
+    } catch {
+      return false;
+    }
+  }
+
   function recordOutcome(outcome: TerminalOutcome) {
-    if (status === "succeeded" || status === "failed" || status === "cancelled") {
+    if (isDeploymentFinished(status)) {
       return;
     }
     if (logSource !== "control-plane") {
@@ -122,8 +190,8 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
       return;
     }
     const mark = outcome === "succeeded" ? markDeploymentSucceeded : markDeploymentFailed;
-    void mark(deployment.id)
-      .then((stored) => setStatus(stored.status))
+    void hasStarted()
+      .then((started) => (started ? mark(deployment.id).then(applyStored) : undefined))
       .catch((cause: unknown) => {
         // Stream already showed provision ended without Done; keep the badge honest
         // even if the status POST fails (worker may already have written failed).
@@ -172,7 +240,7 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
                 setCancelling(true);
                 setError(null);
                 void cancelDeployment(deployment.id)
-                  .then((stored) => setStatus(stored.status))
+                  .then(applyStored)
                   .catch((cause: unknown) => {
                     setError(cause instanceof Error ? cause.message : "Could not cancel the deployment.");
                   })
@@ -199,7 +267,7 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
                 {deployment.repo_url}
               </CardDescription>
             </div>
-            {statusBadge(status)}
+            {statusBadge(status, waiting)}
           </div>
         </CardHeader>
         <CardContent className="grid gap-3 pt-4 text-sm sm:grid-cols-2">
@@ -240,11 +308,21 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
         </CardContent>
       </Card>
 
-      {logSource === "control-plane" && deployment.provision_job_id ? (
-        <ProvisionJobPanel
-          jobId={deployment.provision_job_id}
-          deploymentStatus={status}
-        />
+      {waiting && heldFor ? (
+        <p className="text-sm text-muted-foreground" role="status">
+          Waiting for deployment{" "}
+          <Link
+            href={`/deployments/${heldFor}`}
+            className="font-mono text-foreground underline-offset-4 hover:underline"
+          >
+            {heldFor.slice(0, 8)}
+          </Link>{" "}
+          to finish. This one starts on its own after that.
+        </p>
+      ) : null}
+
+      {logSource === "control-plane" && provisionJobId ? (
+        <ProvisionJobPanel jobId={provisionJobId} deploymentStatus={status} />
       ) : null}
 
       {error ? (
