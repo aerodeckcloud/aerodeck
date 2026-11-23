@@ -190,9 +190,14 @@ class DeploymentService:
         environment_id: uuid.UUID | None = None,
         limit: int,
         offset: int,
+        actor_user_id: uuid.UUID | None = None,
     ) -> tuple[Sequence[Deployment], int]:
         return await self._deployments.list_for_project(
-            project_id, environment_id=environment_id, limit=limit, offset=offset
+            project_id,
+            environment_id=environment_id,
+            limit=limit,
+            offset=offset,
+            actor_user_id=actor_user_id,
         )
 
     async def mark_succeeded(self, deployment_id: uuid.UUID) -> Deployment:

@@ -2,14 +2,26 @@
 
 import json
 import uuid
+from datetime import UTC, datetime
 
 from cryptography.fernet import InvalidToken
 from pydantic import ValidationError
 
 from app.core.errors import ConflictError, NotFoundError, UnprocessableError
-from app.models.deployment import Deployment, DeploymentStatus
-from app.schemas.deployment_draft import DeploymentDraftPlan, DraftVariable
+from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
+from app.schemas.deployment import DeploymentCreate, deployment_to_read
+from app.schemas.deployment_draft import (
+    DeploymentDraftCreate,
+    DeploymentDraftLaunch,
+    DeploymentDraftPlan,
+    DeploymentDraftRead,
+    DeploymentDraftWrite,
+    DraftVariable,
+)
+from app.services.deploy_approval import DeployApprovalService
+from app.services.deployments import DeploymentService
 from app.services.environment_vars import decrypt_env_value, encrypt_env_value
+from app.services.environments import EnvironmentService
 
 _PLAN_TOO_LARGE = "Draft plan is too large."
 _MAX_PLAN_CHARS = 64_000
@@ -41,6 +53,10 @@ def merge_plan(stored: DeploymentDraftPlan, incoming: DeploymentDraftPlan) -> De
     return incoming.model_copy(update={"variables": merged})
 
 
+def draft_read(deployment: Deployment, plan: DeploymentDraftPlan) -> DeploymentDraftRead:
+    return DeploymentDraftRead(deployment=deployment_to_read(deployment), plan=mask_plan(plan))
+
+
 def plain_values(plan: DeploymentDraftPlan) -> dict[str, str]:
     """Values provision should receive, including secrets the client no longer holds."""
     values: dict[str, str] = {}
@@ -60,8 +76,91 @@ def plain_values(plan: DeploymentDraftPlan) -> dict[str, str]:
 
 
 class DeploymentDraftService:
-    def __init__(self, signing_key: str) -> None:
+    def __init__(
+        self,
+        signing_key: str,
+        deployments: DeploymentService,
+        environments: EnvironmentService,
+        approval: DeployApprovalService,
+    ) -> None:
         self._signing_key = signing_key
+        self._deployments = deployments
+        self._environments = environments
+        self._approval = approval
+
+    async def create(
+        self, body: DeploymentDraftCreate, actor_user_id: uuid.UUID | None
+    ) -> tuple[Deployment, DeploymentDraftPlan]:
+        stored = await self._deployments.create(
+            DeploymentCreate(repo_url=body.repo_url),
+            trigger=DeploymentTrigger.manual,
+            actor_user_id=actor_user_id,
+            draft=True,
+        )
+        self.apply(stored, body.plan)
+        return stored, body.plan
+
+    async def read(
+        self, deployment_id: uuid.UUID, actor_user_id: uuid.UUID | None
+    ) -> tuple[Deployment, DeploymentDraftPlan]:
+        stored = await self._deployments.get(deployment_id)
+        self.require_owner(stored, actor_user_id)
+        return stored, self.open(stored.draft_plan)
+
+    async def visible(self, deployment_id: uuid.UUID, actor_user_id: uuid.UUID | None) -> Deployment:
+        """Hide another operator's draft on the ordinary deployment read."""
+        stored = await self._deployments.get(deployment_id)
+        if stored.status is DeploymentStatus.draft and (
+            actor_user_id is None or stored.actor_user_id != actor_user_id
+        ):
+            raise NotFoundError(f"Deployment {deployment_id} not found")
+        return stored
+
+    async def update(
+        self, deployment_id: uuid.UUID, body: DeploymentDraftWrite, actor_user_id: uuid.UUID | None
+    ) -> tuple[Deployment, DeploymentDraftPlan]:
+        stored = await self._deployments.get(deployment_id)
+        self.require_owner(stored, actor_user_id)
+        merged = merge_plan(self.open(stored.draft_plan), body.plan)
+        if body.project_id is not None and body.environment_id is not None:
+            await self._environments.get(body.project_id, body.environment_id)
+            stored.project_id = body.project_id
+            stored.environment_id = body.environment_id
+        self.apply(stored, merged)
+        return stored, merged
+
+    async def discard(self, deployment_id: uuid.UUID, actor_user_id: uuid.UUID | None) -> Deployment:
+        stored = await self._deployments.get(deployment_id)
+        self.require_owner(stored, actor_user_id)
+        stored.status = DeploymentStatus.cancelled
+        stored.finished_at = datetime.now(UTC)
+        stored.draft_step = None
+        stored.draft_plan = None
+        return stored
+
+    async def launch(
+        self, deployment_id: uuid.UUID, body: DeploymentDraftLaunch, actor_user_id: uuid.UUID | None
+    ) -> Deployment:
+        stored = await self._deployments.get(deployment_id)
+        self.require_owner(stored, actor_user_id)
+        merged = merge_plan(self.open(stored.draft_plan), body.plan)
+        if merged.step != "launch":
+            raise UnprocessableError("Confirm the launch step before deploying.")
+        environment = await self._environments.get(body.project_id, body.environment_id)
+        stored.project_id = body.project_id
+        stored.environment_id = body.environment_id
+        self.apply(stored, merged)
+        await self._approval.enqueue_or_defer(
+            environment,
+            actor_user_id,
+            stored.id,
+            env_vars=plain_values(merged) or None,
+            addons=list(merged.selected_addons) or None,
+            port=merged.blueprint.build.port,
+            service=merged.blueprint.build.service or None,
+        )
+        self.finish(stored)
+        return stored
 
     def seal(self, plan: DeploymentDraftPlan) -> str:
         raw = plan.model_dump_json()
@@ -75,9 +174,9 @@ class DeploymentDraftService:
         try:
             raw = decrypt_env_value(token, self._signing_key)
             payload = json.loads(raw)
+            return DeploymentDraftPlan.model_validate(payload)
         except (InvalidToken, json.JSONDecodeError, ValidationError, UnicodeError, ValueError) as exc:
             raise ConflictError("Deployment draft could not be read.") from exc
-        return DeploymentDraftPlan.model_validate(payload)
 
     def require_owner(self, deployment: Deployment, actor_user_id: uuid.UUID | None) -> None:
         if deployment.status is not DeploymentStatus.draft:

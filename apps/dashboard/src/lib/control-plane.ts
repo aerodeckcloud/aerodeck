@@ -883,7 +883,7 @@ export async function listControlPlaneProjectDeployments(
   config: ControlPlaneConfig,
   projectId: string,
   environmentId?: string,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment[]> {
   if (!isControlPlaneUuid(projectId)) {
     throw new ControlPlaneError("projectId must be a uuid");
@@ -898,10 +898,17 @@ export async function listControlPlaneProjectDeployments(
   if (environmentId) {
     query.set("environment_id", environmentId);
   }
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${accessToken}`,
+  };
+  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
+    headers["x-aerodeck-user-id"] = options.actorUserId;
+  }
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/deployments?${query.toString()}`,
     {
-      headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+      headers,
       cache: "no-store",
     },
   );
@@ -2481,7 +2488,7 @@ export async function createControlPlaneDeploymentAndProvision(
 export async function getControlPlaneDeployment(
   config: ControlPlaneConfig,
   deploymentId: string,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   if (!isControlPlaneUuid(deploymentId)) {
     throw new ControlPlaneError("control plane deployment id was not a uuid");
@@ -2489,13 +2496,17 @@ export async function getControlPlaneDeployment(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${accessToken}`,
+  };
+  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
+    headers["x-aerodeck-user-id"] = options.actorUserId;
+  }
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}`,
     {
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${accessToken}`,
-      },
+      headers,
       cache: "no-store",
     },
   );

@@ -8,6 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.deployment import Deployment, DeploymentStatus
 
 
+def drafts_visible_to(actor_user_id: uuid.UUID | None) -> ColumnElement[bool]:
+    """Drafts are visible only to the operator who saved them (#343)."""
+    visible = Deployment.status != DeploymentStatus.draft
+    if actor_user_id is None:
+        return visible
+    return or_(visible, Deployment.actor_user_id == actor_user_id)
+
+
 def _awaiting_approval(deployment_id: uuid.UUID) -> tuple[ColumnElement[bool], ...]:
     """Rows still waiting for an owner. Shared by approve and reject (#276)."""
     return (
@@ -99,9 +107,7 @@ class DeploymentRepository:
     async def list(
         self, *, limit: int, offset: int, actor_user_id: uuid.UUID | None = None
     ) -> tuple[Sequence[Deployment], int]:
-        visible = Deployment.status != DeploymentStatus.draft
-        if actor_user_id is not None:
-            visible = or_(visible, Deployment.actor_user_id == actor_user_id)
+        visible = drafts_visible_to(actor_user_id)
         total = await self._session.scalar(select(func.count()).select_from(Deployment).where(visible))
         rows = await self._session.scalars(
             select(Deployment)
@@ -119,8 +125,12 @@ class DeploymentRepository:
         environment_id: uuid.UUID | None = None,
         limit: int,
         offset: int,
+        actor_user_id: uuid.UUID | None = None,
     ) -> tuple[Sequence[Deployment], int]:
-        base = select(Deployment).where(Deployment.project_id == project_id)
+        base = select(Deployment).where(
+            Deployment.project_id == project_id,
+            drafts_visible_to(actor_user_id),
+        )
         if environment_id is not None:
             base = base.where(Deployment.environment_id == environment_id)
         total = await self._session.scalar(select(func.count()).select_from(base.subquery()))

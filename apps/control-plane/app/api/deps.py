@@ -260,13 +260,6 @@ def get_deployment_service(
 DeploymentServiceDep = Annotated[DeploymentService, Depends(get_deployment_service)]
 
 
-def get_deployment_draft_service(settings: SettingsDep) -> DeploymentDraftService:
-    return DeploymentDraftService(settings.auth_signing_key.get_secret_value())
-
-
-DeploymentDraftServiceDep = Annotated[DeploymentDraftService, Depends(get_deployment_draft_service)]
-
-
 def get_dns_record_publisher(settings: SettingsDep) -> DnsRecordPublisher:
     if settings.dns_records_provider == "digitalocean":
         token = settings.digitalocean_token
@@ -431,6 +424,23 @@ def get_deploy_approval_service(
 
 
 DeployApprovalServiceDep = Annotated[DeployApprovalService, Depends(get_deploy_approval_service)]
+
+
+def get_deployment_draft_service(
+    settings: SettingsDep,
+    deployments: DeploymentServiceDep,
+    environments: EnvironmentServiceDep,
+    approval: DeployApprovalServiceDep,
+) -> DeploymentDraftService:
+    return DeploymentDraftService(
+        settings.auth_signing_key.get_secret_value(),
+        deployments,
+        environments,
+        approval,
+    )
+
+
+DeploymentDraftServiceDep = Annotated[DeploymentDraftService, Depends(get_deployment_draft_service)]
 
 
 def get_webhook_service(
