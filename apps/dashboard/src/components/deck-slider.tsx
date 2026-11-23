@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useRef, useState, type JSX, type KeyboardEvent } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -128,17 +128,15 @@ export function DeckSlider() {
   );
 }
 
+const FRAME_PICTURES: Record<FrameId, () => JSX.Element> = {
+  approach: ApproachPicture,
+  runway: RunwayPicture,
+  tower: TowerPicture,
+  pad: PadPicture,
+};
+
 function FramePicture({ id }: { id: FrameId }) {
-  if (id === "approach") {
-    return <ApproachPicture />;
-  }
-  if (id === "runway") {
-    return <RunwayPicture />;
-  }
-  if (id === "tower") {
-    return <TowerPicture />;
-  }
-  return <PadPicture />;
+  return FRAME_PICTURES[id]();
 }
 
 function ApproachPicture() {
