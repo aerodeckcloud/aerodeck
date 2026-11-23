@@ -274,16 +274,21 @@ class DeploymentService:
         project_id: uuid.UUID,
         environment_id: uuid.UUID,
         entries: dict[str, EnvVarPlainEntry],
+        *,
+        commit: bool = True,
     ) -> None:
-        """Write the snapshot into the environment after enqueue has succeeded (#273).
+        """Write the snapshot into the environment once the rollback job is dispatched (#273).
 
-        Re-acquires the deploy lock when a prior enqueue commit released it.
+        The caller holds the deploy lock. ``commit`` is False when this write must
+        share the dispatch commit so a concurrent provision cannot observe the
+        restored map without the job.
         """
         if self._env_vars is None:
             return
         await self._environments.lock_for_deploy(environment_id)
         await self._env_vars.replace_exact(project_id, environment_id, entries)
-        await self.commit()
+        if commit:
+            await self.commit()
         logger.info(
             "event=deployment_env_vars_restored environment=%s keys=%d",
             environment_id,

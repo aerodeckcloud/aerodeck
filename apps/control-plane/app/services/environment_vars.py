@@ -300,23 +300,6 @@ class EnvironmentVariableService:
             )
             return None
 
-    async def replace_all(
-        self,
-        project_id: uuid.UUID,
-        environment_id: uuid.UUID,
-        values: dict[str, str],
-    ) -> list[str]:
-        """Make the environment match ``values`` exactly. Returns the keys written.
-
-        Keys not in ``values`` are deleted. Restored values are marked secret so
-        a snapshot never weakens a key that was secret before (#273).
-        """
-        return await self.replace_exact(
-            project_id,
-            environment_id,
-            {key: EnvVarPlain(value, True) for key, value in values.items()},
-        )
-
     async def replace_exact(
         self,
         project_id: uuid.UUID,

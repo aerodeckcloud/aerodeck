@@ -44,7 +44,8 @@ class DeploymentRollback(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    # When the source has a snapshot, default True restores it before the image swap.
+    # When the source has a snapshot, default True restores it once the image
+    # rollback is dispatched. A row that only waits does not change variables.
     restore_variables: bool = True
 
 

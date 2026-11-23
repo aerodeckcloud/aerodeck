@@ -21,6 +21,8 @@ class ProvisionReplay:
     promote_from_deployment_id: uuid.UUID | None = None
     addons: list[str] | None = None
     sealed_env_vars: str | None = None
+    # Full replace map for a rollback, distinct from one-off overlays (#273).
+    sealed_replace_env_vars: str | None = None
 
     def to_json(self) -> str | None:
         payload: dict[str, object] = {}
@@ -34,6 +36,8 @@ class ProvisionReplay:
             payload["addons"] = self.addons
         if self.sealed_env_vars:
             payload["sealed_env_vars"] = self.sealed_env_vars
+        if self.sealed_replace_env_vars:
+            payload["sealed_replace_env_vars"] = self.sealed_replace_env_vars
         return json.dumps(payload) if payload else None
 
     @classmethod
@@ -61,6 +65,7 @@ class ProvisionReplay:
             if isinstance(addons, list) and addons and all(isinstance(item, str) for item in addons)
             else None,
             sealed_env_vars=_text(payload.get("sealed_env_vars")),
+            sealed_replace_env_vars=_text(payload.get("sealed_replace_env_vars")),
         )
 
 

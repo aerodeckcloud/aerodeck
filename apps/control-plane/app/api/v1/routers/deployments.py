@@ -139,7 +139,7 @@ async def create_deployment(
         trigger=DeploymentTrigger.manual,
         actor_user_id=await _known_actor(users, actor_user_id),
     )
-    payload = DeploymentRead.model_validate(created)
+    payload = deployments.to_read(created)
     if payload.project_id is not None:
         await audit.record(
             project_id=payload.project_id,
@@ -298,7 +298,7 @@ async def _enqueue_copy(
     )
     refreshed = await deployments.get(created.id)
     await deployments.refresh(refreshed)
-    return DeploymentRead.model_validate(refreshed)
+    return deployments.to_read(refreshed)
 
 
 @router.post(
@@ -366,7 +366,7 @@ async def cancel_deployment(
     # Same rule as the outcome routes: without a queue the waiter stays queued.
     if release is not None:
         await release.release_waiting(stored)
-    return DeploymentRead.model_validate(stored)
+    return deployments.to_read(stored)
 
 
 @router.post(
@@ -385,6 +385,7 @@ async def promote_deployment(
     deployment_id: uuid.UUID,
     body: DeploymentPromote,
     promotions: PromotionServiceDep,
+    deployments: DeploymentServiceDep,
     users: ConsoleUserServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
@@ -395,7 +396,7 @@ async def promote_deployment(
         actor_user_id=actor_user_id,
         recorded_actor_id=await _known_actor(users, actor_user_id),
     )
-    return DeploymentRead.model_validate(promoted)
+    return deployments.to_read(promoted)
 
 
 @router.post(

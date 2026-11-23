@@ -16,6 +16,7 @@ def test_round_trip_keeps_every_field() -> None:
         promote_from_deployment_id=uuid.uuid4(),
         addons=["redis"],
         sealed_env_vars="sealed-token",
+        sealed_replace_env_vars="sealed-replace",
     )
 
     assert ProvisionReplay.from_json(replay.to_json()) == replay

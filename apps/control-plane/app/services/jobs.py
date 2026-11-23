@@ -32,6 +32,7 @@ from app.services.deployment_logs import (
 )
 from app.services.deployments import DeploymentService
 from app.services.environments import EnvironmentService
+from app.services.environment_vars import EnvVarPlain
 from app.services.provision_replay import ProvisionReplay
 from app.services.provisioning import JobKind
 
@@ -65,6 +66,10 @@ class EnvironmentVarLoader(Protocol):
     def seal(self, values: dict[str, str]) -> str: ...
 
     def unseal(self, token: str) -> dict[str, str]: ...
+
+    def seal_snapshot(self, entries: dict[str, EnvVarPlain]) -> str: ...
+
+    def try_unseal_snapshot(self, token: str) -> dict[str, EnvVarPlain] | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +134,7 @@ class JobService:
         *,
         deployment_id: uuid.UUID | None = None,
         env_vars: dict[str, str] | None = None,
-        replace_env_vars: dict[str, str] | None = None,
+        replace_env_vars: dict[str, EnvVarPlain] | None = None,
         addons: list[str] | None = None,
         rollback_from_deployment_id: uuid.UUID | None = None,
         promote_from_deployment_id: uuid.UUID | None = None,
@@ -145,7 +150,7 @@ class JobService:
         merged_env: dict[str, str] = {}
         if replace_env_vars is not None:
             # Full map for rollback restore: do not merge with the live environment (#273).
-            merged_env.update(replace_env_vars)
+            merged_env.update({key: entry.value for key, entry in replace_env_vars.items()})
         elif kind is JobKind.provision and self._env_var_loader is not None:
             merged_env.update(await self._env_var_loader.load_decrypted_map(project_id, environment_id))
         if env_vars:
@@ -184,6 +189,7 @@ class JobService:
                         promote_from_deployment_id=promote_from_deployment_id,
                         addons=addons,
                         sealed_env_vars=self._seal(env_vars),
+                        sealed_replace_env_vars=self._seal_replace(replace_env_vars),
                     ),
                 )
             # Seed a non-Done line before the worker runs so SSE cannot stub Done
@@ -215,6 +221,15 @@ class JobService:
             raise
         if linked_deployment_id is not None:
             # From here the row is the active deploy of its environment.
+            # Restore shares this commit so a waiting rollback never writes the
+            # live map, and a failed dispatch never leaves a restore behind (#273).
+            if replace_env_vars is not None:
+                await self._deployments.apply_snapshot_entries(
+                    environment.project_id,
+                    environment.id,
+                    replace_env_vars,
+                    commit=False,
+                )
             await self._deployments.mark_dispatched(linked_deployment_id)
             await self._persist_progress()
             await self._revoke_all(admission.superseded_jobs)
@@ -253,6 +268,7 @@ class JobService:
                 finished.environment_id,
                 deployment_id=waiter.id,
                 env_vars=self._unseal(replay.sealed_env_vars),
+                replace_env_vars=self._unseal_replace(replay.sealed_replace_env_vars),
                 addons=replay.addons,
                 rollback_from_deployment_id=replay.rollback_from_deployment_id,
                 promote_from_deployment_id=replay.promote_from_deployment_id,
@@ -419,6 +435,24 @@ class JobService:
         if self._env_var_loader is None:
             raise RuntimeError("One-off variables cannot be read without the variable service.")
         return self._env_var_loader.unseal(token)
+
+    def _seal_replace(self, entries: dict[str, EnvVarPlain] | None) -> str | None:
+        """Encrypt a rollback replace map so a waiting row can apply it later (#273)."""
+        if entries is None:
+            return None
+        if self._env_var_loader is None:
+            raise RuntimeError("A variable snapshot cannot be kept without the variable service.")
+        return self._env_var_loader.seal_snapshot(entries)
+
+    def _unseal_replace(self, token: str | None) -> dict[str, EnvVarPlain] | None:
+        if not token:
+            return None
+        if self._env_var_loader is None:
+            raise RuntimeError("A variable snapshot cannot be read without the variable service.")
+        entries = self._env_var_loader.try_unseal_snapshot(token)
+        if entries is None:
+            raise UnprocessableError("The waiting rollback lost its variable snapshot.")
+        return entries
 
     async def _remember_provision_job_id(self, deployment_id: uuid.UUID, job_id: str) -> None:
         """Parse job id then best-effort persist (hook is try_* and must not raise)."""

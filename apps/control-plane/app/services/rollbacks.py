@@ -34,12 +34,11 @@ class RollbackService:
         restore_variables: bool,
         actor_user_id: uuid.UUID | None,
     ) -> tuple[Deployment, bool]:
-        """Enqueue the image retag, then apply the variable snapshot only on success.
+        """Enqueue the image retag. Apply the snapshot only when that job is dispatched.
 
-        The snapshot is unsealed up front and passed as ``replace_env_vars`` so the
-        worker gets the release map without mutating the live environment first.
-        ``replace_exact`` runs only after enqueue returns, so a dispatch failure
-        never leaves restored variables durable or unlocked for another provision.
+        The snapshot is passed as ``replace_env_vars`` so the worker gets the release
+        map without mutating the live environment first. A rollback that only waits
+        stores the sealed map on the replay; cancel leaves variables unchanged (#273).
         """
         source = await self._deployments.get(deployment_id)
         if source.project_id is None or source.environment_id is None:
@@ -64,10 +63,8 @@ class RollbackService:
             trigger=DeploymentTrigger.rollback,
             actor_user_id=actor_user_id,
         )
-        replace_env_vars = (
-            {key: entry.value for key, entry in entries.items()} if entries is not None else None
-        )
-        await self._jobs.enqueue(
+        replace_env_vars = entries if entries is not None else None
+        ticket = await self._jobs.enqueue(
             JobKind.provision,
             source.project_id,
             source.environment_id,
@@ -75,13 +72,9 @@ class RollbackService:
             rollback_from_deployment_id=source.id,
             replace_env_vars=replace_env_vars,
         )
-
-        variables_restored = False
-        if entries is not None:
-            await self._deployments.apply_snapshot_entries(
-                source.project_id, source.environment_id, entries
-            )
-            variables_restored = True
+        # A held rollback keeps the sealed map on the replay and does not touch
+        # the live variables until that job is actually dispatched.
+        variables_restored = ticket.job_id is not None and entries is not None
 
         logger.info(
             "event=deployment_rollback source=%s deployment=%s variables_restored=%s",
