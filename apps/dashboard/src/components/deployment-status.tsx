@@ -330,7 +330,10 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
           {error}
         </p>
       ) : null}
+      {/* The stream opened while waiting may have ended before the deployment
+          started. Changing the key opens a fresh one that replays from the top. */}
       <Terminal
+        key={waiting ? "waiting" : "started"}
         streamUrl={deploymentLogsUrl(deployment.id, logSource)}
         onComplete={() => recordOutcome("succeeded")}
         onFailed={() => recordOutcome("failed")}
