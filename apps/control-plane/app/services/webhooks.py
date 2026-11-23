@@ -46,6 +46,21 @@ class DeploymentCreator(Protocol):
     async def create(self, data: DeploymentCreate) -> Any: ...
 
 
+class DeployApprovalGate(Protocol):
+    """The two approval calls a webhook uses. None means approval is not wired."""
+
+    async def note_auto_deploy_skipped(self, environment: Environment) -> None: ...
+
+    async def enqueue_or_defer(
+        self,
+        environment: Environment,
+        actor_user_id: uuid.UUID | None,
+        deployment_id: uuid.UUID,
+        *,
+        addons: list[str] | None = None,
+    ) -> object | None: ...
+
+
 class JobEnqueuer(Protocol):
     async def enqueue(
         self,
@@ -192,7 +207,7 @@ class WebhookService:
         *,
         signing_key: str,
         pr_previews: Any = None,
-        approval: Any = None,
+        approval: DeployApprovalGate | None = None,
     ) -> None:
         self._repo = repo
         self._environments = environments

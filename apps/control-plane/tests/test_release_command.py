@@ -7,8 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
-from app.services.docker_policy import SubprocessCommandRunner, parse_release_command
-from app.services.provisioning import PermanentJobError, TransientJobError
+from app.services.docker_policy import CommandTimeoutError, SubprocessCommandRunner, parse_release_command
 
 
 def test_parse_release_command_splits_an_executable_and_arguments() -> None:
@@ -22,15 +21,22 @@ def test_parse_release_command_splits_an_executable_and_arguments() -> None:
     ["echo a && echo b", "echo a | wc", "echo a; echo b", "echo `id`", "echo a\necho b", "'unterminated"],
 )
 def test_parse_release_command_rejects_a_shell_script(command: str) -> None:
-    with pytest.raises(PermanentJobError, match="not a shell script"):
+    with pytest.raises(ValueError, match="not a shell script"):
         parse_release_command(command)
+
+
+def test_parse_release_command_treats_a_backslash_as_an_escape() -> None:
+    """The API is authoritative. A trailing backslash is invalid; an escaped space joins tokens."""
+    assert parse_release_command("echo a\\ b") == ["echo", "a b"]
+    with pytest.raises(ValueError):
+        parse_release_command("echo a\\")
 
 
 def test_streaming_runner_times_out_while_stdout_stays_open() -> None:
     """A process that prints and then hangs must hit the deadline before the pipe closes."""
     lines: list[str] = []
     started = time.monotonic()
-    with pytest.raises(TransientJobError, match="timed out after 2s"):
+    with pytest.raises(CommandTimeoutError, match="timed out after 2s"):
         SubprocessCommandRunner().run(
             [sys.executable, "-c", "import time; print('still going', flush=True); time.sleep(30)"],
             timeout=2,

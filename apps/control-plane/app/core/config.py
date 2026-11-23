@@ -153,6 +153,8 @@ class Settings(BaseSettings):
     docker_pids_limit: int = Field(default=DOCKER_DEFAULT_PIDS_LIMIT, ge=16, le=4096)
     docker_build_timeout_seconds: int = Field(default=DOCKER_DEFAULT_BUILD_TIMEOUT_SECONDS, ge=30, le=1800)
     docker_health_timeout_seconds: int = Field(default=DOCKER_DEFAULT_HEALTH_TIMEOUT_SECONDS, ge=1, le=300)
+    # Unprefixed on purpose: this limits the operator command, not the Docker engine.
+    # The docker_ settings configure the binary, host, runtime, and resource limits.
     release_command_timeout_seconds: int = Field(
         default=DOCKER_DEFAULT_RELEASE_COMMAND_TIMEOUT_SECONDS,
         ge=1,
