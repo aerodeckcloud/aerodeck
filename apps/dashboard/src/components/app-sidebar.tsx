@@ -80,7 +80,7 @@ export function AppSidebar({ mobileOpen, onCloseMobile, controlPlane = false }: 
 
         <nav className="flex flex-1 flex-col gap-1 p-3">
           <p className="mb-1 px-2.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
-            Operate
+            Flight
           </p>
           {NAV.map((item) => {
             const Icon = item.icon;
