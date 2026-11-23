@@ -52,12 +52,14 @@ class EnvironmentCreate(BaseModel):
     deploy_overlap: DeployOverlap = DeployOverlap.wait
     rollback_images_to_keep: RollbackImagesToKeep = 5
     release_command: ReleaseCommand = None
+    # Accepted and ignored. Create never starts paused; an owner pauses later (#276).
     auto_deploy_paused: bool = False
     # Accepted and ignored. A new prod environment always requires approval (#276).
     prod_deploy_approval: bool | None = None
 
     @model_validator(mode="after")
-    def default_prod_approval(self) -> Self:
+    def default_release_controls(self) -> Self:
+        self.auto_deploy_paused = False
         self.prod_deploy_approval = self.kind is EnvironmentKind.prod
         return self
 

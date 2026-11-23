@@ -120,6 +120,7 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
   const environments = useEnvironmentCatalog(logSource === "control-plane" && hasLinkedEnv);
   const copy = logSourceCopy(logSource);
   const waiting = logSource === "control-plane" && isDeploymentWaiting(status, heldFor);
+  const shouldPoll = waiting || awaitingApproval;
 
   const applyStored = useCallback((stored: Deployment) => {
     setStatus(stored.status);
@@ -128,9 +129,9 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
     setAwaitingApproval(isAwaitingApproval(stored));
   }, []);
 
-  // A waiting deployment starts on its own, so re-read it until it does.
+  // Re-read until a waiting deploy starts, or an owner approves from this page or another session.
   useEffect(() => {
-    if (!waiting) {
+    if (!shouldPoll) {
       return;
     }
     let stopped = false;
@@ -149,30 +150,7 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
       stopped = true;
       clearInterval(timer);
     };
-  }, [waiting, deployment.id, applyStored]);
-
-  // An owner approves from this page or another session. Re-read until they do.
-  useEffect(() => {
-    if (!awaitingApproval) {
-      return;
-    }
-    let stopped = false;
-    const timer = setInterval(() => {
-      void fetchDeployment(deployment.id, true)
-        .then((stored) => {
-          if (!stopped) {
-            applyStored(stored);
-          }
-        })
-        .catch(() => {
-          // Best-effort: the next tick tries again.
-        });
-    }, WAITING_POLL_MS);
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
-  }, [awaitingApproval, deployment.id, applyStored]);
+  }, [shouldPoll, deployment.id, applyStored]);
 
   useEffect(() => {
     if (logSource !== "control-plane" || !deployment.project_id || !deployment.environment_id) {

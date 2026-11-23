@@ -113,6 +113,7 @@ async def test_new_prod_requires_approval_and_existing_flags_stay_off(
             "kind": "prod",
             "region": "ams3",
             "prod_deploy_approval": False,
+            "auto_deploy_paused": True,
         },
         headers=auth,
     )
@@ -122,6 +123,7 @@ async def test_new_prod_requires_approval_and_existing_flags_stay_off(
 
     assert prod["prod_deploy_approval"] is True
     assert forced["prod_deploy_approval"] is True
+    assert forced["auto_deploy_paused"] is False
     assert prod["auto_deploy_paused"] is False
     assert dev["prod_deploy_approval"] is False
     assert dev["auto_deploy_paused"] is False
