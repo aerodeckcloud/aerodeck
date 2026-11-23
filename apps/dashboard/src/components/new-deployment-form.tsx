@@ -24,20 +24,33 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   createDeployment,
+  createDeployDraft,
   fetchEnvironmentVars,
   fetchLogSource,
   inspectDeploymentRepo,
+  launchDeployDraft,
   ProvisionEnqueueFailed,
+  readDeployDraft,
+  updateDeployDraft,
   upsertEnvironmentVars,
 } from "@/lib/api";
 import { knownDetectedAddons } from "@/lib/deploy-addons";
+import { deployStepPath, type DeployDraftPlan, type DeployRouteStep } from "@/lib/deploy-draft";
 import { applyBuildConfirmation, launchBuildFields } from "@/lib/deploy-build";
 import { environmentOptionKey } from "@/lib/environment-option";
 import { parseGithubRepo } from "@/lib/github";
 import type { AddonType, DeploymentBlueprint } from "@/lib/types";
 import { useDeployEnvironments } from "@/lib/use-deploy-environments";
 
-export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boolean }) {
+export function NewDeploymentForm({
+  controlPlane = false,
+  routeStep = "repository",
+  draftId,
+}: {
+  controlPlane?: boolean;
+  routeStep?: DeployRouteStep;
+  draftId?: string;
+}) {
   const router = useRouter();
   const [effectiveControlPlane, setEffectiveControlPlane] = useState(controlPlane);
   const isControlPlane = controlPlane || effectiveControlPlane;
@@ -51,11 +64,13 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
   const [repoUrl, setRepoUrl] = useState("");
   const [envVarsText, setEnvVarsText] = useState("");
   const [blueprint, setBlueprint] = useState<DeploymentBlueprint | null>(null);
-  const [step, setStep] = useState<"repository" | "build" | "resources" | "launch">("repository");
+  const [step, setStep] = useState<DeployRouteStep>(routeStep);
   const [portDraft, setPortDraft] = useState("");
   const [serviceDraft, setServiceDraft] = useState("");
   const [portInvalid, setPortInvalid] = useState(false);
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  const [redactedKeys, setRedactedKeys] = useState<Set<string>>(() => new Set());
+  const [draftReady, setDraftReady] = useState(draftId === undefined);
   const [detectedAddons, setDetectedAddons] = useState<AddonType[]>([]);
   const [selectedAddons, setSelectedAddons] = useState<AddonType[]>([]);
   const [inspecting, setInspecting] = useState(false);
@@ -95,6 +110,66 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
     };
   }, [isControlPlane, environments, environmentKey]);
 
+  function planFor(nextStep: DeployDraftPlan["step"], source: DeploymentBlueprint): DeployDraftPlan {
+    return {
+      step: nextStep,
+      blueprint: source,
+      detected_addons: detectedAddons,
+      selected_addons: selectedAddons,
+      extra_env: envVarsText,
+      variables: source.env.map((item) => {
+        const value = fieldValues[item.key] ?? "";
+        return {
+          key: item.key,
+          value,
+          secret: item.secret,
+          redacted: item.secret && value.length === 0 && redactedKeys.has(item.key),
+        };
+      }),
+    };
+  }
+
+  useEffect(() => {
+    if (!draftId) {
+      return;
+    }
+    let cancelled = false;
+    void readDeployDraft(draftId)
+      .then((saved) => {
+        if (cancelled) {
+          return;
+        }
+        const plan = saved.plan;
+        setRepoUrl(plan.blueprint.repo_url);
+        setBlueprint(plan.blueprint);
+        setPortDraft(String(plan.blueprint.build.port));
+        setServiceDraft(plan.blueprint.build.service ?? "");
+        setDetectedAddons(plan.detected_addons);
+        setSelectedAddons(plan.selected_addons);
+        setEnvVarsText(plan.extra_env);
+        const fields: Record<string, string> = {};
+        const redacted = new Set<string>();
+        for (const item of plan.variables) {
+          fields[item.key] = item.value;
+          if (item.redacted) {
+            redacted.add(item.key);
+          }
+        }
+        setFieldValues(fields);
+        setRedactedKeys(redacted);
+        setDraftReady(true);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          setError(cause instanceof Error ? cause.message : "Could not open this draft.");
+          setDraftReady(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [draftId]);
+
   async function handleInspect() {
     setError(null);
     setRepoInvalid(false);
@@ -119,6 +194,22 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
       const detected = knownDetectedAddons(bp.addons.map((addon) => addon.type));
       setDetectedAddons(detected);
       setSelectedAddons(detected);
+      if (isControlPlane) {
+        const saved = await createDeployDraft(repoUrl.trim(), {
+          step: "build",
+          blueprint: bp,
+          detected_addons: detected,
+          selected_addons: detected,
+          extra_env: "",
+          variables: bp.env.map((item) => ({
+            key: item.key,
+            value: item.default ?? "",
+            secret: item.secret,
+            redacted: false,
+          })),
+        });
+        router.push(deployStepPath(saved.deployment.id, "build"));
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to inspect repository.");
     } finally {
@@ -159,14 +250,33 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
         setError("Enter a port from 1 to 65535.");
         return;
       }
-      setBlueprint({ ...blueprint, build: confirmed });
+      const confirmedBlueprint = { ...blueprint, build: confirmed };
+      setBlueprint(confirmedBlueprint);
       setPortDraft(String(confirmed.port));
       setServiceDraft(confirmed.service ?? "");
+      if (draftId) {
+        try {
+          await updateDeployDraft(draftId, planFor("resources", confirmedBlueprint));
+          router.push(deployStepPath(draftId, "resources"));
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Could not save this step.");
+        }
+        return;
+      }
       setStep("resources");
       return;
     }
 
     if (isControlPlane && blueprint && step === "resources") {
+      if (draftId) {
+        try {
+          await updateDeployDraft(draftId, planFor("launch", blueprint));
+          router.push(deployStepPath(draftId, "launch"));
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Could not save this step.");
+        }
+        return;
+      }
       setStep("launch");
       return;
     }
@@ -176,6 +286,7 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
         (item) =>
           item.required &&
           !savedEnvKeys.has(item.key) &&
+          !redactedKeys.has(item.key) &&
           (fieldValues[item.key] ?? "").trim().length === 0,
       );
       if (missing) {
@@ -229,7 +340,15 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
           await upsertEnvironmentVars(target.projectId, target.environmentId, items);
         }
       }
-      const deployment = isControlPlane && target ? await createDeployment(repoUrl, true, target) : await createDeployment(repoUrl, false);
+      const deployment =
+        isControlPlane && target && draftId && blueprint
+          ? await launchDeployDraft(draftId, planFor("launch", blueprint), {
+              projectId: target.projectId,
+              environmentId: target.environmentId,
+            })
+          : isControlPlane && target
+            ? await createDeployment(repoUrl, true, target)
+            : await createDeployment(repoUrl, false);
       router.push(`/deployments/${deployment.id}`);
     } catch (cause) {
       if (cause instanceof ProvisionEnqueueFailed) {
@@ -249,6 +368,10 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
     !enqueueBlocked &&
     repoUrl.trim().length > 0 &&
     (!isControlPlane || (environmentKey.length > 0 && !loadingEnvironments));
+
+  if (draftId && !draftReady) {
+    return <p className="text-sm text-muted-foreground">Loading draft…</p>;
+  }
 
   return (
     <Card className="overflow-hidden ring-primary/15">
@@ -287,7 +410,11 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
                   setRepoUrl(value);
                   if (blueprint) {
                     setBlueprint(null);
-                    setStep("repository");
+                    if (draftId) {
+                      router.push("/deploy");
+                    } else {
+                      setStep("repository");
+                    }
                     setPortDraft("");
                     setServiceDraft("");
                     setPortInvalid(false);
@@ -386,12 +513,38 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
         </CardContent>
         <CardFooter className="justify-end gap-2">
           {step === "resources" ? (
-            <Button type="button" variant="outline" size="lg" onClick={() => setStep("build")}>
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={() => {
+                if (draftId && blueprint) {
+                  void updateDeployDraft(draftId, planFor("build", blueprint)).then(() => {
+                    router.push(deployStepPath(draftId, "build"));
+                  });
+                  return;
+                }
+                setStep("build");
+              }}
+            >
               Change build
             </Button>
           ) : null}
           {step === "launch" ? (
-            <Button type="button" variant="outline" size="lg" onClick={() => setStep("resources")}>
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={() => {
+                if (draftId && blueprint) {
+                  void updateDeployDraft(draftId, planFor("resources", blueprint)).then(() => {
+                    router.push(deployStepPath(draftId, "resources"));
+                  });
+                  return;
+                }
+                setStep("resources");
+              }}
+            >
               Change databases
             </Button>
           ) : null}

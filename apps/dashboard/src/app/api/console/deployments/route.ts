@@ -25,7 +25,7 @@ export async function GET() {
   }
 
   try {
-    const items = await listControlPlaneDeployments(config);
+    const items = await listControlPlaneDeployments(config, { actorUserId: user.id });
     return NextResponse.json(items);
   } catch (cause) {
     const detail = cause instanceof ControlPlaneError ? cause.message : "request failed";

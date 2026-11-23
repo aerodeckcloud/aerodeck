@@ -34,6 +34,7 @@ from app.services.certificate_keys import FileCertificateKeyStore
 from app.services.certificates import CertificateService
 from app.services.console_sessions import ConsoleSessionService
 from app.services.console_users import ConsoleUserService
+from app.services.deployment_draft import DeploymentDraftService
 from app.services.deployment_terminal import DeploymentTerminalService
 from app.services.deploy_approval import DeployApprovalService
 from app.services.deployments import DeploymentService
@@ -257,6 +258,13 @@ def get_deployment_service(
 
 
 DeploymentServiceDep = Annotated[DeploymentService, Depends(get_deployment_service)]
+
+
+def get_deployment_draft_service(settings: SettingsDep) -> DeploymentDraftService:
+    return DeploymentDraftService(settings.auth_signing_key.get_secret_value())
+
+
+DeploymentDraftServiceDep = Annotated[DeploymentDraftService, Depends(get_deployment_draft_service)]
 
 
 def get_dns_record_publisher(settings: SettingsDep) -> DnsRecordPublisher:

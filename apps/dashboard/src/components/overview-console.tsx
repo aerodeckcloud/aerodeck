@@ -151,6 +151,8 @@ function statusLamp(status: DeploymentStatus): string {
       return "bg-destructive";
     case "cancelled":
       return "bg-muted-foreground/40";
+    case "draft":
+      return "bg-runway";
   }
 }
 

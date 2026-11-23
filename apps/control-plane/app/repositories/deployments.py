@@ -2,7 +2,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import ColumnElement, func, select, update
+from sqlalchemy import ColumnElement, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.deployment import Deployment, DeploymentStatus
@@ -96,10 +96,19 @@ class DeploymentRepository:
             .values(project_id=None, environment_id=None)
         )
 
-    async def list(self, *, limit: int, offset: int) -> tuple[Sequence[Deployment], int]:
-        total = await self._session.scalar(select(func.count()).select_from(Deployment))
+    async def list(
+        self, *, limit: int, offset: int, actor_user_id: uuid.UUID | None = None
+    ) -> tuple[Sequence[Deployment], int]:
+        visible = Deployment.status != DeploymentStatus.draft
+        if actor_user_id is not None:
+            visible = or_(visible, Deployment.actor_user_id == actor_user_id)
+        total = await self._session.scalar(select(func.count()).select_from(Deployment).where(visible))
         rows = await self._session.scalars(
-            select(Deployment).order_by(Deployment.started_at.desc(), Deployment.id.desc()).limit(limit).offset(offset)
+            select(Deployment)
+            .where(visible)
+            .order_by(Deployment.started_at.desc(), Deployment.id.desc())
+            .limit(limit)
+            .offset(offset)
         )
         return rows.all(), int(total or 0)
 

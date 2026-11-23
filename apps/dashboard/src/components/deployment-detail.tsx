@@ -1,9 +1,11 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { DeploymentStatusView } from "@/components/deployment-status";
 import { fetchDeployment, fetchLogSource } from "@/lib/api";
+import { deployStepPath } from "@/lib/deploy-draft";
 import type { Deployment, ProjectSource } from "@/lib/types";
 
 export function DeploymentDetail({
@@ -13,6 +15,7 @@ export function DeploymentDetail({
   id: string;
   controlPlane?: boolean;
 }) {
+  const router = useRouter();
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [logSource, setLogSource] = useState<ProjectSource | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -25,12 +28,16 @@ export function DeploymentDetail({
           id,
           controlPlane || source === "control-plane",
         );
+        if (nextDeployment.status === "draft") {
+          router.replace(deployStepPath(nextDeployment.id, nextDeployment.draft_step ?? "build"));
+          return;
+        }
         setDeployment(nextDeployment);
       })
       .catch((cause: unknown) => {
         setError(cause instanceof Error ? cause.message : "Deployment not found.");
       });
-  }, [id, controlPlane]);
+  }, [id, controlPlane, router]);
 
   if (error) {
     return (

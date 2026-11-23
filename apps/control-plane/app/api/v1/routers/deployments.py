@@ -9,6 +9,7 @@ provision that ended without ``Done``. Neither call touches DigitalOcean.
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -20,6 +21,7 @@ from app.api.deps import (
     ClientDep,
     ConsoleUserServiceDep,
     DeployApprovalServiceDep,
+    DeploymentDraftServiceDep,
     DeploymentServiceDep,
     EnvironmentServiceDep,
     ImageRetentionServiceDep,
@@ -30,7 +32,8 @@ from app.api.deps import (
     RollbackServiceDep,
     SettingsDep,
 )
-from app.models.deployment import DeploymentStatus, DeploymentTrigger
+from app.core.errors import UnprocessableError
+from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
 from app.services.console_users import ConsoleUserService
 from app.schemas.auth import ErrorResponse
 from app.schemas.blueprint import DeploymentBlueprint, DeploymentInspectRequest
@@ -42,6 +45,14 @@ from app.schemas.deployment import (
     DeploymentRollback,
     deployment_to_read,
 )
+from app.schemas.deployment_draft import (
+    DeploymentDraftCreate,
+    DeploymentDraftLaunch,
+    DeploymentDraftPlan,
+    DeploymentDraftRead,
+    DeploymentDraftWrite,
+)
+from app.services.deployment_draft import mask_plan, merge_plan, plain_values
 from app.services.blueprint_inspector import inspect_github_repository_sync
 from app.services.docker_policy import normalize_git_sha
 from app.services.container_logs import ContainerLogsRead, dispatch_container_logs
@@ -80,8 +91,18 @@ async def _as_sse(lines: AsyncIterator[str]) -> AsyncIterator[bytes]:
 
 
 @router.get("", response_model=Page[DeploymentRead], summary="List deployments")
-async def list_deployments(page: PaginationDep, deployments: DeploymentServiceDep) -> Page[DeploymentRead]:
-    items, total = await deployments.list(limit=page.limit, offset=page.offset)
+async def list_deployments(
+    page: PaginationDep,
+    deployments: DeploymentServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> Page[DeploymentRead]:
+    # Another operator's draft is omitted. Their own draft stays so they can resume (#343).
+    items, total = await deployments.list(
+        limit=page.limit,
+        offset=page.offset,
+        actor_user_id=await _known_actor(users, actor_user_id),
+    )
     return Page(
         items=[deployment_to_read(row) for row in items],
         total=total,
@@ -154,6 +175,142 @@ async def create_deployment(
             actor_user_id=actor_user_id,
         )
     return payload
+
+
+def _draft_read(deployment: Deployment, plan: DeploymentDraftPlan) -> DeploymentDraftRead:
+    return DeploymentDraftRead(deployment=deployment_to_read(deployment), plan=mask_plan(plan))
+
+
+@router.post(
+    "/draft",
+    response_model=DeploymentDraftRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Save a deployment draft without queueing provision (#343)",
+    responses=_UNAUTHENTICATED | _UNPROCESSABLE,
+)
+async def create_deployment_draft(
+    body: DeploymentDraftCreate,
+    deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentDraftRead:
+    created = await deployments.create(
+        DeploymentCreate(repo_url=body.repo_url),
+        trigger=DeploymentTrigger.manual,
+        actor_user_id=await _known_actor(users, actor_user_id),
+        draft=True,
+    )
+    drafts.apply(created, body.plan)
+    return _draft_read(created, body.plan)
+
+
+@router.get(
+    "/{deployment_id}/draft",
+    response_model=DeploymentDraftRead,
+    summary="Read the caller's deployment draft (#343)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED,
+)
+async def read_deployment_draft(
+    deployment_id: uuid.UUID,
+    deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentDraftRead:
+    stored = await deployments.get(deployment_id)
+    drafts.require_owner(stored, await _known_actor(users, actor_user_id))
+    plan = drafts.open(stored.draft_plan)
+    return _draft_read(stored, plan)
+
+
+@router.put(
+    "/{deployment_id}/draft",
+    response_model=DeploymentDraftRead,
+    summary="Update the caller's deployment draft (#343)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED | _UNPROCESSABLE,
+)
+async def update_deployment_draft(
+    deployment_id: uuid.UUID,
+    body: DeploymentDraftWrite,
+    deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    environments: EnvironmentServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentDraftRead:
+    stored = await deployments.get(deployment_id)
+    drafts.require_owner(stored, await _known_actor(users, actor_user_id))
+    merged = merge_plan(drafts.open(stored.draft_plan), body.plan)
+    if body.project_id is not None and body.environment_id is not None:
+        await environments.get(body.project_id, body.environment_id)
+        stored.project_id = body.project_id
+        stored.environment_id = body.environment_id
+    drafts.apply(stored, merged)
+    return _draft_read(stored, merged)
+
+
+@router.post(
+    "/{deployment_id}/discard",
+    response_model=DeploymentRead,
+    summary="Discard a draft without queueing provision (#343)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED,
+)
+async def discard_deployment_draft(
+    deployment_id: uuid.UUID,
+    deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentRead:
+    stored = await deployments.get(deployment_id)
+    drafts.require_owner(stored, await _known_actor(users, actor_user_id))
+    stored.status = DeploymentStatus.cancelled
+    stored.finished_at = datetime.now(UTC)
+    stored.draft_step = None
+    stored.draft_plan = None
+    return deployment_to_read(stored)
+
+
+@router.post(
+    "/{deployment_id}/launch",
+    response_model=DeploymentRead,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Leave draft and queue provision on the existing path (#343)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED | _UNPROCESSABLE | _UNAVAILABLE,
+)
+async def launch_deployment_draft(
+    deployment_id: uuid.UUID,
+    body: DeploymentDraftLaunch,
+    deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    environments: EnvironmentServiceDep,
+    approval: DeployApprovalServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentRead:
+    known = await _known_actor(users, actor_user_id)
+    stored = await deployments.get(deployment_id)
+    drafts.require_owner(stored, known)
+    merged = merge_plan(drafts.open(stored.draft_plan), body.plan)
+    if merged.step != "launch":
+        raise UnprocessableError("Confirm the launch step before deploying.")
+    environment = await environments.get(body.project_id, body.environment_id)
+    stored.project_id = body.project_id
+    stored.environment_id = body.environment_id
+    drafts.apply(stored, merged)
+    service = merged.blueprint.build.service or None
+    await approval.enqueue_or_defer(
+        environment,
+        known,
+        stored.id,
+        env_vars=plain_values(merged) or None,
+        addons=list(merged.selected_addons) or None,
+        port=merged.blueprint.build.port,
+        service=service,
+    )
+    drafts.finish(stored)
+    return deployment_to_read(stored)
 
 
 @router.get(
