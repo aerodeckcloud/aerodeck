@@ -2,6 +2,7 @@ import { Box, Cloud, GitBranch } from "lucide-react";
 import type { Metadata } from "next";
 
 import { BrandMark } from "@/components/brand-mark";
+import { LinkButton } from "@/components/link-button";
 import {
   Card,
   CardContent,
@@ -12,46 +13,63 @@ import {
 export const metadata: Metadata = {
   title: "About",
   description:
-    "AeroDeck is a GitOps operator console for DigitalOcean, with Firecracker sandboxes.",
+    "AeroDeck is the operator console for GitOps on DigitalOcean. A GitHub repository is the source. Sandboxes are short-lived Firecracker microVMs.",
 };
 
 const PILLARS = [
   {
     icon: GitBranch,
     tick: "bg-primary",
-    title: "GitOps console",
-    body: "Operators point AeroDeck at a GitHub repository. The control plane plans and applies from that repo instead of clicking around a cloud console.",
+    title: "A repository is the source",
+    body: "An operator points a project at a GitHub repository. Deployments launch from that repository, and the deck keeps the status, the logs, and the history with the flight.",
   },
   {
     icon: Cloud,
     tick: "bg-chart-3",
-    title: "DigitalOcean only",
-    body: "Compute, Postgres, Redis, Spaces, and DNS live on DigitalOcean. The IaC engine does not target AWS, GCP, or other clouds.",
+    title: "One cloud, on purpose",
+    body: "Compute, Postgres, Redis, Spaces, and DNS stay on DigitalOcean. A hostname is published from the project with its DNS record and its certificate. The engine does not provision any other cloud.",
   },
   {
     icon: Box,
     tick: "bg-runway",
-    title: "Firecracker sandboxes",
-    body: "Short-lived environments run in Firecracker microVMs, not long-lived shared clusters. Sandboxes expire; they are not production tenants.",
+    title: "Sandboxes that expire",
+    body: "A sandbox runs in a Firecracker microVM. It is a lab for work that should not last. It is not a production tenant, and it does not outlive the job.",
   },
 ] as const;
 
 export default function AboutPage() {
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-12 md:px-8 md:py-20">
-      <div className="mb-12 flex flex-col gap-6 sm:flex-row sm:items-end">
+      <div className="mb-14 flex flex-col gap-8 sm:flex-row sm:items-start">
         <BrandMark className="size-16 shrink-0 text-primary" />
-        <div>
+        <div className="max-w-2xl">
           <p className="font-mono text-[11px] tracking-[0.22em] text-primary uppercase">
-            Flight deck
+            About AeroDeck
           </p>
-          <h1 className="mt-2 font-heading text-4xl font-semibold tracking-tight md:text-5xl">
-            A GitOps flight deck for DigitalOcean
+          <h1 className="mt-3 font-heading text-4xl font-semibold tracking-tight md:text-5xl">
+            The flight deck for GitOps on DigitalOcean
           </h1>
-          <p className="mt-3 max-w-2xl text-sm text-muted-foreground">
-            AeroDeck is the operator console for GitOps deployments on DigitalOcean. This page is
-            static product copy — it does not call FastAPI.
-          </p>
+          <div className="mt-6 space-y-4 text-sm leading-relaxed text-muted-foreground md:text-base">
+            <p>
+              AeroDeck is the console an operator uses to run a workload from a GitHub
+              repository onto DigitalOcean. The repository is the source of the change.
+              The control plane plans that change and applies it. The deck is where you
+              watch the flight: the project, the deployment, the hostname, and any
+              sandbox opened for the work.
+            </p>
+            <p>
+              Production can wait for an owner before it leaves the gate, and automatic
+              deploys can be held when the runway should stay quiet. The record of each
+              flight stays with the deployment, including the variables you may need to
+              restore.
+            </p>
+          </div>
+          <div className="mt-8 flex flex-wrap gap-3">
+            <LinkButton href="/login">Open the deck</LinkButton>
+            <LinkButton href="/register" variant="outline">
+              Create an account
+            </LinkButton>
+          </div>
         </div>
       </div>
 
@@ -68,7 +86,7 @@ export default function AboutPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-sm text-muted-foreground">{pillar.body}</p>
+                <p className="text-sm leading-relaxed text-muted-foreground">{pillar.body}</p>
               </CardContent>
             </Card>
           );
