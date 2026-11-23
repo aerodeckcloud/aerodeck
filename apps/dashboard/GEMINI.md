@@ -10,7 +10,7 @@ in `docs/adr/` explicitly supersedes them. Keep in sync with
 - TypeScript strict. Path alias `@/*` → `src/*`.
 - Styling: Tailwind CSS. Components: **shadcn/ui** (`Button`, `Card`, `Input`, `Label`, `Badge`, `Separator`, and later additions). Do not invent a parallel component kit.
 - Icons: `lucide-react`. Do not add a second icon package.
-- Fonts: the project Geist / Geist Mono CSS variables already wired in `src/app/layout.tsx`.
+- Fonts: Space Grotesk and IBM Plex Mono, wired as `--font-deck-sans` and `--font-deck-mono` in `src/app/layout.tsx`.
 
 ## 2. Layout & routing
 

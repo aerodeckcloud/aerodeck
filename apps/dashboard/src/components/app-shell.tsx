@@ -72,7 +72,7 @@ export function AppShell({
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-3 border-b border-border px-4 py-3 md:px-8">
+        <header className="relative flex h-14 items-center gap-3 border-b border-border bg-background/75 px-4 backdrop-blur-md md:px-6">
           <button
             type="button"
             className={cn(buttonVariants({ variant: "ghost", size: "icon" }), "md:hidden")}
@@ -81,11 +81,17 @@ export function AppShell({
           >
             <Menu />
           </button>
-          <p className="text-sm text-muted-foreground">
-            GitOps operator console
-          </p>
+          <div className="hidden items-center gap-2 sm:flex">
+            <span
+              className="size-1.5 rounded-full bg-primary shadow-[0_0_10px_var(--primary)]"
+              aria-hidden
+            />
+            <p className="font-mono text-[11px] tracking-[0.24em] text-muted-foreground uppercase">
+              Deck
+            </p>
+          </div>
           <div className="ml-auto flex min-w-0 items-center gap-2">
-            <p className="max-w-[10rem] truncate text-xs text-muted-foreground">
+            <p className="max-w-[7.5rem] truncate rounded-full border border-border bg-card/80 px-2.5 py-1 font-mono text-[11px] text-muted-foreground sm:max-w-[14rem] sm:px-3">
               {currentUser.email}
             </p>
             <Button
@@ -103,10 +109,21 @@ export function AppShell({
                 {signOutError}
               </p>
             ) : null}
-            <Badge variant="outline" className="border-runway/40 text-runway">
-              local · mock
+            <Badge
+              variant="outline"
+              className={
+                controlPlane
+                  ? "border-primary/40 text-primary"
+                  : "border-runway/50 text-runway"
+              }
+            >
+              {controlPlane ? "Live" : "Mock"}
             </Badge>
           </div>
+          <span
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-primary/80 to-runway/90"
+            aria-hidden
+          />
         </header>
 
         <main className="console-canvas flex-1 overflow-auto px-4 py-6 md:px-8 md:py-10">

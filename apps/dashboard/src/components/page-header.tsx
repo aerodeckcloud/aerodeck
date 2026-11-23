@@ -19,7 +19,7 @@ export function PageHeader({
           {eyebrow}
         </p>
         <h1
-          className="mt-2 text-2xl font-semibold tracking-tight md:text-3xl"
+          className="mt-2 font-heading text-3xl font-semibold tracking-tight md:text-4xl"
           suppressHydrationWarning
         >
           {title}
