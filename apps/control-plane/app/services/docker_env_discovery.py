@@ -37,13 +37,18 @@ def _parse_dotenv_lines(text: str) -> dict[str, str]:
     return result
 
 
-def _parse_compose_build_service_env(text: str) -> dict[str, str]:
-    """Extract ``environment:`` key/values from a ``docker-compose`` service that declares ``build:``."""
-    services_env: list[tuple[bool, dict[str, str]]] = []
+def _parse_compose_build_service_env(text: str, service: str | None = None) -> dict[str, str]:
+    """Extract ``environment:`` key/values from a compose service.
+
+    With no ``service``, keep every service that declares ``build:``.
+    With a confirmed service name, keep only that service.
+    """
+    services_env: list[tuple[str, bool, dict[str, str]]] = []
     has_build = False
     in_env = False
     env_indent = 0
     service_indent: int | None = None
+    current_name = ""
     current: dict[str, str] = {}
 
     for raw in text.splitlines():
@@ -53,7 +58,8 @@ def _parse_compose_build_service_env(text: str) -> dict[str, str]:
         ind = len(raw) - len(raw.lstrip(" "))
         if ind == 2 and s.endswith(":") and not s.startswith("-"):
             if current or has_build:
-                services_env.append((has_build, current))
+                services_env.append((current_name, has_build, current))
+            current_name = s[:-1].strip()
             has_build, in_env, current, service_indent = False, False, {}, ind
             continue
         if service_indent is None:
@@ -76,10 +82,13 @@ def _parse_compose_build_service_env(text: str) -> dict[str, str]:
                     current[key] = val
 
     if current or has_build:
-        services_env.append((has_build, current))
+        services_env.append((current_name, has_build, current))
     merged: dict[str, str] = {}
-    for built, env_map in services_env:
-        if built:
+    for name, built, env_map in services_env:
+        if service is not None:
+            if name == service:
+                merged.update(env_map)
+        elif built:
             merged.update(env_map)
     return merged
 
@@ -101,7 +110,7 @@ def _discover_mock_secret_files(checkout: Path) -> dict[str, str]:
     return out
 
 
-def discover_repo_env_defaults(checkout: Path) -> dict[str, str]:
+def discover_repo_env_defaults(checkout: Path, compose_service: str | None = None) -> dict[str, str]:
     defaults = _discover_mock_secret_files(checkout)
     for name in (".env.example", ".env.sample", ".env.template", ".env.defaults"):
         c = checkout / name
@@ -110,7 +119,12 @@ def discover_repo_env_defaults(checkout: Path) -> dict[str, str]:
     for name in ("docker-compose.yaml", "docker-compose.yml", "compose.yaml", "compose.yml"):
         c = checkout / name
         if c.is_file() and not c.is_symlink() and c.stat().st_size <= _MAX_DISCOVER_BYTES:
-            defaults.update(_parse_compose_build_service_env(c.read_text(encoding="utf-8", errors="replace")))
+            defaults.update(
+                _parse_compose_build_service_env(
+                    c.read_text(encoding="utf-8", errors="replace"),
+                    service=compose_service,
+                )
+            )
     return defaults
 
 
@@ -128,9 +142,10 @@ def build_runtime_env_file(
     checkout: Path, target_port: int, public_url: str | None = None,
     on_log: LogSink | None = None, user_env: dict[str, str] | str | None = None,
     addon_env: dict[str, str] | None = None,
+    compose_service: str | None = None,
 ) -> Path:
     """Discover repo env defaults, merge platform + addon + operator variables, and write a ``0600`` ``--env-file``."""
-    env_vars = discover_repo_env_defaults(checkout)
+    env_vars = discover_repo_env_defaults(checkout, compose_service=compose_service or None)
     if env_vars and on_log is not None:
         keys = ", ".join(sorted(env_vars.keys()))
         on_log(f"Auto-loaded {len(env_vars)} runtime env default(s) from repository ({keys}).")

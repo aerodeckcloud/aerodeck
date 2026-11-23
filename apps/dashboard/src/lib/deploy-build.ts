@@ -36,3 +36,12 @@ export function applyBuildConfirmation(
   const service = input.service.trim();
   return { ...build, port, service: service.length > 0 ? service : null };
 }
+
+/** Fields the confirmed build adds to the existing create body. */
+export function launchBuildFields(build: BlueprintBuild): { port: number; service?: string } {
+  if (!buildAsksForService(build)) {
+    return { port: build.port };
+  }
+  const service = build.service?.trim();
+  return service ? { port: build.port, service } : { port: build.port };
+}

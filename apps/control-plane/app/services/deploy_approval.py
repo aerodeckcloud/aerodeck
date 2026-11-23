@@ -61,6 +61,8 @@ class DeployApprovalService:
         rollback_from_deployment_id: uuid.UUID | None = None,
         promote_from_deployment_id: uuid.UUID | None = None,
         replace_env_vars: dict[str, EnvVarPlain] | None = None,
+        port: int | None = None,
+        service: str | None = None,
     ) -> JobTicket | None:
         """Start the provision, or hold it for an owner.
 
@@ -79,6 +81,8 @@ class DeployApprovalService:
                 rollback_from_deployment_id=rollback_from_deployment_id,
                 promote_from_deployment_id=promote_from_deployment_id,
                 replace_env_vars=replace_env_vars,
+                port=port,
+                service=service,
             )
             return None
         return await self._jobs.enqueue(
@@ -92,6 +96,8 @@ class DeployApprovalService:
             rollback_from_deployment_id=rollback_from_deployment_id,
             promote_from_deployment_id=promote_from_deployment_id,
             replace_env_vars=replace_env_vars,
+            port=port,
+            service=service,
         )
 
     async def defer(
@@ -104,6 +110,8 @@ class DeployApprovalService:
         rollback_from_deployment_id: uuid.UUID | None = None,
         promote_from_deployment_id: uuid.UUID | None = None,
         replace_env_vars: dict[str, EnvVarPlain] | None = None,
+        port: int | None = None,
+        service: str | None = None,
     ) -> None:
         await self._jobs.defer_for_approval(
             deployment_id,
@@ -113,6 +121,8 @@ class DeployApprovalService:
             rollback_from_deployment_id=rollback_from_deployment_id,
             promote_from_deployment_id=promote_from_deployment_id,
             replace_env_vars=replace_env_vars,
+            port=port,
+            service=service,
         )
 
     async def note_auto_deploy_skipped(self, environment: Environment) -> None:

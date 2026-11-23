@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { applyBuildConfirmation, buildAsksForService, parseBuildPort } from "./deploy-build";
+import { applyBuildConfirmation, buildAsksForService, launchBuildFields, parseBuildPort } from "./deploy-build";
 import type { BlueprintBuild } from "./types";
 
 function build(overrides: Partial<BlueprintBuild> = {}): BlueprintBuild {
@@ -39,6 +39,14 @@ describe("deploy build confirmation", () => {
     const next = applyBuildConfirmation(detected, { port: "8080", service: " api " });
     assert.equal(next?.port, 8080);
     assert.equal(next?.service, "api");
+  });
+
+  it("sends the confirmed port, and the service only for Compose", () => {
+    assert.deepEqual(launchBuildFields(build({ port: 3000, service: "ignored" })), { port: 3000 });
+    assert.deepEqual(
+      launchBuildFields(build({ strategy: "compose", compose_file: "docker-compose.yaml", service: "api", port: 8080 })),
+      { port: 8080, service: "api" },
+    );
   });
 
   it("rejects a port outside 1–65535", () => {

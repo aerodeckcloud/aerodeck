@@ -700,6 +700,8 @@ export async function createDeployment(
     environmentId: string;
     envVars?: Record<string, string>;
     addons?: AddonType[];
+    port?: number;
+    service?: string;
   },
 ): Promise<Deployment>;
 export async function createDeployment(
@@ -715,6 +717,8 @@ export async function createDeployment(
     environmentId: string;
     envVars?: Record<string, string>;
     addons?: AddonType[];
+    port?: number;
+    service?: string;
   },
 ): Promise<Deployment> {
   if (controlPlane && (!target?.projectId || !target?.environmentId)) {
@@ -730,6 +734,12 @@ export async function createDeployment(
     }
     if (target.addons && target.addons.length > 0) {
       body.addons = target.addons;
+    }
+    if (typeof target.port === "number") {
+      body.port = target.port;
+    }
+    if (target.service) {
+      body.service = target.service;
     }
   }
   const response = await fetch(path, {

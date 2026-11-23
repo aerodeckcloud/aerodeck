@@ -29,7 +29,7 @@ import {
   ProvisionEnqueueFailed,
   upsertEnvironmentVars,
 } from "@/lib/api";
-import { applyBuildConfirmation } from "@/lib/deploy-build";
+import { applyBuildConfirmation, launchBuildFields } from "@/lib/deploy-build";
 import { environmentOptionKey } from "@/lib/environment-option";
 import { parseGithubRepo } from "@/lib/github";
 import type { AddonType, DeploymentBlueprint } from "@/lib/types";
@@ -174,7 +174,14 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
       }
     }
 
-    let target: { projectId: string; environmentId: string; envVars?: Record<string, string>; addons?: AddonType[] } | undefined;
+    let target: {
+      projectId: string;
+      environmentId: string;
+      envVars?: Record<string, string>;
+      addons?: AddonType[];
+      port?: number;
+      service?: string;
+    } | undefined;
     if (isControlPlane) {
       const selected = environments.find((row) => environmentOptionKey(row) === environmentKey);
       if (!selected) {
@@ -189,11 +196,14 @@ export function NewDeploymentForm({ controlPlane = false }: { controlPlane?: boo
         }
       }
       Object.assign(mergedEnv, parseDotenvText(envVarsText));
+      const confirmedBuild = blueprint ? launchBuildFields(blueprint.build) : undefined;
       target = {
         projectId: selected.project_id,
         environmentId: selected.id,
         envVars: Object.keys(mergedEnv).length > 0 ? mergedEnv : undefined,
         addons: selectedAddons.length > 0 ? selectedAddons : undefined,
+        port: confirmedBuild?.port,
+        service: confirmedBuild?.service,
       };
     }
 

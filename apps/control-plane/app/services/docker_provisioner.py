@@ -38,6 +38,16 @@ PortAllocator = Callable[[str, int, int], int]
 HealthChecker = Callable[[str, int, int], bool]
 
 
+def _confirmed_port(raw: str) -> int | None:
+    text = raw.strip()
+    if not text.isdigit():
+        return None
+    port = int(text)
+    if 1 <= port <= 65535:
+        return port
+    return None
+
+
 class RouteRegistrar(Protocol):
     def __call__(self, *, project_id: uuid.UUID, environment_id: uuid.UUID, hostname: str, backend_host: str, backend_port: int) -> None: ...
 
@@ -100,7 +110,8 @@ class DockerProvisioner:
         addons_json: str = "", image_deployment_id: str = "", rollback_from_deployment_id: str = "",
         promote_from_deployment_id: str = "", promote_from_environment_id: str = "",
         promote_from_environment_slug: str = "",
-        git_ref: str = "", release_command: str = "", on_log: LogSink | None = None,
+        git_ref: str = "", release_command: str = "", container_port: str = "",
+        compose_service: str = "", on_log: LogSink | None = None,
         on_checkout: Callable[[str], None] | None = None,
         on_swap: Callable[[], None] | None = None,
     ) -> JobOutcome:
@@ -154,13 +165,19 @@ class DockerProvisioner:
                     f"Rollback image {rollback_tag} is no longer available on this host; use Redeploy instead"
                 )
             run_tag = rollback_tag
+        confirmed_port = _confirmed_port(container_port)
+        named_service = compose_service.strip() or None
+        if named_service:
+            emit(f"Using Compose service {named_service}.")
         if retained_image:
             # No checkout, so there is no Dockerfile to read the port from.
-            target_port = self.container_port
+            target_port = confirmed_port if confirmed_port is not None else self.container_port
+            if confirmed_port is not None:
+                emit(f"Using confirmed port {confirmed_port}.")
             with tempfile.TemporaryDirectory(prefix="aerodeck-retained-") as tmp:
                 env_file = build_runtime_env_file(
                     Path(tmp), target_port, f"https://{route_hostname}" if route_hostname else None,
-                    on_log, env_vars_json, addon_env,
+                    on_log, env_vars_json, addon_env, compose_service=named_service,
                 )
         else:
             pinned_sha = normalize_git_sha(git_ref) if git_ref else None
@@ -208,9 +225,17 @@ class DockerProvisioner:
                     emit(f"Checked out {sha[:7]}")
                     if on_checkout is not None:
                         on_checkout(sha)
-                df = ensure_dockerfile(checkout, owner, repo, container_port=self.container_port, on_log=on_log)
-                target_port = detect_exposed_port(df, default_port=self.container_port)
-                env_file = build_runtime_env_file(checkout, target_port, f"https://{route_hostname}" if route_hostname else None, on_log, env_vars_json, addon_env)
+                image_port = confirmed_port if confirmed_port is not None else self.container_port
+                df = ensure_dockerfile(checkout, owner, repo, container_port=image_port, on_log=on_log)
+                if confirmed_port is not None:
+                    target_port = confirmed_port
+                    emit(f"Using confirmed port {confirmed_port}.")
+                else:
+                    target_port = detect_exposed_port(df, default_port=self.container_port)
+                env_file = build_runtime_env_file(
+                    checkout, target_port, f"https://{route_hostname}" if route_hostname else None,
+                    on_log, env_vars_json, addon_env, compose_service=named_service,
+                )
                 emit(f"Building Docker image {tag}...")
                 build_cmd = [docker_bin, "build", "--progress=plain", "--tag", tag]
                 if deploy_tag:

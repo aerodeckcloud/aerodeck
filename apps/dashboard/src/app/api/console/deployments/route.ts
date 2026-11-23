@@ -53,6 +53,8 @@ export async function POST(request: Request) {
     environment_id?: unknown;
     env_vars?: unknown;
     addons?: unknown;
+    port?: unknown;
+    service?: unknown;
   };
   try {
     payload = (await request.json()) as {
@@ -61,6 +63,8 @@ export async function POST(request: Request) {
       environment_id?: unknown;
       env_vars?: unknown;
       addons?: unknown;
+      port?: unknown;
+      service?: unknown;
     };
   } catch {
     return jsonError(400, "Request body must be JSON.", "invalid_json");
@@ -108,6 +112,22 @@ export async function POST(request: Request) {
     }
   }
 
+  let port: number | undefined;
+  if (payload.port !== undefined && payload.port !== null) {
+    if (typeof payload.port !== "number" || !Number.isInteger(payload.port) || payload.port < 1 || payload.port > 65535) {
+      return jsonError(400, "port must be from 1 to 65535.", "invalid_port");
+    }
+    port = payload.port;
+  }
+  let service: string | undefined;
+  if (typeof payload.service === "string" && payload.service.trim().length > 0) {
+    const name = payload.service.trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name)) {
+      return jsonError(400, "service must be a Compose service name.", "invalid_service");
+    }
+    service = name;
+  }
+
   try {
     const deployment = await createControlPlaneDeploymentAndProvision(config, {
       repoUrl: payload.repo_url,
@@ -115,6 +135,8 @@ export async function POST(request: Request) {
       environmentId,
       envVars,
       addons,
+      port,
+      service,
       actorUserId: user.id,
     });
     return NextResponse.json(deployment, { status: 201 });
