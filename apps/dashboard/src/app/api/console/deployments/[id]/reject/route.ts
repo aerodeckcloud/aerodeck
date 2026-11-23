@@ -1,6 +1,7 @@
 import { connection, NextResponse } from "next/server";
 
 import {
+  ControlPlaneError,
   isControlPlaneUuid,
   readControlPlaneConfig,
   rejectControlPlaneDeployment,
@@ -29,6 +30,12 @@ export async function POST(
     const deployment = await rejectControlPlaneDeployment(config, id, { actorUserId: user.id });
     return NextResponse.json(deployment);
   } catch (cause) {
+    if (cause instanceof ControlPlaneError && cause.status === 403) {
+      return jsonError(403, "Only an owner can reject this deployment.", "forbidden");
+    }
+    if (cause instanceof ControlPlaneError && cause.status === 409) {
+      return jsonError(409, cause.message, "conflict");
+    }
     return jsonControlPlaneError(cause, "console_deployment_reject_failed");
   }
 }

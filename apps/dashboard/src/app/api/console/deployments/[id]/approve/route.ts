@@ -2,6 +2,7 @@ import { connection, NextResponse } from "next/server";
 
 import {
   approveControlPlaneDeployment,
+  ControlPlaneError,
   isControlPlaneUuid,
   readControlPlaneConfig,
 } from "@/lib/control-plane";
@@ -29,6 +30,12 @@ export async function POST(
     const deployment = await approveControlPlaneDeployment(config, id, { actorUserId: user.id });
     return NextResponse.json(deployment);
   } catch (cause) {
+    if (cause instanceof ControlPlaneError && cause.status === 403) {
+      return jsonError(403, "Only an owner can approve this deployment.", "forbidden");
+    }
+    if (cause instanceof ControlPlaneError && cause.status === 409) {
+      return jsonError(409, cause.message, "conflict");
+    }
     return jsonControlPlaneError(cause, "console_deployment_approve_failed");
   }
 }

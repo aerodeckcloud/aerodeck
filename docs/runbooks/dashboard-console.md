@@ -113,7 +113,8 @@ promotes, and rolls back immediately. Approve and reject require the calling
 user id. A request with no user is refused.
 `POST /api/v1/deployments/{id}/approve` and `POST .../reject` are owner-only
 (console `POST /api/console/deployments/{id}/approve` and `.../reject`).
-Approve starts the job under the overlap setting and the audit row records the
+The console returns forbidden when the caller is not an owner, and conflict when
+the row is no longer waiting. Approve starts the job under the overlap setting and the audit row records the
 approving user. Reject marks the row `cancelled`. A project with no members
 has nobody to approve, so those deploys still start.
 
