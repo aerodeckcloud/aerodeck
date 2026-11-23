@@ -254,19 +254,37 @@ class EnvironmentVariableService:
         values = json.loads(decrypt_env_value(token, self._signing_key))
         return {str(key): str(value) for key, value in values.items()}
 
-    def try_unseal(self, token: str) -> dict[str, str] | None:
+    def try_unseal(
+        self,
+        token: str,
+        *,
+        deployment_id: uuid.UUID | None = None,
+        environment_id: uuid.UUID | None = None,
+    ) -> dict[str, str] | None:
         """Like ``unseal``, but returns None when the token is corrupt or unreadable."""
         try:
             return self.unseal(token)
         except (InvalidToken, json.JSONDecodeError, TypeError, ValueError):
-            logger.warning("event=env_vars_snapshot_unreadable")
+            logger.warning(
+                "event=env_vars_snapshot_unreadable deployment=%s environment=%s",
+                deployment_id,
+                environment_id,
+            )
             return None
 
-    def snapshot_names(self, token: str | None) -> list[str] | None:
+    def snapshot_names(
+        self,
+        token: str | None,
+        *,
+        deployment_id: uuid.UUID | None = None,
+        environment_id: uuid.UUID | None = None,
+    ) -> list[str] | None:
         """Sorted variable names in a sealed snapshot. Never the values (#273)."""
         if not token:
             return None
-        values = self.try_unseal(token)
+        values = self.try_unseal(
+            token, deployment_id=deployment_id, environment_id=environment_id
+        )
         return None if values is None else sorted(values)
 
     async def replace_all(
@@ -282,7 +300,7 @@ class EnvironmentVariableService:
         """
         await self._environments.get(project_id, environment_id)
         existing = await self._repo.list_for_environment(project_id, environment_id)
-        existing_keys = {row.key for row in existing}
+        existing_by_key = {row.key: row for row in existing}
         for key, value in values.items():
             await self._repo.upsert(
                 project_id=project_id,
@@ -291,9 +309,8 @@ class EnvironmentVariableService:
                 encrypted_value=encrypt_env_value(value, self._signing_key),
                 is_secret=True,
             )
-        for key in existing_keys - values.keys():
-            row = await self._repo.get_by_key(project_id, environment_id, key)
-            if row is not None:
+        for key, row in existing_by_key.items():
+            if key not in values:
                 await self._repo.delete(row)
         logger.info(
             "event=env_vars_replaced environment=%s keys=%d",

@@ -24,6 +24,7 @@ from app.api.deps import (
     ReleaseJobServiceDep,
     PaginationDep,
     PromotionServiceDep,
+    RollbackServiceDep,
     SettingsDep,
 )
 from app.models.deployment import DeploymentStatus, DeploymentTrigger
@@ -402,48 +403,22 @@ async def promote_deployment(
     response_model=DeploymentRead,
     status_code=status.HTTP_201_CREATED,
     summary="Roll back an environment to a previously succeeded deployment image (#253)",
-    responses=_NOT_FOUND | _UNAUTHENTICATED | _UNAVAILABLE,
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _UNPROCESSABLE | _UNAVAILABLE,
 )
 async def rollback_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
-    jobs: JobServiceDep,
+    rollbacks: RollbackServiceDep,
     users: ConsoleUserServiceDep,
     actor_user_id: ActorUserIdDep,
     body: DeploymentRollback | None = None,
 ) -> DeploymentRead:
     """Restore the release variables when a snapshot exists, then retag the image (#273)."""
-    source = await deployments.get(deployment_id)
-    if source.project_id is None or source.environment_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Cannot roll back a deployment that is not linked to an environment.",
-        )
-    if source.status is not DeploymentStatus.succeeded:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Only succeeded deployments can be rolled back to.",
-        )
     request = body or DeploymentRollback()
-    variables_restored = False
-    if request.restore_variables:
-        variables_restored = await deployments.restore_variables_from_snapshot(source)
-    created = await deployments.create(
-        DeploymentCreate(
-            repo_url=source.repo_url,
-            project_id=source.project_id,
-            environment_id=source.environment_id,
-        ),
-        trigger=DeploymentTrigger.rollback,
+    stored, variables_restored = await rollbacks.rollback(
+        deployment_id,
+        restore_variables=request.restore_variables,
         actor_user_id=await _known_actor(users, actor_user_id),
     )
-    await jobs.enqueue(
-        JobKind.provision,
-        source.project_id,
-        source.environment_id,
-        deployment_id=created.id,
-        rollback_from_deployment_id=source.id,
-    )
-    refreshed = await deployments.get(created.id)
-    await deployments.refresh(refreshed)
-    return deployments.to_read(refreshed, variables_restored=variables_restored)
+    await deployments.refresh(stored)
+    return deployments.to_read(stored, variables_restored=variables_restored)

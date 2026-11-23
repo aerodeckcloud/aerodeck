@@ -66,13 +66,25 @@ class EnvVarSnapshotter(Protocol):
 
     def seal(self, values: dict[str, str]) -> str: ...
 
-    def snapshot_names(self, token: str | None) -> list[str] | None: ...
+    def snapshot_names(
+        self,
+        token: str | None,
+        *,
+        deployment_id: uuid.UUID | None = None,
+        environment_id: uuid.UUID | None = None,
+    ) -> list[str] | None: ...
 
     async def replace_all(
         self, project_id: uuid.UUID, environment_id: uuid.UUID, values: dict[str, str]
     ) -> list[str]: ...
 
-    def try_unseal(self, token: str) -> dict[str, str] | None: ...
+    def try_unseal(
+        self,
+        token: str,
+        *,
+        deployment_id: uuid.UUID | None = None,
+        environment_id: uuid.UUID | None = None,
+    ) -> dict[str, str] | None: ...
 
 
 class DeploymentService:
@@ -231,7 +243,11 @@ class DeploymentService:
         """Build the API model. Snapshot names only — never values or ciphertext."""
         names = None
         if self._env_vars is not None:
-            names = self._env_vars.snapshot_names(deployment.env_vars_snapshot)
+            names = self._env_vars.snapshot_names(
+                deployment.env_vars_snapshot,
+                deployment_id=deployment.id,
+                environment_id=deployment.environment_id,
+            )
         return DeploymentRead.model_validate(deployment).model_copy(
             update={
                 "snapshot_variable_names": names,
@@ -239,27 +255,56 @@ class DeploymentService:
             }
         )
 
-    async def restore_variables_from_snapshot(self, source: Deployment) -> bool:
+    async def restore_variables_from_snapshot(
+        self, source: Deployment
+    ) -> tuple[bool, dict[str, str] | None]:
         """Replace the environment's variables with the release snapshot.
 
-        Returns True when a snapshot was applied. False when the row has none,
-        the ciphertext is unreadable, or the row is unlinked — so the caller
-        can leave variables alone and still retag the image (#273).
+        The caller must hold the environment deploy lock. Returns
+        ``(restored, prior)`` where ``prior`` is the map to reinstate if a later
+        step (queue dispatch) fails after this mutation was committed (#273).
         """
         if self._env_vars is None or not source.env_vars_snapshot:
-            return False
+            return False, None
         if source.project_id is None or source.environment_id is None:
-            return False
-        values = self._env_vars.try_unseal(source.env_vars_snapshot)
+            return False, None
+        values = self._env_vars.try_unseal(
+            source.env_vars_snapshot,
+            deployment_id=source.id,
+            environment_id=source.environment_id,
+        )
         if values is None:
-            return False
+            return False, None
+        prior = await self._env_vars.load_decrypted_map(
+            source.project_id, source.environment_id
+        )
         await self._env_vars.replace_all(source.project_id, source.environment_id, values)
         logger.info(
             "event=deployment_env_vars_restored deployment=%s keys=%d",
             source.id,
             len(values),
         )
-        return True
+        return True, prior
+
+    async def reinstate_variables(
+        self,
+        project_id: uuid.UUID,
+        environment_id: uuid.UUID,
+        values: dict[str, str],
+    ) -> None:
+        """Put variables back after a rollback restore that must not stick.
+
+        Commits immediately so a subsequent request rollback cannot undo it.
+        """
+        if self._env_vars is None:
+            return
+        await self._env_vars.replace_all(project_id, environment_id, values)
+        await self.commit()
+        logger.info(
+            "event=deployment_env_vars_reinstated environment=%s keys=%d",
+            environment_id,
+            len(values),
+        )
 
     async def _mark_terminal(
         self, deployment_id: uuid.UUID, status: DeploymentStatus

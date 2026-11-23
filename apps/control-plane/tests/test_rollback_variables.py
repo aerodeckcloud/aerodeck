@@ -316,6 +316,79 @@ async def test_rollback_with_garbage_snapshot_continues_image_only(
 
 
 @pytest.mark.asyncio
+async def test_rollback_dispatch_failure_reinstates_variables(
+    app: FastAPI, client: AsyncClient, auth: dict[str, str]
+) -> None:
+    """Queue failure after restore must not leave the drifted map replaced (#273)."""
+
+    class BrokenDispatcher:
+        def dispatch(self, kind: JobKind, *, project_id: str, environment_id: str, **meta: str) -> str:
+            raise ConnectionError("broker down")
+
+        def state(self, job_id: str) -> JobState:  # pragma: no cover
+            raise AssertionError("state should not be called")
+
+    app.dependency_overrides[get_job_dispatcher] = lambda: BrokenDispatcher()
+    try:
+        project, env = await _project_env(client, auth, "snap-queue-fail")
+        base = f"/api/v1/projects/{project['id']}/environments/{env['id']}/env-vars"
+        await client.put(
+            base,
+            json={"items": [{"key": "KEEP", "value": "from-snapshot", "is_secret": True}]},
+            headers=auth,
+        )
+        dep = (
+            await client.post(
+                "/api/v1/deployments",
+                json={
+                    "repo_url": "https://github.com/mangatohjunior/dev-portal",
+                    "project_id": project["id"],
+                    "environment_id": env["id"],
+                },
+                headers=auth,
+            )
+        ).json()
+        assert (
+            await client.post(f"/api/v1/deployments/{dep['id']}/succeeded", headers=auth)
+        ).status_code == 200
+        await client.put(
+            base,
+            json={
+                "items": [
+                    {"key": "KEEP", "value": "drifted-value", "is_secret": True},
+                    {"key": "EXTRA", "value": "only-after", "is_secret": True},
+                ]
+            },
+            headers=auth,
+        )
+
+        with pytest.raises(ConnectionError, match="broker down"):
+            await client.post(
+                f"/api/v1/deployments/{dep['id']}/rollback",
+                json={"restore_variables": True},
+                headers=auth,
+            )
+
+        listed = (await client.get(base, headers=auth)).json()
+        assert [row["key"] for row in listed] == ["EXTRA", "KEEP"]
+        sessions = async_sessionmaker(app.state.engine, expire_on_commit=False)
+        async with sessions() as session:
+            rows = (
+                await session.scalars(
+                    select(EnvironmentVariable).where(
+                        EnvironmentVariable.environment_id == uuid.UUID(env["id"])
+                    )
+                )
+            ).all()
+            values = {
+                row.key: decrypt_env_value(row.encrypted_value, SIGNING_KEY) for row in rows
+            }
+            assert values == {"KEEP": "drifted-value", "EXTRA": "only-after"}
+    finally:
+        app.dependency_overrides.pop(get_job_dispatcher, None)
+
+
+@pytest.mark.asyncio
 async def test_rollback_can_skip_variable_restore(
     app: FastAPI, client: AsyncClient, auth: dict[str, str]
 ) -> None:
