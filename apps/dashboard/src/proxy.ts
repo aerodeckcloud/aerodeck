@@ -16,6 +16,6 @@ export function proxy(request: NextRequest) {
 export const config = {
   // Literal copy of buildProxyMatcher() in public-paths.ts. public-paths.test.ts checks they match.
   matcher: [
-    "/((?!_next/static|_next/image|api/|about|home|policy|login|register|favicon.ico|.*\\..*).*)",
+    "/((?!_next/static|_next/image|api/|about|features|home|policy|login|register|favicon.ico|.*\\..*).*)",
   ],
 };

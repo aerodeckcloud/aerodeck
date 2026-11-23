@@ -21,11 +21,13 @@ describe("public path proxy matcher", () => {
 
   it("builds the matcher Next reads from the public path segments", () => {
     assert.ok(PUBLIC_PATH_SEGMENTS.includes("home"));
+    assert.ok(PUBLIC_PATH_SEGMENTS.includes("features"));
     assert.equal(matcher, buildProxyMatcher());
   });
 
   it("leaves /home public and still matches the console root", () => {
     assert.equal(pathnameMatchesProxy("/home", matcher), false);
+    assert.equal(pathnameMatchesProxy("/features", matcher), false);
     assert.equal(pathnameMatchesProxy("/", matcher), true);
     assert.equal(pathnameMatchesProxy("/projects", matcher), true);
   });
