@@ -8,11 +8,11 @@ import { PUBLIC_AUTH_NAV, PUBLIC_NAV } from "@/lib/public-nav";
 export function PublicShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-svh flex-col bg-background">
-      <header className="border-b border-border">
+      <header className="relative border-b border-border bg-background/75 backdrop-blur-md">
         <div className="flex h-14 w-full items-center gap-3 px-4 md:px-8">
           <Link href="/about" className="flex items-center gap-2.5">
             <BrandMark className="size-8 text-primary" />
-            <span className="text-sm font-semibold tracking-tight">AeroDeck</span>
+            <span className="font-heading text-sm font-semibold tracking-tight">AeroDeck</span>
           </Link>
 
           <nav aria-label="Public" className="ml-6 hidden items-center gap-4 md:flex">
@@ -30,6 +30,7 @@ export function PublicShell({ children }: { children: React.ReactNode }) {
             <PublicMobileNav />
           </div>
         </div>
+        <span className="deck-horizon" aria-hidden />
       </header>
 
       <main className="console-canvas flex-1">{children}</main>

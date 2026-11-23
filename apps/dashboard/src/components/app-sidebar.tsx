@@ -12,6 +12,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { BrandMark } from "@/components/brand-mark";
+import { ControlPlaneLamp } from "@/components/control-plane-lamp";
 import { buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
@@ -50,12 +51,16 @@ export function AppSidebar({ mobileOpen, onCloseMobile, controlPlane = false }: 
           mobileOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="flex items-center justify-between px-4 py-4">
-          <Link href="/" className="flex items-center gap-2.5" onClick={onCloseMobile}>
-            <BrandMark className="size-8 text-primary" />
+        <div className="flex items-center justify-between px-4 py-5">
+          <Link href="/" className="flex items-center gap-3" onClick={onCloseMobile}>
+            <BrandMark className="size-9 text-primary" />
             <div>
-              <p className="text-sm font-semibold tracking-tight">AeroDeck</p>
-              <p className="text-[11px] text-muted-foreground">Flight-deck console</p>
+              <p className="font-heading text-base leading-none font-semibold tracking-tight">
+                AeroDeck
+              </p>
+              <p className="mt-1 font-mono text-[10px] tracking-[0.18em] text-muted-foreground uppercase">
+                Flight deck
+              </p>
             </div>
           </Link>
           <button
@@ -91,7 +96,7 @@ export function AppSidebar({ mobileOpen, onCloseMobile, controlPlane = false }: 
                 className={cn(
                   "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
                   active
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-[inset_2px_0_0_var(--primary)]"
                     : "text-sidebar-foreground/75 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground",
                 )}
               >
@@ -103,7 +108,13 @@ export function AppSidebar({ mobileOpen, onCloseMobile, controlPlane = false }: 
         </nav>
 
         <div className="border-t border-sidebar-border p-4">
-          <p className="text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <ControlPlaneLamp controlPlane={controlPlane} />
+            <p className="font-mono text-[10px] tracking-[0.16em] text-muted-foreground uppercase">
+              {controlPlane ? "Live control plane" : "Local mock"}
+            </p>
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
             {controlPlane
               ? "Projects, sandboxes, and deployments load on the server."
               : "Projects and sandboxes load on the server. Deploys stay on /api/mock/v1"}
