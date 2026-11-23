@@ -288,7 +288,8 @@ class DockerProvisioner:
         if not argv:
             return
         emit("Running release command before traffic moves...")
-        exec_cmd = [docker_bin, "exec", candidate, "--", *argv]
+        # Docker exec does not treat "--" as an options terminator; it would become the executable.
+        exec_cmd = [docker_bin, "exec", candidate, *argv]
         try:
             result = self.runner.run(
                 exec_cmd, env=docker_env, timeout=self.release_command_timeout_seconds, on_line=on_log,

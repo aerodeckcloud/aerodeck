@@ -441,8 +441,7 @@ def test_release_command_runs_after_health_and_before_traffic() -> None:
     ]
     exec_cmd = runner.calls[4]
     assert exec_cmd[2].startswith("aerodeck-app-f27ee337-bacbb040-new-")
-    assert "--" in exec_cmd
-    assert exec_cmd[exec_cmd.index("--") + 1 :] == ["python", "manage.py", "migrate"]
+    assert exec_cmd[3:] == ["python", "manage.py", "migrate"]
     assert "sh" not in exec_cmd and "-c" not in exec_cmd and "-e" not in exec_cmd
     assert runner.timeouts[4] == 7
     assert registered == ["exec"]
