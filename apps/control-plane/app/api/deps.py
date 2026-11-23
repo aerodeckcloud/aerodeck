@@ -48,6 +48,7 @@ from app.services.environments import EnvironmentService
 from app.services.environment_vars import EnvironmentVariableRepository, EnvironmentVariableService
 from app.services.hypervisor import FirecrackerHypervisor, Hypervisor, MemoryHypervisor, SandboxUnavailableError
 from app.services.image_presence import ImageLookup, WorkerImageLookup
+from app.services.image_retention import ImageRetentionService
 from app.services.jobs import DeploymentEnqueueHooks, JobDispatcher, JobService
 from app.services.letsencrypt import LetsEncryptIssuer
 from app.services.notifications import NotificationChannelRepository, NotificationService
@@ -471,8 +472,17 @@ def get_rollback_service(
     deployments: DeploymentServiceDep,
     members: ProjectMemberServiceDep,
     jobs: JobServiceDep,
+    environments: EnvironmentServiceDep,
+    images: ImageLookupDep,
 ) -> RollbackService:
-    return RollbackService(deployments, members, jobs)
+    return RollbackService(deployments, members, jobs, environments, images)
+
+
+def get_image_retention_service(settings: SettingsDep) -> ImageRetentionService:
+    return ImageRetentionService(settings)
+
+
+ImageRetentionServiceDep = Annotated[ImageRetentionService, Depends(get_image_retention_service)]
 
 
 RollbackServiceDep = Annotated[RollbackService, Depends(get_rollback_service)]

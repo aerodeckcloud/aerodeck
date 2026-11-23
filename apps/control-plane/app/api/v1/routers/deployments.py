@@ -20,6 +20,7 @@ from app.api.deps import (
     ClientDep,
     ConsoleUserServiceDep,
     DeploymentServiceDep,
+    ImageRetentionServiceDep,
     JobServiceDep,
     ReleaseJobServiceDep,
     PaginationDep,
@@ -175,10 +176,15 @@ async def succeed_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
     jobs: ReleaseJobServiceDep,
+    retention: ImageRetentionServiceDep,
 ) -> DeploymentRead:
     stored = await deployments.mark_succeeded(deployment_id)
     if jobs is not None:
         await jobs.release_waiting(stored)
+    # Older tags are removed after this row is succeeded. A prune failure is
+    # logged inside the scheduler and leaves this row succeeded (#274).
+    if stored.environment_id is not None:
+        retention.schedule(stored.environment_id, stored.id)
     return deployment_to_read(stored)
 
 

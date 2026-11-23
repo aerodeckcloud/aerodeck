@@ -9,6 +9,7 @@ import {
   ENVIRONMENT_PROJECT_REQUIRED,
   ENVIRONMENT_REGION_INVALID,
   ENVIRONMENT_SLUG_INVALID,
+  ENVIRONMENT_RETENTION_INVALID,
   ENVIRONMENT_UPDATE_EMPTY,
   isValidEnvironmentKind,
   isValidEnvironmentName,
@@ -157,6 +158,27 @@ describe("parseEnvironmentUpdateFields", () => {
       ok: false,
       error: ENVIRONMENT_OVERLAP_INVALID,
       code: "invalid_overlap",
+    });
+  });
+
+  it("accepts a rollback image count from 1 to 20", () => {
+    assert.deepEqual(parseEnvironmentUpdateFields({ rollback_images_to_keep: 1 }), {
+      ok: true,
+      value: { rollback_images_to_keep: 1 },
+    });
+    assert.deepEqual(parseEnvironmentUpdateFields({ rollback_images_to_keep: 20 }), {
+      ok: true,
+      value: { rollback_images_to_keep: 20 },
+    });
+    assert.deepEqual(parseEnvironmentUpdateFields({ rollback_images_to_keep: 0 }), {
+      ok: false,
+      error: ENVIRONMENT_RETENTION_INVALID,
+      code: "invalid_rollback_images",
+    });
+    assert.deepEqual(parseEnvironmentUpdateFields({ rollback_images_to_keep: 21 }), {
+      ok: false,
+      error: ENVIRONMENT_RETENTION_INVALID,
+      code: "invalid_rollback_images",
     });
   });
 

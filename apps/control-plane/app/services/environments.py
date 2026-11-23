@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Sequence
+from typing import Protocol
 
 from sqlalchemy.exc import IntegrityError
 
@@ -8,8 +9,16 @@ from app.core.logging import get_logger
 from app.models.project import Environment
 from app.repositories.environments import EnvironmentRepository
 from app.schemas.environment import EnvironmentCreate, EnvironmentUpdate
-from app.services.deployment_links import DeploymentEnvironmentLinkClearer
 from app.services.projects import ProjectService
+
+
+class EnvironmentDeploymentStore(Protocol):
+    async def clear_environment_link(self, environment_id: uuid.UUID) -> None: ...
+
+    async def count_retained_images(
+        self, environment_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, int]: ...
+
 
 logger = get_logger("services.environments")
 
@@ -19,7 +28,7 @@ class EnvironmentService:
         self,
         environments: EnvironmentRepository,
         projects: ProjectService,
-        deployments: DeploymentEnvironmentLinkClearer,
+        deployments: EnvironmentDeploymentStore,
     ) -> None:
         self._environments = environments
         self._projects = projects
@@ -50,6 +59,12 @@ class EnvironmentService:
     async def list(self, project_id: uuid.UUID, *, limit: int, offset: int) -> tuple[Sequence[Environment], int]:
         await self._projects.get(project_id)
         return await self._environments.list(project_id, limit=limit, offset=offset)
+
+    async def retained_rollback_image_counts(
+        self, environment_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, int]:
+        """How many succeeded images each environment has not pruned (#274)."""
+        return await self._deployments.count_retained_images(environment_ids)
 
     async def update(self, project_id: uuid.UUID, environment_id: uuid.UUID, data: EnvironmentUpdate) -> Environment:
         environment = await self.get(project_id, environment_id)

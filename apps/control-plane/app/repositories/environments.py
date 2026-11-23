@@ -39,6 +39,15 @@ class EnvironmentRepository:
             .with_for_update(key_share=True)
         )
 
+    async def get_with_project(self, environment_id: uuid.UUID) -> Environment | None:
+        """Load one environment and its project. Used when naming a retained image."""
+        result = await self._session.execute(
+            select(Environment)
+            .options(selectinload(Environment.project))
+            .where(Environment.id == environment_id)
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_slug(self, project_id: uuid.UUID, slug: str) -> Environment | None:
         result = await self._session.execute(
             select(Environment).where(Environment.project_id == project_id, Environment.slug == slug)

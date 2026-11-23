@@ -18,11 +18,18 @@ import { deleteEnvironment, queueEnvironmentReconcile, updateEnvironment } from 
 import {
   ENVIRONMENT_KINDS,
   ENVIRONMENT_REGIONS,
+  ROLLBACK_IMAGES_DEFAULT,
+  ROLLBACK_IMAGES_MAX,
+  ROLLBACK_IMAGES_MIN,
   parseEnvironmentUpdateFields,
 } from "@/lib/environment-input";
 import { nativeSelectClassName } from "@/lib/native-select";
 import { PROJECT_NAME_MAX } from "@/lib/project-input";
 import type { DeployOverlap, EnvironmentOption } from "@/lib/types";
+
+function retainedImageLabel(count: number): string {
+  return count === 1 ? "1 rollback image still present" : `${count} rollback images still present`;
+}
 
 type EnvironmentEditRowProps = {
   environment: EnvironmentOption;
@@ -41,6 +48,9 @@ export function EnvironmentEditRow({
   const [kind, setKind] = useState(environment.kind);
   const [region, setRegion] = useState(environment.region);
   const [overlap, setOverlap] = useState<DeployOverlap>(environment.deploy_overlap ?? "wait");
+  const [keep, setKeep] = useState(
+    String(environment.rollback_images_to_keep ?? ROLLBACK_IMAGES_DEFAULT),
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -58,8 +68,13 @@ export function EnvironmentEditRow({
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    const fields: { name?: string; kind?: string; region?: string; deploy_overlap?: DeployOverlap } =
-      {};
+    const fields: {
+      name?: string;
+      kind?: string;
+      region?: string;
+      deploy_overlap?: DeployOverlap;
+      rollback_images_to_keep?: number;
+    } = {};
     if (name.trim() !== environment.name) {
       fields.name = name;
     }
@@ -71,6 +86,10 @@ export function EnvironmentEditRow({
     }
     if (overlap !== (environment.deploy_overlap ?? "wait")) {
       fields.deploy_overlap = overlap;
+    }
+    const keepCount = Number(keep);
+    if (keepCount !== (environment.rollback_images_to_keep ?? ROLLBACK_IMAGES_DEFAULT)) {
+      fields.rollback_images_to_keep = keepCount;
     }
     const parsed = parseEnvironmentUpdateFields(fields);
     if (!parsed.ok) {
@@ -89,6 +108,7 @@ export function EnvironmentEditRow({
       setKind(updated.kind);
       setRegion(updated.region);
       setOverlap(updated.deploy_overlap ?? "wait");
+      setKeep(String(updated.rollback_images_to_keep ?? ROLLBACK_IMAGES_DEFAULT));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Update failed.");
     } finally {
@@ -135,6 +155,9 @@ export function EnvironmentEditRow({
     <form onSubmit={handleSave} className="grid gap-3 py-4 first:pt-4 sm:grid-cols-2">
       <div className="sm:col-span-2">
         <p className="font-mono text-xs text-primary">{environment.slug}</p>
+        <p className="text-sm text-muted-foreground">
+          {retainedImageLabel(environment.retained_rollback_images ?? 0)}
+        </p>
       </div>
       <div className="grid gap-2">
         <Label htmlFor={`${idPrefix}-name`}>Name</Label>
@@ -183,6 +206,23 @@ export function EnvironmentEditRow({
           <option value="wait">Wait for the current deploy</option>
           <option value="override">Replace the current deploy</option>
         </select>
+      </div>
+      <div className="grid gap-2 sm:col-span-2">
+        <Label htmlFor={`${idPrefix}-keep`}>Rollback images to keep</Label>
+        <Input
+          id={`${idPrefix}-keep`}
+          type="number"
+          inputMode="numeric"
+          min={ROLLBACK_IMAGES_MIN}
+          max={ROLLBACK_IMAGES_MAX}
+          step={1}
+          value={keep}
+          disabled={busy}
+          onChange={(event) => {
+            setKeep(event.currentTarget.value);
+            clearError();
+          }}
+        />
       </div>
       <div className="flex flex-wrap items-end gap-2">
         <Button type="submit" size="sm" disabled={busy}>

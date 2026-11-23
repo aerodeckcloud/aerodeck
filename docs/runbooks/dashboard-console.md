@@ -74,6 +74,13 @@ only) and, on the rollback response, `variables_restored`. Rows that
 succeeded before this story have no snapshot: the image still rolls back and
 `variables_restored` is false so current variables stay as they are. Pass
 `restore_variables: false` to skip the restore when a snapshot exists.
+Each environment keeps `rollback_images_to_keep` succeeded images (default 5,
+from 1 to 20). When a deployment is marked succeeded, the worker removes older
+local tags. The current image is never removed, and a prune failure is logged
+without marking that deployment failed. The project page shows how many
+rollback images are still present (`retained_rollback_images`). Rollback or
+promote of a pruned image returns 422 `image_not_retained`. These tags stay on
+the Docker host; they are not pushed to a registry.
 
 `POST /api/v1/deployments/{id}/cancel` (console `POST /api/console/deployments/{id}/cancel`)
 marks a queued or running deployment `cancelled` and sets `finished_at` when the

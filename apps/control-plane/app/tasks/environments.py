@@ -28,6 +28,7 @@ from app.services.container_ops import (
     run_container_action_sync,
 )
 from app.services.image_presence import IMAGE_PRESENT_TASK, image_present_sync
+from app.services.image_retention import PRUNE_IMAGES_TASK, prune_rollback_images_sync
 from app.services.notifications import notify_deployment_event_sync
 from app.services.docker_policy import validate_git_ref
 from app.services.provisioning import (
@@ -315,6 +316,31 @@ def remove_environment_container(*, project_id: str, environment_id: str) -> boo
     return remove_container_sync(
         project_id=project_id,
         environment_id=environment_id,
+        docker_bin=settings.docker_bin,
+        docker_host=settings.docker_host,
+    )
+
+
+@shared_task(
+    name=PRUNE_IMAGES_TASK,
+    bind=True,
+    autoretry_for=(TransientJobError,),
+    retry_backoff=True,
+    retry_jitter=True,
+    retry_kwargs={"max_retries": 3},
+    acks_late=True,
+)
+def prune_rollback_images(self: Task, *, environment_id: str, deployment_id: str) -> None:
+    """Drop succeeded images past the environment's keep count (#274).
+
+    A failure here is the task's, not the deployment's. The row stays succeeded.
+    """
+    _ = self
+    settings = get_settings()
+    prune_rollback_images_sync(
+        environment_id=environment_id,
+        deployment_id=deployment_id,
+        database_url=settings.database_url,
         docker_bin=settings.docker_bin,
         docker_host=settings.docker_host,
     )

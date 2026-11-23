@@ -1,7 +1,7 @@
 import enum
 import uuid
 
-from sqlalchemy import Enum, ForeignKey, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, Enum, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -43,6 +43,10 @@ class Environment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         UniqueConstraint("project_id", "slug", name="uq_environments_project_id_slug"),
         # Target for deployments composite FK (project_id, environment_id).
         UniqueConstraint("project_id", "id", name="uq_environments_project_id_id"),
+        CheckConstraint(
+            "rollback_images_to_keep >= 1 AND rollback_images_to_keep <= 20",
+            name="rollback_images_to_keep_range",
+        ),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -57,6 +61,10 @@ class Environment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # wait: queue behind the active deploy. override: cancel it if swap has not started (#271).
     deploy_overlap: Mapped[str] = mapped_column(
         String(16), nullable=False, default=DeployOverlap.wait.value, server_default=DeployOverlap.wait.value
+    )
+    # How many succeeded deployment images this environment keeps for rollback (#274).
+    rollback_images_to_keep: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default="5"
     )
 
     project: Mapped[Project] = relationship(back_populates="environments")

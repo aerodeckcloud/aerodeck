@@ -133,7 +133,13 @@ export async function deleteProject(projectId: string): Promise<void> {
 export async function updateEnvironment(
   projectId: string,
   environmentId: string,
-  input: { name?: string; kind?: string; region?: string; deploy_overlap?: "wait" | "override" },
+  input: {
+    name?: string;
+    kind?: string;
+    region?: string;
+    deploy_overlap?: "wait" | "override";
+    rollback_images_to_keep?: number;
+  },
 ): Promise<EnvironmentOption> {
   const response = await fetch(
     `/api/console/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}`,

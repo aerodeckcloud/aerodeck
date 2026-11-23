@@ -108,6 +108,51 @@ class DeploymentRepository:
         )
         return rows.all(), int(total or 0)
 
+    async def list_succeeded(self, environment_id: uuid.UUID) -> Sequence[Deployment]:
+        """Succeeded rows for one environment, oldest first."""
+        rows = await self._session.scalars(
+            select(Deployment).where(
+                Deployment.environment_id == environment_id,
+                Deployment.status == DeploymentStatus.succeeded,
+            )
+        )
+        return rows.all()
+
+    async def count_retained_images(
+        self, environment_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, int]:
+        """Succeeded deployments whose image tag has not been pruned (#274)."""
+        if not environment_ids:
+            return {}
+        rows = await self._session.execute(
+            select(Deployment.environment_id, func.count())
+            .where(
+                Deployment.environment_id.in_(tuple(environment_ids)),
+                Deployment.status == DeploymentStatus.succeeded,
+                Deployment.image_pruned_at.is_(None),
+            )
+            .group_by(Deployment.environment_id)
+        )
+        return {
+            environment_id: int(count)
+            for environment_id, count in rows.all()
+            if environment_id is not None
+        }
+
+    async def mark_images_pruned(
+        self, deployment_ids: Sequence[uuid.UUID], pruned_at: datetime
+    ) -> None:
+        if not deployment_ids:
+            return
+        await self._session.execute(
+            update(Deployment)
+            .where(
+                Deployment.id.in_(tuple(deployment_ids)),
+                Deployment.image_pruned_at.is_(None),
+            )
+            .values(image_pruned_at=pruned_at)
+        )
+
     async def list_active(
         self, environment_id: uuid.UUID, exclude_id: uuid.UUID
     ) -> Sequence[Deployment]:

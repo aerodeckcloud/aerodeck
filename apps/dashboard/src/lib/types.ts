@@ -120,6 +120,10 @@ export type EnvironmentOption = {
   region: string;
   /** How a new deploy behaves while another is still queued or running. Defaults to wait. */
   deploy_overlap?: DeployOverlap;
+  /** Succeeded images this environment keeps for rollback. Defaults to 5. */
+  rollback_images_to_keep?: number;
+  /** Succeeded images that have not been pruned. */
+  retained_rollback_images?: number;
 };
 
 export type EnvironmentOptionPage = {
