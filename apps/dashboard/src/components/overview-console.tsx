@@ -6,7 +6,6 @@ import { useEffect, useState } from "react";
 
 import { PageHeader } from "@/components/page-header";
 import { LinkButton } from "@/components/link-button";
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -15,7 +14,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { fetchDeployments, fetchProjectPage, fetchSandboxPage } from "@/lib/api";
-import type { Deployment, ProjectPage, SandboxPage } from "@/lib/types";
+import type { Deployment, DeploymentStatus, ProjectPage, SandboxPage } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 export function OverviewConsole({ controlPlane = false }: { controlPlane?: boolean }) {
   const [projects, setProjects] = useState<ProjectPage | null>(null);
@@ -69,12 +69,14 @@ export function OverviewConsole({ controlPlane = false }: { controlPlane?: boole
         <>
           <div className="grid gap-4 sm:grid-cols-3">
             <StatCard
+              tick="bg-primary"
               icon={FolderGit2}
               label="Projects"
               value={projects?.total ?? 0}
               hint={projects?.source === "control-plane" ? "Live control plane" : "Local seed"}
             />
             <StatCard
+              tick="bg-chart-3"
               icon={Box}
               label="Sandboxes"
               value={runningSandboxes}
@@ -85,6 +87,7 @@ export function OverviewConsole({ controlPlane = false }: { controlPlane?: boole
               }
             />
             <StatCard
+              tick="bg-runway"
               icon={Activity}
               label="Deployments"
               value={deployments.length}
@@ -111,13 +114,19 @@ export function OverviewConsole({ controlPlane = false }: { controlPlane?: boole
                       <div className="min-w-0 flex-1">
                         <Link
                           href={`/deployments/${row.id}`}
-                          className="font-mono text-sm text-primary hover:underline"
+                          className="font-heading text-sm font-medium tracking-tight hover:text-primary"
                         >
                           {row.owner}/{row.repo}
                         </Link>
-                        <p className="truncate text-xs text-muted-foreground">{row.id}</p>
+                        <p className="truncate font-mono text-xs text-muted-foreground">{row.id}</p>
                       </div>
-                      <Badge variant="secondary">{row.status}</Badge>
+                      <span className="flex items-center gap-2 font-mono text-[11px] tracking-[0.14em] text-muted-foreground uppercase">
+                        <span
+                          className={cn("size-1.5 rounded-full", statusLamp(row.status))}
+                          aria-hidden
+                        />
+                        {row.status}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -130,12 +139,29 @@ export function OverviewConsole({ controlPlane = false }: { controlPlane?: boole
   );
 }
 
+function statusLamp(status: DeploymentStatus): string {
+  switch (status) {
+    case "succeeded":
+      return "bg-primary";
+    case "running":
+      return "bg-primary shadow-[0_0_8px_var(--primary)]";
+    case "queued":
+      return "bg-runway";
+    case "failed":
+      return "bg-destructive";
+    case "cancelled":
+      return "bg-muted-foreground/40";
+  }
+}
+
 function StatCard({
+  tick,
   icon: Icon,
   label,
   value,
   hint,
 }: {
+  tick: string;
   icon: typeof FolderGit2;
   label: string;
   value: number;
@@ -145,10 +171,11 @@ function StatCard({
     <Card>
       <CardHeader className="pb-2">
         <CardDescription className="flex items-center gap-2">
-          <Icon className="size-4 text-primary" />
+          <span className={cn("h-4 w-1 rounded-full", tick)} aria-hidden />
+          <Icon className="size-4" />
           {label}
         </CardDescription>
-        <CardTitle className="text-3xl">{value}</CardTitle>
+        <CardTitle className="font-heading text-4xl tabular-nums tracking-tight">{value}</CardTitle>
       </CardHeader>
       <CardContent>
         <p className="text-xs text-muted-foreground">{hint}</p>
