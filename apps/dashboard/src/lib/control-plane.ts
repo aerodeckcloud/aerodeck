@@ -374,6 +374,8 @@ export type UpdateControlPlaneEnvironmentInput = {
   deploy_overlap?: "wait" | "override";
   rollback_images_to_keep?: number;
   release_command?: string | null;
+  auto_deploy_paused?: boolean;
+  prod_deploy_approval?: boolean;
 };
 
 export async function updateControlPlaneEnvironment(
@@ -385,7 +387,7 @@ export async function updateControlPlaneEnvironment(
     throw new ControlPlaneError("control plane environment ids were not uuids");
   }
   const project = await getControlPlaneProject(config, input.projectId, options);
-  const body: Record<string, string | number | null> = {};
+  const body: Record<string, string | number | boolean | null> = {};
   if (input.name !== undefined) {
     body.name = input.name;
   }
@@ -403,6 +405,12 @@ export async function updateControlPlaneEnvironment(
   }
   if (input.release_command !== undefined) {
     body.release_command = input.release_command;
+  }
+  if (input.auto_deploy_paused !== undefined) {
+    body.auto_deploy_paused = input.auto_deploy_paused;
+  }
+  if (input.prod_deploy_approval !== undefined) {
+    body.prod_deploy_approval = input.prod_deploy_approval;
   }
   return controlPlaneRequest(
     config,
@@ -909,7 +917,7 @@ export async function listControlPlaneProjectDeployments(
 async function triggerControlPlaneDeploymentAction(
   config: ControlPlaneConfig,
   deploymentId: string,
-  action: "redeploy" | "rollback" | "deploy-latest" | "cancel" | "promote",
+  action: "redeploy" | "rollback" | "deploy-latest" | "cancel" | "promote" | "approve" | "reject",
   options: ListOptions & { actorUserId?: string } = {},
   body?: Record<string, unknown>,
 ): Promise<Deployment> {
@@ -963,6 +971,22 @@ export function redeployControlPlaneDeployment(
   options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   return triggerControlPlaneDeploymentAction(config, deploymentId, "redeploy", options);
+}
+
+export function approveControlPlaneDeployment(
+  config: ControlPlaneConfig,
+  deploymentId: string,
+  options: ListOptions & { actorUserId?: string } = {},
+): Promise<Deployment> {
+  return triggerControlPlaneDeploymentAction(config, deploymentId, "approve", options);
+}
+
+export function rejectControlPlaneDeployment(
+  config: ControlPlaneConfig,
+  deploymentId: string,
+  options: ListOptions & { actorUserId?: string } = {},
+): Promise<Deployment> {
+  return triggerControlPlaneDeploymentAction(config, deploymentId, "reject", options);
 }
 
 export function cancelControlPlaneDeployment(
@@ -2034,7 +2058,7 @@ export async function provisionControlPlaneEnvironment(
   environmentId: string,
   deploymentId: string,
   options: ListOptions & { envVars?: Record<string, string>; addons?: AddonType[] } = {},
-): Promise<void> {
+): Promise<{ approvalPending: boolean }> {
   if (
     !isControlPlaneUuid(projectId) ||
     !isControlPlaneUuid(environmentId) ||
@@ -2072,7 +2096,14 @@ export async function provisionControlPlaneEnvironment(
     },
   );
   await throwIfEnvironmentJobResponseFailed(response, "provision");
-  await discardResponseBody(response);
+  let approvalPending = false;
+  try {
+    const payload = (await response.json()) as { approval_pending?: unknown };
+    approvalPending = payload?.approval_pending === true;
+  } catch {
+    approvalPending = false;
+  }
+  return { approvalPending };
 }
 
 export async function inspectControlPlaneDeploymentRepo(
@@ -2219,13 +2250,16 @@ export async function createControlPlaneDeploymentAndProvision(
     actorUserId: input.actorUserId,
   });
   try {
-    await provisionControlPlaneEnvironment(
+    const accepted = await provisionControlPlaneEnvironment(
       config,
       input.projectId,
       input.environmentId,
       deployment.id,
       { ...options, envVars: input.envVars, addons: input.addons },
     );
+    if (accepted.approvalPending) {
+      return await getControlPlaneDeployment(config, deployment.id, options);
+    }
   } catch (cause) {
     // Deployment exists; attach its id for the console error payload (do not navigate —
     // opening logs before a seed line would hit stub Done).
@@ -2404,7 +2438,19 @@ function parseEnvironmentOption(
     rollback_images_to_keep: rollbackImagesToKeep,
     retained_rollback_images: retainedRollbackImages,
     release_command: releaseCommand,
+    auto_deploy_paused: readEnvironmentFlag(row.auto_deploy_paused),
+    prod_deploy_approval: readEnvironmentFlag(row.prod_deploy_approval),
   };
+}
+
+function readEnvironmentFlag(value: unknown): boolean {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value !== "boolean") {
+    throw new ControlPlaneError("control plane environments response was not a page");
+  }
+  return value;
 }
 
 function readReleaseCommand(value: unknown): string | null {
@@ -2913,6 +2959,8 @@ function parseDeployment(value: unknown): Deployment {
   const finishedAt = optionalTimestamp(row.finished_at);
   const swapStartedAt = optionalTimestamp(row.swap_started_at);
   const heldFor = optionalUuidField(row.held_for_deployment_id);
+  const approvalRequiredAt = optionalTimestamp(row.approval_required_at);
+  const approvedAt = optionalTimestamp(row.approved_at);
   const snapshotNames = optionalStringList(row.snapshot_variable_names);
   const variablesRestored = optionalBoolean(row.variables_restored);
   return {
@@ -2930,6 +2978,8 @@ function parseDeployment(value: unknown): Deployment {
     ...(finishedAt !== undefined ? { finished_at: finishedAt } : {}),
     ...(swapStartedAt !== undefined ? { swap_started_at: swapStartedAt } : {}),
     ...(heldFor !== undefined ? { held_for_deployment_id: heldFor } : {}),
+    ...(approvalRequiredAt !== undefined ? { approval_required_at: approvalRequiredAt } : {}),
+    ...(approvedAt !== undefined ? { approved_at: approvedAt } : {}),
     status: row.status as DeploymentStatus,
     ...(snapshotNames !== undefined ? { snapshot_variable_names: snapshotNames } : {}),
     ...(variablesRestored !== undefined ? { variables_restored: variablesRestored } : {}),

@@ -69,6 +69,8 @@ class DeploymentRead(BaseModel):
     finished_at: datetime | None
     swap_started_at: datetime | None
     held_for_deployment_id: uuid.UUID | None
+    approval_required_at: datetime | None = None
+    approved_at: datetime | None = None
     # Names only when a snapshot exists. Never values or ciphertext (#273).
     snapshot_variable_names: list[str] | None = None
     # Set on rollback responses: True when the snapshot was applied.
@@ -96,6 +98,8 @@ class DeploymentSource(Protocol):
     finished_at: datetime | None
     swap_started_at: datetime | None
     held_for_deployment_id: uuid.UUID | None
+    approval_required_at: datetime | None
+    approved_at: datetime | None
     snapshot_names_json: str | None
     created_at: datetime
     updated_at: datetime

@@ -103,7 +103,7 @@ class WebhookRead(BaseModel):
 class WebhookDeliveryResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["pong", "triggered", "cleaned_up", "ignored"]
+    status: Literal["pong", "triggered", "cleaned_up", "ignored", "pending_approval"]
     reason: str | None = None
     deployment_ids: list[uuid.UUID] = Field(default_factory=list)
 
@@ -192,11 +192,13 @@ class WebhookService:
         *,
         signing_key: str,
         pr_previews: Any = None,
+        approval: Any = None,
     ) -> None:
         self._repo = repo
         self._environments = environments
         self._signing_key = signing_key
         self._pr_previews = pr_previews
+        self._approval = approval
 
     async def get_for_environment(
         self, project_id: uuid.UUID, environment_id: uuid.UUID
@@ -312,6 +314,7 @@ class WebhookService:
 
         ref = str(payload.get("ref") or "")
         triggered_ids: list[uuid.UUID] = []
+        pending_ids: list[uuid.UUID] = []
         skipped_reason: str | None = None
 
         for webhook in verified:
@@ -320,6 +323,13 @@ class WebhookService:
                 continue
             if delivery_id and webhook.last_delivery_id == delivery_id:
                 skipped_reason = skipped_reason or "duplicate delivery"
+                continue
+            environment = await self._environments.get(webhook.project_id, webhook.environment_id)
+            if self._approval is not None and environment.auto_deploy_paused:
+                await self._approval.note_auto_deploy_skipped(environment)
+                webhook.last_delivery_id = delivery_id
+                webhook.last_triggered_at = datetime.now(UTC)
+                skipped_reason = "auto-deploy paused"
                 continue
             deployment = await deployments.create(
                 DeploymentCreate(
@@ -330,6 +340,18 @@ class WebhookService:
                 trigger=DeploymentTrigger.webhook,
             )
             addons = _parse_addons(webhook.addons_json) or None
+            if self._approval is not None and await self._approval.needs(environment, None):
+                await self._approval.defer(deployment.id, addons=addons)
+                webhook.last_delivery_id = delivery_id
+                webhook.last_triggered_at = datetime.now(UTC)
+                pending_ids.append(deployment.id)
+                logger.info(
+                    "github webhook stored deployment %s pending approval for %s (%s)",
+                    deployment.id,
+                    webhook.repo_url,
+                    webhook.branch,
+                )
+                continue
             try:
                 await jobs.enqueue(
                     JobKind.provision,
@@ -351,6 +373,10 @@ class WebhookService:
                 webhook.branch,
             )
 
-        if not triggered_ids:
-            return WebhookDeliveryResult(status="ignored", reason=skipped_reason or "no matching branch")
-        return WebhookDeliveryResult(status="triggered", deployment_ids=triggered_ids)
+        if triggered_ids:
+            return WebhookDeliveryResult(
+                status="triggered", deployment_ids=[*triggered_ids, *pending_ids]
+            )
+        if pending_ids:
+            return WebhookDeliveryResult(status="pending_approval", deployment_ids=pending_ids)
+        return WebhookDeliveryResult(status="ignored", reason=skipped_reason or "no matching branch")

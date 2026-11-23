@@ -184,6 +184,29 @@ class DeploymentRepository:
         await self._session.flush()
         await self._session.refresh(stored)
 
+    async def mark_awaiting_approval(
+        self, deployment_id: uuid.UUID, required_at: datetime, replay_json: str | None
+    ) -> Deployment | None:
+        """Queue the row until an owner approves. A dispatched row is left alone."""
+        stored = await self._session.get(Deployment, deployment_id)
+        if stored is None or stored.dispatched_at is not None or stored.approved_at is not None:
+            return stored
+        stored.status = DeploymentStatus.queued
+        stored.approval_required_at = required_at
+        stored.provision_replay_json = replay_json
+        await self._session.flush()
+        await self._session.refresh(stored)
+        return stored
+
+    async def mark_approved(self, deployment_id: uuid.UUID, approved_at: datetime) -> Deployment | None:
+        stored = await self._session.get(Deployment, deployment_id)
+        if stored is None:
+            return None
+        stored.approved_at = approved_at
+        await self._session.flush()
+        await self._session.refresh(stored)
+        return stored
+
     async def mark_waiting(
         self, deployment_id: uuid.UUID, active_id: uuid.UUID, replay_json: str | None
     ) -> None:

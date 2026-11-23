@@ -19,6 +19,7 @@ from app.services.deployments import DeploymentService
 from app.services.docker_policy import normalize_git_sha
 from app.services.environments import EnvironmentService
 from app.services.image_presence import ImageLookup, RetainedImage
+from app.services.deploy_approval import needs_production_approval
 from app.services.jobs import JobService
 from app.services.project_members import ProjectMemberService
 from app.services.provisioning import JobKind
@@ -103,13 +104,18 @@ class PromotionService:
             git_sha=sha,
             git_ref=source.git_ref,
         )
-        await self._jobs.enqueue(
-            JobKind.provision,
-            source.project_id,
-            target.id,
-            deployment_id=created.id,
-            promote_from_deployment_id=source.id,
-        )
+        if await needs_production_approval(self._members, target, actor_user_id):
+            await self._jobs.defer_for_approval(
+                created.id, promote_from_deployment_id=source.id
+            )
+        else:
+            await self._jobs.enqueue(
+                JobKind.provision,
+                source.project_id,
+                target.id,
+                deployment_id=created.id,
+                promote_from_deployment_id=source.id,
+            )
         logger.info(
             "event=deployment_promoted source=%s deployment=%s environment=%s",
             source.id,

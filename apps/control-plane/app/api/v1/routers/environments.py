@@ -7,6 +7,8 @@ from starlette.concurrency import run_in_threadpool
 from app.api.deps import (
     ActorUserIdDep,
     AuditLogServiceDep,
+    DeployApprovalServiceDep,
+    DeploymentServiceDep,
     EnvironmentServiceDep,
     EnvironmentVariableServiceDep,
     JobServiceDep,
@@ -39,6 +41,7 @@ from app.services.environment_vars import (
     EnvironmentVarRead,
     EnvironmentVarUpsertRequest,
 )
+from app.services.deployments import is_awaiting_approval
 from app.services.environments import EnvironmentService
 from app.services.provisioning import JobKind
 from app.services.webhooks import WebhookRead, WebhookUpsertRequest
@@ -157,6 +160,15 @@ async def _enqueue(
     )
 
 
+def _approval_accepted(project_id: uuid.UUID, environment_id: uuid.UUID) -> JobAccepted:
+    return JobAccepted(
+        approval_pending=True,
+        kind=JobKind.provision,
+        project_id=project_id,
+        environment_id=environment_id,
+    )
+
+
 @router.post(
     "/{environment_id}/provision",
     response_model=JobAccepted,
@@ -173,11 +185,22 @@ async def provision_environment(
     project_id: uuid.UUID,
     environment_id: uuid.UUID,
     jobs: JobServiceDep,
+    deployments: DeploymentServiceDep,
+    environments: EnvironmentServiceDep,
+    approval: DeployApprovalServiceDep,
     body: ProvisionJobCreate | None = None,
 ) -> JobAccepted:
     deployment_id = body.deployment_id if body is not None else None
     env_vars = body.env_vars if body is not None else None
     addons = body.addons if body is not None else None
+    if deployment_id is not None:
+        stored = await deployments.get(deployment_id)
+        if is_awaiting_approval(stored):
+            return _approval_accepted(project_id, environment_id)
+        environment = await environments.get(project_id, environment_id)
+        if await approval.needs(environment, stored.actor_user_id):
+            await approval.defer(deployment_id, env_vars=env_vars, addons=addons)
+            return _approval_accepted(project_id, environment_id)
     return await _enqueue(
         JobKind.provision,
         project_id,

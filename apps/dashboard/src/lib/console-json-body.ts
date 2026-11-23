@@ -62,6 +62,25 @@ export function readOptionalInteger(
   return { ok: true, value: payload[key] };
 }
 
+export type OptionalBooleanResult =
+  | { ok: true; value?: boolean }
+  | { ok: false; response: NextResponse };
+
+/** Read an optional JSON boolean; missing stays undefined, wrong type → 400. */
+export function readOptionalBoolean(
+  payload: Record<string, unknown>,
+  key: string,
+  code: string,
+): OptionalBooleanResult {
+  if (payload[key] === undefined) {
+    return { ok: true };
+  }
+  if (typeof payload[key] !== "boolean") {
+    return { ok: false, response: jsonError(400, `${key} must be a boolean.`, code) };
+  }
+  return { ok: true, value: payload[key] };
+}
+
 /** Like readOptionalString but also allows null (e.g. project description clear). */
 export function readOptionalNullableString(
   payload: Record<string, unknown>,

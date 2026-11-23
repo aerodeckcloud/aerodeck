@@ -25,6 +25,7 @@ from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigge
 from app.models.project import DeployOverlap, Environment
 from app.repositories.jobs import JobState
 from app.services.deployment_logs import (
+    PROVISION_APPROVAL_LINE,
     PROVISION_QUEUE_FAILED_LINE,
     PROVISION_QUEUED_LINE,
     PROVISION_WAITING_LINE,
@@ -240,6 +241,56 @@ class JobService:
             await self._remember_provision_job_id(linked_deployment_id, job_id)
         logger.info("queued %s job %s for environment %s", kind.value, job_id, environment.id)
         return JobTicket(job_id=job_id, kind=kind, project_id=environment.project_id, environment_id=environment.id)
+
+    async def defer_for_approval(
+        self,
+        deployment_id: uuid.UUID,
+        *,
+        git_ref: str | None = None,
+        addons: list[str] | None = None,
+        env_vars: dict[str, str] | None = None,
+        rollback_from_deployment_id: uuid.UUID | None = None,
+        promote_from_deployment_id: uuid.UUID | None = None,
+        replace_env_vars: dict[str, EnvVarPlain] | None = None,
+    ) -> None:
+        """Store the row as queued until an owner approves. Nothing is dispatched (#276)."""
+        replay = ProvisionReplay(
+            git_ref=git_ref,
+            rollback_from_deployment_id=rollback_from_deployment_id,
+            promote_from_deployment_id=promote_from_deployment_id,
+            addons=addons,
+            sealed_env_vars=self._seal(env_vars),
+            sealed_replace_env_vars=self._seal_replace(replace_env_vars),
+        )
+        await self._deployments.mark_awaiting_approval(deployment_id, replay.to_json())
+        try:
+            await publish_line(self._redis_url, deployment_id, PROVISION_APPROVAL_LINE)
+        except QueueUnavailableError as publish_exc:
+            logger.warning(
+                "event=deployment_log_approval_publish_skipped deployment=%s error_type=%s",
+                deployment_id,
+                type(publish_exc).__name__,
+            )
+
+    async def start_approved(self, deployment: Deployment) -> JobTicket:
+        """Enqueue a deployment an owner just approved, under the overlap policy (#276)."""
+        if deployment.project_id is None or deployment.environment_id is None:
+            raise UnprocessableError("Deployment is not linked to an environment.")
+        replay = ProvisionReplay.from_json(deployment.provision_replay_json)
+        return await self.enqueue(
+            JobKind.provision,
+            deployment.project_id,
+            deployment.environment_id,
+            deployment_id=deployment.id,
+            env_vars=self._unseal(replay.sealed_env_vars),
+            replace_env_vars=self._unseal_replace(replay.sealed_replace_env_vars)
+            if replay.sealed_replace_env_vars
+            else None,
+            addons=replay.addons,
+            rollback_from_deployment_id=replay.rollback_from_deployment_id,
+            promote_from_deployment_id=replay.promote_from_deployment_id,
+            git_ref=replay.git_ref,
+        )
 
     async def release_waiting(self, finished: Deployment) -> None:
         """Start the newest deployment that waited on ``finished``.

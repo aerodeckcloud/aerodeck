@@ -15,6 +15,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import { DeploymentApprovalActions } from "@/components/deployment-approval-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -26,14 +27,26 @@ import {
   redeployDeployment,
   rollbackDeployment,
 } from "@/lib/api";
-import { isDeploymentWaiting } from "@/lib/deployment-waiting";
+import { isAwaitingApproval, isDeploymentWaiting } from "@/lib/deployment-waiting";
 import { formatDuration, formatInstant } from "@/lib/format";
 import { nativeSelectClassName } from "@/lib/native-select";
 import { canPromote, promotionTargetLabel, promotionTargets } from "@/lib/promotion";
 import { rollbackConfirmMessage, rollbackRestoreWarning } from "@/lib/rollback-variables";
 import type { Deployment, DeploymentStatus, EnvironmentOption, ProjectSource } from "@/lib/types";
 
-function statusBadge(status: DeploymentStatus, heldFor?: string | null) {
+function statusBadge(
+  status: DeploymentStatus,
+  heldFor?: string | null,
+  awaitingApproval = false,
+) {
+  if (awaitingApproval) {
+    return (
+      <Badge variant="secondary">
+        <Loader2 className="size-3" />
+        Needs approval
+      </Badge>
+    );
+  }
   if (isDeploymentWaiting(status, heldFor)) {
     return (
       <Badge variant="secondary">
@@ -233,6 +246,7 @@ export function ProjectDeploymentsSection({
             </p>
           ) : (
             deployments.map((dep) => {
+              const awaiting = isAwaitingApproval(dep);
               const envSlug = dep.environment_id ? envNameById.get(dep.environment_id) : null;
               const duration = formatDuration(dep.started_at, dep.finished_at);
               const targets = canPromote(dep) ? promotionTargets(dep, environments) : [];
@@ -250,7 +264,7 @@ export function ProjectDeploymentsSection({
                       >
                         {dep.id.slice(0, 8)}
                       </Link>
-                      {statusBadge(dep.status, dep.held_for_deployment_id)}
+                      {statusBadge(dep.status, dep.held_for_deployment_id, awaiting)}
                       {envSlug ? <Badge variant="outline">{envSlug}</Badge> : null}
                     </div>
                     <p className="font-mono text-xs text-muted-foreground">
@@ -263,6 +277,19 @@ export function ProjectDeploymentsSection({
                   </div>
 
                   <div className="flex items-center gap-2">
+                    {source === "control-plane" && awaiting ? (
+                      <DeploymentApprovalActions
+                        deploymentId={dep.id}
+                        size="sm"
+                        onResolved={(next) => {
+                          if (next.status === "cancelled") {
+                            void load();
+                            return;
+                          }
+                          router.push(`/deployments/${next.id}`);
+                        }}
+                      />
+                    ) : null}
                     <Button
                       type="button"
                       size="sm"

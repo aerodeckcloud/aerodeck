@@ -93,6 +93,22 @@ and leaves the previous container serving. An empty command skips this step.
 Rolling an image back does not undo schema changes or migrations that command
 applied.
 
+An owner can pause automatic redeploys on an environment (`auto_deploy_paused`).
+A GitHub push then creates no deployment and writes one audit row,
+`deployment.auto_deploy_skipped`. The webhook secret is not in that row. A
+repeat of the same delivery is ignored. Manual deploy, repeat, deploy-latest,
+and promote still run while pause is on.
+Production environments can require an owner (`prod_deploy_approval`). Existing
+production environments stay off, so current webhooks keep deploying until an
+owner turns it on. A new production environment starts with it on. A developer
+or a webhook then stores the row as `queued` with `approval_required_at` set
+and does not start a job. An owner deploys immediately.
+`POST /api/v1/deployments/{id}/approve` and `POST .../reject` are owner-only
+(console `POST /api/console/deployments/{id}/approve` and `.../reject`).
+Approve starts the job under the overlap setting and the audit row records the
+approving user. Reject marks the row `cancelled`. A project with no members
+has nobody to approve, so those deploys still start.
+
 `POST /api/v1/deployments/{id}/cancel` (console `POST /api/console/deployments/{id}/cancel`)
 marks a queued or running deployment `cancelled` and sets `finished_at` when the
 worker has not yet set `swap_started_at`. The Celery task is revoked if it has

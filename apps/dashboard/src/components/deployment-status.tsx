@@ -4,6 +4,7 @@ import { Ban, CheckCircle2, ExternalLink, Loader2, Rocket, XCircle } from "lucid
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { DeploymentApprovalActions } from "@/components/deployment-approval-actions";
 import { DeploymentEnvironmentLink } from "@/components/deployment-environment-link";
 import { LinkButton } from "@/components/link-button";
 import { ProvisionJobPanel } from "@/components/provision-job-panel";
@@ -27,7 +28,7 @@ import {
   markDeploymentFailed,
   markDeploymentSucceeded,
 } from "@/lib/api";
-import { isDeploymentFinished, isDeploymentWaiting } from "@/lib/deployment-waiting";
+import { isAwaitingApproval, isDeploymentFinished, isDeploymentWaiting } from "@/lib/deployment-waiting";
 import { useEnvironmentCatalog } from "@/lib/use-environment-catalog";
 import type { Deployment, DeploymentStatus, ProjectSource } from "@/lib/types";
 
@@ -54,7 +55,15 @@ function logSourceCopy(source: ProjectSource): { sseLabel: string; targetLabel: 
   };
 }
 
-function statusBadge(status: DeploymentStatus, waiting: boolean) {
+function statusBadge(status: DeploymentStatus, waiting: boolean, awaitingApproval: boolean) {
+  if (awaitingApproval) {
+    return (
+      <Badge variant="secondary">
+        <Loader2 />
+        Needs approval
+      </Badge>
+    );
+  }
   if (waiting) {
     return (
       <Badge variant="secondary">
@@ -106,6 +115,7 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
   const [liveHostname, setLiveHostname] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [awaitingApproval, setAwaitingApproval] = useState(() => isAwaitingApproval(deployment));
   const hasLinkedEnv = Boolean(deployment.project_id && deployment.environment_id);
   const environments = useEnvironmentCatalog(logSource === "control-plane" && hasLinkedEnv);
   const copy = logSourceCopy(logSource);
@@ -115,6 +125,7 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
     setStatus(stored.status);
     setHeldFor(stored.held_for_deployment_id ?? null);
     setProvisionJobId(stored.provision_job_id ?? null);
+    setAwaitingApproval(isAwaitingApproval(stored));
   }, []);
 
   // A waiting deployment starts on its own, so re-read it until it does.
@@ -139,6 +150,29 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
       clearInterval(timer);
     };
   }, [waiting, deployment.id, applyStored]);
+
+  // An owner approves from this page or another session. Re-read until they do.
+  useEffect(() => {
+    if (!awaitingApproval) {
+      return;
+    }
+    let stopped = false;
+    const timer = setInterval(() => {
+      void fetchDeployment(deployment.id, true)
+        .then((stored) => {
+          if (!stopped) {
+            applyStored(stored);
+          }
+        })
+        .catch(() => {
+          // Best-effort: the next tick tries again.
+        });
+    }, WAITING_POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [awaitingApproval, deployment.id, applyStored]);
 
   useEffect(() => {
     if (logSource !== "control-plane" || !deployment.project_id || !deployment.environment_id) {
@@ -165,7 +199,7 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
 
   /** False when the deployment has no outcome to record: still waiting, or already finished. */
   async function hasStarted(): Promise<boolean> {
-    if (!waiting) {
+    if (!waiting && !awaitingApproval) {
       return true;
     }
     // The page may be behind: the deployment can start between two polls.
@@ -174,7 +208,8 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
       applyStored(stored);
       return (
         !isDeploymentFinished(stored.status) &&
-        !isDeploymentWaiting(stored.status, stored.held_for_deployment_id)
+        !isDeploymentWaiting(stored.status, stored.held_for_deployment_id) &&
+        !isAwaitingApproval(stored)
       );
     } catch {
       return false;
@@ -231,7 +266,12 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
               <ExternalLink data-icon="inline-end" />
             </a>
           ) : null}
-          {logSource === "control-plane" && (status === "queued" || status === "running") ? (
+          {logSource === "control-plane" && awaitingApproval ? (
+            <DeploymentApprovalActions deploymentId={deployment.id} onResolved={applyStored} />
+          ) : null}
+          {logSource === "control-plane" &&
+          !awaitingApproval &&
+          (status === "queued" || status === "running") ? (
             <Button
               type="button"
               variant="outline"
@@ -267,7 +307,7 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
                 {deployment.repo_url}
               </CardDescription>
             </div>
-            {statusBadge(status, waiting)}
+            {statusBadge(status, waiting, awaitingApproval)}
           </div>
         </CardHeader>
         <CardContent className="grid gap-3 pt-4 text-sm sm:grid-cols-2">
@@ -308,6 +348,12 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
         </CardContent>
       </Card>
 
+      {awaitingApproval ? (
+        <p className="text-sm text-muted-foreground" role="status">
+          Waiting for an owner to approve this production deploy.
+        </p>
+      ) : null}
+
       {waiting && heldFor ? (
         <p className="text-sm text-muted-foreground" role="status">
           Waiting for deployment{" "}
@@ -332,12 +378,14 @@ export function DeploymentStatusView({ deployment, logSource }: DeploymentStatus
       ) : null}
       {/* The stream opened while waiting may have ended before the deployment
           started. Changing the key opens a fresh one that replays from the top. */}
-      <Terminal
-        key={waiting ? "waiting" : "started"}
-        streamUrl={deploymentLogsUrl(deployment.id, logSource)}
-        onComplete={() => recordOutcome("succeeded")}
-        onFailed={() => recordOutcome("failed")}
-      />
+      {awaitingApproval ? null : (
+        <Terminal
+          key={waiting ? "waiting" : "started"}
+          streamUrl={deploymentLogsUrl(deployment.id, logSource)}
+          onComplete={() => recordOutcome("succeeded")}
+          onFailed={() => recordOutcome("failed")}
+        />
+      )}
 
       {logSource === "control-plane" && hasLinkedEnv ? (
         <RuntimeLogsPanel deploymentId={deployment.id} />

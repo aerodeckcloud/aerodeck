@@ -3,6 +3,7 @@ import { connection, NextResponse } from "next/server";
 import { requireEnrolledEnvironmentIds } from "@/lib/console-environment-route";
 import {
   readJsonObject,
+  readOptionalBoolean,
   readOptionalInteger,
   readOptionalNullableString,
   readOptionalString,
@@ -47,6 +48,8 @@ export async function PATCH(request: Request, context: RouteContext) {
     deploy_overlap?: string;
     rollback_images_to_keep?: number;
     release_command?: string | null;
+    auto_deploy_paused?: boolean;
+    prod_deploy_approval?: boolean;
   } = {};
   for (const [key, code] of [
     ["name", "invalid_name"],
@@ -75,6 +78,18 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
   if (command.value !== undefined) {
     fields.release_command = command.value;
+  }
+  for (const [key, code] of [
+    ["auto_deploy_paused", "invalid_auto_deploy_paused"],
+    ["prod_deploy_approval", "invalid_prod_deploy_approval"],
+  ] as const) {
+    const flag = readOptionalBoolean(body.value, key, code);
+    if (!flag.ok) {
+      return flag.response;
+    }
+    if (flag.value !== undefined) {
+      fields[key] = flag.value;
+    }
   }
 
   const parsed = parseEnvironmentUpdateFields(fields);

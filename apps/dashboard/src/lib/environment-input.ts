@@ -179,6 +179,8 @@ export type EnvironmentUpdateFields = {
   deploy_overlap?: string;
   rollback_images_to_keep?: number;
   release_command?: string | null;
+  auto_deploy_paused?: boolean;
+  prod_deploy_approval?: boolean;
 };
 
 export type EnvironmentUpdateParsed = {
@@ -188,6 +190,8 @@ export type EnvironmentUpdateParsed = {
   deploy_overlap?: DeployOverlap;
   rollback_images_to_keep?: number;
   release_command?: string | null;
+  auto_deploy_paused?: boolean;
+  prod_deploy_approval?: boolean;
 };
 
 export type EnvironmentUpdateParseResult =
@@ -245,13 +249,21 @@ export function parseEnvironmentUpdateFields(
       value.release_command = input.release_command.trim();
     }
   }
+  if (input.auto_deploy_paused !== undefined) {
+    value.auto_deploy_paused = input.auto_deploy_paused;
+  }
+  if (input.prod_deploy_approval !== undefined) {
+    value.prod_deploy_approval = input.prod_deploy_approval;
+  }
   if (
     value.name === undefined &&
     value.kind === undefined &&
     value.region === undefined &&
     value.deploy_overlap === undefined &&
     value.rollback_images_to_keep === undefined &&
-    value.release_command === undefined
+    value.release_command === undefined &&
+    value.auto_deploy_paused === undefined &&
+    value.prod_deploy_approval === undefined
   ) {
     return { ok: false, error: ENVIRONMENT_UPDATE_EMPTY, code: "empty_update" };
   }
