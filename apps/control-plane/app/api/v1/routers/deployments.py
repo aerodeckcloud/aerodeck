@@ -324,11 +324,13 @@ async def fail_deployment(
 )
 async def stream_deployment_logs(
     deployment_id: uuid.UUID,
-    deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
     settings: SettingsDep,
 ) -> StreamingResponse:
     """Stream published lines when present; otherwise the stub for a stored deployment."""
-    await deployments.get(deployment_id)
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     await ensure_log_store_ready(settings.redis_url)
     return StreamingResponse(
         _as_sse(
@@ -356,11 +358,13 @@ async def stream_deployment_logs(
 )
 async def get_deployment_runtime_logs(
     deployment_id: uuid.UUID,
-    deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
     settings: SettingsDep,
     tail: int = Query(default=200, ge=1, le=500),
 ) -> ContainerLogsRead:
-    deployment = await deployments.get(deployment_id)
+    deployment = await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     if deployment.project_id is None or deployment.environment_id is None:
         return ContainerLogsRead(
             container="",

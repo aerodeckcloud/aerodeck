@@ -546,7 +546,7 @@ async function throwIfSandboxResponseFailed(response: Response): Promise<void> {
 export async function openControlPlaneDeploymentLogs(
   config: ControlPlaneConfig,
   deploymentId: string,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<ReadableStream<Uint8Array>> {
   if (!isControlPlaneUuid(deploymentId)) {
     throw new ControlPlaneError("control plane deployment id was not a uuid");
@@ -554,13 +554,17 @@ export async function openControlPlaneDeploymentLogs(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers: Record<string, string> = {
+    accept: "text/event-stream",
+    authorization: `Bearer ${accessToken}`,
+  };
+  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
+    headers["x-aerodeck-user-id"] = options.actorUserId;
+  }
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/logs`,
     {
-      headers: {
-        accept: "text/event-stream",
-        authorization: `Bearer ${accessToken}`,
-      },
+      headers,
       cache: "no-store",
     },
   );
@@ -587,7 +591,7 @@ export async function getControlPlaneDeploymentRuntimeLogs(
   config: ControlPlaneConfig,
   deploymentId: string,
   tail = 200,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<ContainerRuntimeLogs> {
   if (!isControlPlaneUuid(deploymentId)) {
     throw new ControlPlaneError("control plane deployment id was not a uuid");
@@ -596,13 +600,17 @@ export async function getControlPlaneDeploymentRuntimeLogs(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${accessToken}`,
+  };
+  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
+    headers["x-aerodeck-user-id"] = options.actorUserId;
+  }
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/runtime-logs?tail=${safeTail}`,
     {
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${accessToken}`,
-      },
+      headers,
       cache: "no-store",
     },
   );
