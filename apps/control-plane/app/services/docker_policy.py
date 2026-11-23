@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import queue
 import re
 import shlex
 import socket
 import subprocess
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -71,23 +73,80 @@ class SubprocessCommandRunner:
             proc = subprocess.Popen(
                 args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
             )
-            try:
-                assert proc.stdout is not None
-                for raw_line in proc.stdout:
-                    line = raw_line.rstrip("\r\n")
-                    collected.append(line)
-                    if line:
-                        on_line(sanitize_log_line(line))
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired as exc:
-                proc.kill()
-                proc.wait()
-                raise TransientJobError(f"command timed out after {timeout}s: {args[0]}") from exc
+            # The deadline covers the read, not only the wait after stdout closes.
+            # A hung docker exec that keeps the pipe open must still be killed (#275).
+            _collect_stream(proc, on_line, collected, timeout)
             return CommandResult(proc.returncode, "\n".join(collected), "")
         except subprocess.TimeoutExpired as exc:
             raise TransientJobError(f"command timed out after {timeout}s: {args[0]}") from exc
         except OSError as exc:
             raise PermanentJobError(f"failed to execute {args[0]}: {exc}") from exc
+
+
+def _pump_stdout(proc: subprocess.Popen[str], lines: queue.Queue[str | None]) -> None:
+    """Copy stdout onto a queue so the caller can stop waiting at a deadline."""
+    try:
+        stdout = proc.stdout
+        if stdout is None:
+            return
+        for raw_line in stdout:
+            lines.put(raw_line)
+    except (OSError, ValueError):
+        return
+    finally:
+        lines.put(None)
+
+
+def _collect_stream(
+    proc: subprocess.Popen[str], on_line: LogSink, collected: list[str], timeout: int
+) -> None:
+    """Read merged output until the process exits or the wall-clock deadline passes."""
+    lines: queue.Queue[str | None] = queue.Queue()
+    reader = threading.Thread(target=_pump_stdout, args=(proc, lines), daemon=True)
+    reader.start()
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(proc.args, timeout)
+            try:
+                raw_line = lines.get(timeout=remaining)
+            except queue.Empty:
+                raise subprocess.TimeoutExpired(proc.args, timeout) from None
+            if raw_line is None:
+                break
+            line = raw_line.rstrip("\r\n")
+            collected.append(line)
+            if line:
+                on_line(sanitize_log_line(line))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(proc.args, timeout)
+        proc.wait(timeout=remaining)
+    except BaseException:
+        _stop_process(proc)
+        raise
+    finally:
+        reader.join(timeout=2)
+
+
+def _stop_process(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    stdout = proc.stdout
+    if stdout is not None:
+        try:
+            stdout.close()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.wait()
 
 
 def sanitize_log_line(line: str) -> str:
