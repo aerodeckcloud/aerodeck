@@ -23,6 +23,7 @@ from app.api.deps import (
     JobServiceDep,
     ReleaseJobServiceDep,
     PaginationDep,
+    PromotionServiceDep,
     SettingsDep,
 )
 from app.models.deployment import DeploymentStatus, DeploymentTrigger
@@ -30,7 +31,7 @@ from app.services.console_users import ConsoleUserService
 from app.schemas.auth import ErrorResponse
 from app.schemas.blueprint import DeploymentBlueprint, DeploymentInspectRequest
 from app.schemas.common import Page
-from app.schemas.deployment import DeploymentCreate, DeploymentRead
+from app.schemas.deployment import DeploymentCreate, DeploymentPromote, DeploymentRead
 from app.services.blueprint_inspector import inspect_github_repository_sync
 from app.services.docker_policy import normalize_git_sha
 from app.services.container_logs import ContainerLogsRead, dispatch_container_logs
@@ -44,6 +45,12 @@ _UNAUTHENTICATED = {status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse}}
 _UNAVAILABLE = {status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ErrorResponse}}
 # A deployment held behind another one has no outcome yet (#271).
 _NOT_STARTED = {status.HTTP_409_CONFLICT: {"model": ErrorResponse}}
+# Promoting needs a developer, and an owner when the target is production (#272).
+_FORBIDDEN = {status.HTTP_403_FORBIDDEN: {"model": ErrorResponse}}
+# Same environment, other project, non-succeeded row, or missing image (#272).
+_UNPROCESSABLE = {status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ErrorResponse}}
+# The target replaces its active deploy, and that deploy is already swapping containers.
+_SWAP_STARTED = {status.HTTP_409_CONFLICT: {"model": ErrorResponse}}
 
 
 async def _known_actor(users: ConsoleUserService, actor_user_id: uuid.UUID | None) -> uuid.UUID | None:
@@ -354,6 +361,35 @@ async def cancel_deployment(
     if release is not None:
         await release.release_waiting(stored)
     return DeploymentRead.model_validate(stored)
+
+
+@router.post(
+    "/{deployment_id}/promote",
+    response_model=DeploymentRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Run a succeeded deployment's image in another environment of the project (#272)",
+    responses=_NOT_FOUND
+    | _UNAUTHENTICATED
+    | _FORBIDDEN
+    | _UNPROCESSABLE
+    | _SWAP_STARTED
+    | _UNAVAILABLE,
+)
+async def promote_deployment(
+    deployment_id: uuid.UUID,
+    body: DeploymentPromote,
+    promotions: PromotionServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentRead:
+    """The target's overlap setting applies: the new row may come back waiting."""
+    promoted = await promotions.promote(
+        deployment_id,
+        body.environment_id,
+        actor_user_id=actor_user_id,
+        recorded_actor_id=await _known_actor(users, actor_user_id),
+    )
+    return DeploymentRead.model_validate(promoted)
 
 
 @router.post(

@@ -585,6 +585,23 @@ export async function rollbackDeployment(deploymentId: string): Promise<Deployme
   return readJson(response);
 }
 
+/** Run a succeeded deployment's image in another environment of its project (#272). */
+export async function promoteDeployment(
+  deploymentId: string,
+  environmentId: string,
+): Promise<Deployment> {
+  const response = await fetch(
+    `/api/console/deployments/${encodeURIComponent(deploymentId)}/promote`,
+    {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ environment_id: environmentId }),
+    },
+  );
+  return readJson(response);
+}
+
 /** Same-origin BFF to control-plane job status; mock path has no jobs API. */
 export async function fetchProvisionJob(jobId: string): Promise<ProvisionJob> {
   const response = await fetch(`/api/console/jobs/${encodeURIComponent(jobId)}`, {

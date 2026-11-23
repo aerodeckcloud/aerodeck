@@ -31,6 +31,14 @@ class DeploymentCreate(BaseModel):
         return self
 
 
+class DeploymentPromote(BaseModel):
+    """Where to run a succeeded deployment's image (#272)."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    environment_id: uuid.UUID
+
+
 class DeploymentRead(BaseModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 

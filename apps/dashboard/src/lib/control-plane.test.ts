@@ -17,6 +17,7 @@ import {
   createControlPlaneDeployment,
   createControlPlaneDeploymentAndProvision,
   deployLatestControlPlaneDeployment,
+  promoteControlPlaneDeployment,
   createControlPlaneProject,
   createControlPlaneEnvironment,
   deleteControlPlaneEnvironment,
@@ -1675,6 +1676,47 @@ describe("control plane deployments", () => {
     const cancelled = await cancelControlPlaneDeployment(config, deploymentRow.id, { fetch: cancelFetch });
     assert.match(cancelUrl, /\/cancel$/);
     assert.equal(cancelled.status, "cancelled");
+  });
+
+  it("promotes with environment_id and the actor header", async () => {
+    clearControlPlaneTokenCache();
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    const targetEnv = "22222222-2222-4222-8222-222222222222";
+    const actorId = "11111111-1111-4111-8111-111111111111";
+    let promoteUrl = "";
+    let promoteBody = "";
+    let promoteActor = "";
+    const promoteFetch: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      promoteUrl = url;
+      promoteBody = typeof init?.body === "string" ? init.body : "";
+      promoteActor = new Headers(init?.headers).get("x-aerodeck-user-id") ?? "";
+      assert.equal(init?.method, "POST");
+      return jsonResponse(
+        {
+          ...deploymentRow,
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          project_id: projectId,
+          environment_id: targetEnv,
+          git_sha: "0123456789abcdef0123456789abcdef01234567",
+          trigger: "promote",
+          actor_user_id: actorId,
+        },
+        201,
+      );
+    };
+    const promoted = await promoteControlPlaneDeployment(config, deploymentRow.id, targetEnv, {
+      fetch: promoteFetch,
+      actorUserId: actorId,
+    });
+    assert.match(promoteUrl, /\/promote$/);
+    assert.equal(promoteBody, JSON.stringify({ environment_id: targetEnv }));
+    assert.equal(promoteActor, actorId);
+    assert.equal(promoted.trigger, "promote");
+    assert.equal(promoted.environment_id, targetEnv);
   });
 
   it("rejects a commit that is not 40 hex characters", async () => {

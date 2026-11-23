@@ -1,6 +1,16 @@
 "use client";
 
-import { Ban, CheckCircle2, GitCommitHorizontal, History, Loader2, RefreshCw, RotateCcw, XCircle } from "lucide-react";
+import {
+  ArrowUpFromLine,
+  Ban,
+  CheckCircle2,
+  GitCommitHorizontal,
+  History,
+  Loader2,
+  RefreshCw,
+  RotateCcw,
+  XCircle,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -8,9 +18,17 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { deployLatestDeployment, fetchProjectDeployments, redeployDeployment, rollbackDeployment } from "@/lib/api";
+import {
+  deployLatestDeployment,
+  fetchProjectDeployments,
+  promoteDeployment,
+  redeployDeployment,
+  rollbackDeployment,
+} from "@/lib/api";
 import { isDeploymentWaiting } from "@/lib/deployment-waiting";
 import { formatDuration, formatInstant } from "@/lib/format";
+import { nativeSelectClassName } from "@/lib/native-select";
+import { canPromote, promotionTargetLabel, promotionTargets } from "@/lib/promotion";
 import type { Deployment, DeploymentStatus, EnvironmentOption, ProjectSource } from "@/lib/types";
 
 function statusBadge(status: DeploymentStatus, heldFor?: string | null) {
@@ -69,6 +87,9 @@ export function ProjectDeploymentsSection({
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Selected promote target per succeeded deployment id. */
+  const [promoteTargetById, setPromoteTargetById] = useState<Record<string, string>>({});
+
 
   const load = useCallback(async () => {
     if (!projectId || source !== "control-plane") {
@@ -96,16 +117,29 @@ export function ProjectDeploymentsSection({
 
   const envNameById = new Map(environments.map((env) => [env.id, env.slug]));
 
-  async function handleAction(deploymentId: string, action: "redeploy" | "deploy-latest" | "rollback") {
+  async function handleAction(
+    deploymentId: string,
+    action: "redeploy" | "deploy-latest" | "rollback" | "promote",
+  ) {
     setError(null);
     setBusyId(`${deploymentId}:${action}`);
     try {
-      const next =
-        action === "redeploy"
-          ? await redeployDeployment(deploymentId)
-          : action === "deploy-latest"
-            ? await deployLatestDeployment(deploymentId)
-            : await rollbackDeployment(deploymentId);
+      let next: Deployment;
+      if (action === "redeploy") {
+        next = await redeployDeployment(deploymentId);
+      } else if (action === "deploy-latest") {
+        next = await deployLatestDeployment(deploymentId);
+      } else if (action === "rollback") {
+        next = await rollbackDeployment(deploymentId);
+      } else {
+        const targetId = promoteTargetById[deploymentId];
+        if (!targetId) {
+          setError("Choose an environment to promote into.");
+          setBusyId(null);
+          return;
+        }
+        next = await promoteDeployment(deploymentId, targetId);
+      }
       router.push(`/deployments/${next.id}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : `Could not ${action} deployment.`);
@@ -161,6 +195,8 @@ export function ProjectDeploymentsSection({
             deployments.map((dep) => {
               const envSlug = dep.environment_id ? envNameById.get(dep.environment_id) : null;
               const duration = formatDuration(dep.started_at, dep.finished_at);
+              const targets = canPromote(dep) ? promotionTargets(dep, environments) : [];
+              const promoteTarget = promoteTargetById[dep.id] ?? "";
               return (
                 <div
                   key={dep.id}
@@ -232,6 +268,44 @@ export function ProjectDeploymentsSection({
                         )}
                         Rollback
                       </Button>
+                    ) : null}
+                    {targets.length > 0 ? (
+                      <>
+                        <select
+                          aria-label={`Promote ${dep.id.slice(0, 8)} to environment`}
+                          value={promoteTarget}
+                          disabled={busyId !== null}
+                          onChange={(event) =>
+                            setPromoteTargetById((current) => ({
+                              ...current,
+                              [dep.id]: event.target.value,
+                            }))
+                          }
+                          className={nativeSelectClassName("h-8 max-w-48 text-xs")}
+                        >
+                          <option value="">Promote to…</option>
+                          {targets.map((env) => (
+                            <option key={env.id} value={env.id}>
+                              {promotionTargetLabel(env)}
+                            </option>
+                          ))}
+                        </select>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={busyId !== null || !promoteTarget}
+                          title="Run this image in another environment"
+                          onClick={() => void handleAction(dep.id, "promote")}
+                        >
+                          {busyId === `${dep.id}:promote` ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <ArrowUpFromLine className="size-3.5" />
+                          )}
+                          Promote
+                        </Button>
+                      </>
                     ) : null}
                   </div>
                 </div>

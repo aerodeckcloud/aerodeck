@@ -27,6 +27,7 @@ from app.services.container_ops import (
     remove_container_sync,
     run_container_action_sync,
 )
+from app.services.image_presence import IMAGE_PRESENT_TASK, image_present_sync
 from app.services.notifications import notify_deployment_event_sync
 from app.services.docker_policy import validate_git_ref
 from app.services.provisioning import (
@@ -59,6 +60,18 @@ def use_provisioner(provisioner: Provisioner) -> None:
     """Worker bootstrap hook. ``worker.py`` installs ``TerraformProvisioner`` when enabled."""
     global _provisioner
     _provisioner = provisioner
+
+
+def _reject_promote_without_docker(meta: dict[str, str]) -> None:
+    """Fail a promote job that would otherwise succeed without tagging an image (#272)."""
+    if not meta.get("promote_from_deployment_id"):
+        return
+    # Lazy import: docker_provisioner → docker_routes → deps → queue → this module.
+    from app.services.docker_provisioner import DockerProvisioner
+
+    if isinstance(_provisioner, DockerProvisioner):
+        return
+    raise PermanentJobError("Promote requires the Docker provisioner backend.")
 
 
 def _deployment_id_from_meta(
@@ -112,6 +125,8 @@ def _run(
     )
 
     attempt = task.request.retries + 1
+    # Promote only works on Docker. Check before kwargs are stripped for terraform/noop.
+    _reject_promote_without_docker(meta)
     # Always strip deployment_id so TerraformProvisioner never sees an unexpected kwarg.
     linked = _deployment_id_from_meta(meta, project_id=project_id, environment_id=environment_id)
     deployment_id = linked if kind is JobKind.provision else None
@@ -242,6 +257,28 @@ def fetch_environment_container_logs(
         docker_bin=settings.docker_bin,
         docker_host=settings.docker_host,
         tail=tail,
+    )
+
+
+@shared_task(name=IMAGE_PRESENT_TASK)
+def check_retained_image(
+    *,
+    project_id: str,
+    project_slug: str,
+    environment_id: str,
+    environment_slug: str,
+    deployment_id: str,
+) -> bool | None:
+    """Tell the API whether a deployment's image is still here to promote (#272)."""
+    settings = get_settings()
+    return image_present_sync(
+        project_id=project_id,
+        project_slug=project_slug,
+        environment_id=environment_id,
+        environment_slug=environment_slug,
+        deployment_id=deployment_id,
+        docker_bin=settings.docker_bin,
+        docker_host=settings.docker_host,
     )
 
 
