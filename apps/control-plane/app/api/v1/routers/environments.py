@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Sequence
 
 from fastapi import APIRouter, HTTPException, status
 from starlette.concurrency import run_in_threadpool
@@ -17,7 +18,13 @@ from app.api.deps import (
 from app.models.project_member import ProjectRole
 from app.schemas.auth import ErrorResponse
 from app.schemas.common import Page
-from app.schemas.environment import EnvironmentCreate, EnvironmentRead, EnvironmentUpdate
+from app.schemas.environment import (
+    EnvironmentCreate,
+    EnvironmentRead,
+    EnvironmentSource,
+    EnvironmentUpdate,
+    environment_to_read,
+)
 from app.schemas.job import JobAccepted, ProvisionJobCreate
 from app.services.container_ops import (
     ContainerActionRequest,
@@ -32,6 +39,7 @@ from app.services.environment_vars import (
     EnvironmentVarRead,
     EnvironmentVarUpsertRequest,
 )
+from app.services.environments import EnvironmentService
 from app.services.provisioning import JobKind
 from app.services.webhooks import WebhookRead, WebhookUpsertRequest
 
@@ -55,7 +63,7 @@ async def list_environments(
 ) -> Page[EnvironmentRead]:
     items, total = await environments.list(project_id, limit=page.limit, offset=page.offset)
     return Page(
-        items=[EnvironmentRead.model_validate(e) for e in items], total=total, limit=page.limit, offset=page.offset
+        items=await _reads(environments, items), total=total, limit=page.limit, offset=page.offset
     )
 
 
@@ -69,7 +77,7 @@ async def list_environments(
 async def create_environment(
     project_id: uuid.UUID, body: EnvironmentCreate, environments: EnvironmentServiceDep
 ) -> EnvironmentRead:
-    return EnvironmentRead.model_validate(await environments.create(project_id, body))
+    return await _read(environments, await environments.create(project_id, body))
 
 
 @router.get(
@@ -82,7 +90,7 @@ async def create_environment(
 async def get_environment(
     project_id: uuid.UUID, environment_id: uuid.UUID, environments: EnvironmentServiceDep
 ) -> EnvironmentRead:
-    return EnvironmentRead.model_validate(await environments.get(project_id, environment_id))
+    return await _read(environments, await environments.get(project_id, environment_id))
 
 
 @router.patch(
@@ -98,7 +106,7 @@ async def update_environment(
     body: EnvironmentUpdate,
     environments: EnvironmentServiceDep,
 ) -> EnvironmentRead:
-    return EnvironmentRead.model_validate(await environments.update(project_id, environment_id, body))
+    return await _read(environments, await environments.update(project_id, environment_id, body))
 
 
 @router.delete(
@@ -111,6 +119,20 @@ async def delete_environment(
     project_id: uuid.UUID, environment_id: uuid.UUID, environments: EnvironmentServiceDep
 ) -> None:
     await environments.delete(project_id, environment_id)
+
+
+async def _reads(
+    environments: EnvironmentService, items: Sequence[EnvironmentSource]
+) -> list[EnvironmentRead]:
+    counts = await environments.retained_rollback_image_counts([row.id for row in items])
+    return [
+        environment_to_read(row, retained_rollback_images=counts.get(row.id, 0)) for row in items
+    ]
+
+
+async def _read(environments: EnvironmentService, environment: EnvironmentSource) -> EnvironmentRead:
+    reads = await _reads(environments, [environment])
+    return reads[0]
 
 
 async def _enqueue(

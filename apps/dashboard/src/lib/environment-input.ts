@@ -106,8 +106,12 @@ export function parseEnvironmentCreateFields(
 }
 
 export const ENVIRONMENT_UPDATE_EMPTY =
-  "Change the name, kind, region, or deploy behavior before saving.";
+  "Change the name, kind, region, deploy behavior, or rollback image count before saving.";
 export const ENVIRONMENT_OVERLAP_INVALID = "Choose wait or override.";
+export const ENVIRONMENT_RETENTION_INVALID = "Keep between 1 and 20 rollback images.";
+export const ROLLBACK_IMAGES_MIN = 1;
+export const ROLLBACK_IMAGES_MAX = 20;
+export const ROLLBACK_IMAGES_DEFAULT = 5;
 
 export const DEPLOY_OVERLAPS = ["wait", "override"] as const;
 export type DeployOverlap = (typeof DEPLOY_OVERLAPS)[number];
@@ -116,11 +120,16 @@ export function isValidDeployOverlap(value: string): value is DeployOverlap {
   return value === "wait" || value === "override";
 }
 
+export function isValidRollbackImageCount(value: number): boolean {
+  return Number.isInteger(value) && value >= ROLLBACK_IMAGES_MIN && value <= ROLLBACK_IMAGES_MAX;
+}
+
 export type EnvironmentUpdateFields = {
   name?: string;
   kind?: string;
   region?: string;
   deploy_overlap?: string;
+  rollback_images_to_keep?: number;
 };
 
 export type EnvironmentUpdateParsed = {
@@ -128,6 +137,7 @@ export type EnvironmentUpdateParsed = {
   kind?: EnvironmentKind;
   region?: string;
   deploy_overlap?: DeployOverlap;
+  rollback_images_to_keep?: number;
 };
 
 export type EnvironmentUpdateParseResult =
@@ -166,11 +176,18 @@ export function parseEnvironmentUpdateFields(
     }
     value.deploy_overlap = overlap;
   }
+  if (input.rollback_images_to_keep !== undefined) {
+    if (!isValidRollbackImageCount(input.rollback_images_to_keep)) {
+      return { ok: false, error: ENVIRONMENT_RETENTION_INVALID, code: "invalid_rollback_images" };
+    }
+    value.rollback_images_to_keep = input.rollback_images_to_keep;
+  }
   if (
     value.name === undefined &&
     value.kind === undefined &&
     value.region === undefined &&
-    value.deploy_overlap === undefined
+    value.deploy_overlap === undefined &&
+    value.rollback_images_to_keep === undefined
   ) {
     return { ok: false, error: ENVIRONMENT_UPDATE_EMPTY, code: "empty_update" };
   }

@@ -325,7 +325,7 @@ async def test_promote_refuses_what_cannot_be_promoted(
     assert "not linked" in await refused(unlinked["id"], staging["id"])
 
     images.present = False
-    assert "no longer on the host" in await refused(source["id"], staging["id"])
+    assert "no longer retained" in await refused(source["id"], staging["id"])
 
     assert dispatcher.calls == []
     # Only the two rows this test created itself were added.

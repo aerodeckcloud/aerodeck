@@ -51,6 +51,15 @@ class UnprocessableError(AppError):
     code = "unprocessable"
 
 
+class ImageNotRetainedError(UnprocessableError):
+    """Rollback or promote asked for an image retention already removed (#274)."""
+
+    code = "image_not_retained"
+
+
+IMAGE_NOT_RETAINED_DETAIL = "This deployment's image is no longer retained."
+
+
 class DatabaseUnavailableError(AppError):
     status_code = 503
     code = "database_unavailable"

@@ -9,7 +9,7 @@ exactly as for any other deploy.
 import uuid
 
 from app.core.config import Settings
-from app.core.errors import NotFoundError, UnprocessableError
+from app.core.errors import IMAGE_NOT_RETAINED_DETAIL, ImageNotRetainedError, NotFoundError, UnprocessableError
 from app.core.logging import get_logger
 from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
 from app.models.project import Environment, EnvironmentKind
@@ -59,10 +59,6 @@ class PromotionService:
         ``recorded_actor_id`` is stored on the new row, and is set only when
         that user exists.
         """
-        # Only DockerProvisioner tags and runs a retained image. Terraform/noop
-        # would drop promote_from_* and still report success (#272).
-        if self._settings.provisioner_backend != "docker":
-            raise UnprocessableError(_DOCKER_REQUIRED)
         source = await self._deployments.get(deployment_id)
         if source.project_id is None or source.environment_id is None:
             raise UnprocessableError("Cannot promote a deployment that is not linked to an environment.")
@@ -73,6 +69,12 @@ class PromotionService:
 
         if source.status is not DeploymentStatus.succeeded:
             raise UnprocessableError("Only succeeded deployments can be promoted.")
+        if source.image_pruned_at is not None:
+            raise ImageNotRetainedError(IMAGE_NOT_RETAINED_DETAIL)
+        # Only DockerProvisioner tags and runs a retained image. Terraform/noop
+        # would drop promote_from_* and still report success (#272).
+        if self._settings.provisioner_backend != "docker":
+            raise UnprocessableError(_DOCKER_REQUIRED)
         sha = normalize_git_sha(source.git_sha)
         if sha is None:
             # No recorded commit means this row never built an image of its own.
@@ -88,9 +90,7 @@ class PromotionService:
             )
         )
         if present is False:
-            raise UnprocessableError(
-                "The image of this deployment is no longer on the host. Deploy the commit instead."
-            )
+            raise ImageNotRetainedError(IMAGE_NOT_RETAINED_DETAIL)
 
         created = await self._deployments.create(
             DeploymentCreate(

@@ -74,6 +74,8 @@ class Deployment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     env_vars_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Sorted JSON name list for the snapshot. Plaintext so reads never decrypt (#273).
     snapshot_names_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set when this deployment's local image tag was removed by retention (#274).
+    image_pruned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[DeploymentStatus] = mapped_column(
         Enum(DeploymentStatus, name="deployment_status", native_enum=False, length=16),
         nullable=False,

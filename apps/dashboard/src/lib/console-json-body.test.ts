@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   readJsonObject,
+  readOptionalInteger,
   readOptionalNullableString,
   readOptionalString,
 } from "./console-json-body";
@@ -42,6 +43,24 @@ describe("readOptionalString", () => {
       value: "Prod",
     });
     const bad = readOptionalString({ name: 1 }, "name", "invalid_name");
+    assert.equal(bad.ok, false);
+  });
+});
+
+describe("readOptionalInteger", () => {
+  it("omits missing keys and rejects non-integers", () => {
+    assert.deepEqual(readOptionalInteger({}, "rollback_images_to_keep", "invalid_rollback_images"), {
+      ok: true,
+    });
+    assert.deepEqual(
+      readOptionalInteger({ rollback_images_to_keep: 5 }, "rollback_images_to_keep", "invalid_rollback_images"),
+      { ok: true, value: 5 },
+    );
+    const bad = readOptionalInteger(
+      { rollback_images_to_keep: "5" },
+      "rollback_images_to_keep",
+      "invalid_rollback_images",
+    );
     assert.equal(bad.ok, false);
   });
 });

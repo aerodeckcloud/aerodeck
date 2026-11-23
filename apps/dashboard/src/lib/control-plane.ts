@@ -372,6 +372,7 @@ export type UpdateControlPlaneEnvironmentInput = {
   kind?: string;
   region?: string;
   deploy_overlap?: "wait" | "override";
+  rollback_images_to_keep?: number;
 };
 
 export async function updateControlPlaneEnvironment(
@@ -383,7 +384,7 @@ export async function updateControlPlaneEnvironment(
     throw new ControlPlaneError("control plane environment ids were not uuids");
   }
   const project = await getControlPlaneProject(config, input.projectId, options);
-  const body: Record<string, string> = {};
+  const body: Record<string, string | number> = {};
   if (input.name !== undefined) {
     body.name = input.name;
   }
@@ -395,6 +396,9 @@ export async function updateControlPlaneEnvironment(
   }
   if (input.deploy_overlap !== undefined) {
     body.deploy_overlap = input.deploy_overlap;
+  }
+  if (input.rollback_images_to_keep !== undefined) {
+    body.rollback_images_to_keep = input.rollback_images_to_keep;
   }
   return controlPlaneRequest(
     config,
@@ -2377,6 +2381,8 @@ function parseEnvironmentOption(
   if (overlap !== "wait" && overlap !== "override") {
     throw new ControlPlaneError("control plane environments response was not a page");
   }
+  const rollbackImagesToKeep = readRollbackImageCount(row.rollback_images_to_keep);
+  const retainedRollbackImages = readRetainedRollbackImages(row.retained_rollback_images);
   if (row.project_id !== project.id) {
     throw new ControlPlaneError("control plane environments response was not a page");
   }
@@ -2390,7 +2396,29 @@ function parseEnvironmentOption(
     kind: row.kind,
     region: row.region,
     deploy_overlap: overlap,
+    rollback_images_to_keep: rollbackImagesToKeep,
+    retained_rollback_images: retainedRollbackImages,
   };
+}
+
+function readRollbackImageCount(value: unknown): number {
+  if (value === undefined || value === null) {
+    return 5;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 20) {
+    throw new ControlPlaneError("control plane environments response was not a page");
+  }
+  return value;
+}
+
+function readRetainedRollbackImages(value: unknown): number {
+  if (value === undefined || value === null) {
+    return 0;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new ControlPlaneError("control plane environments response was not a page");
+  }
+  return value;
 }
 
 async function listProjectSandboxes(

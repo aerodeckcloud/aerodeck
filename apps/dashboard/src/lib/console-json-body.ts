@@ -43,6 +43,25 @@ export function readOptionalString(
   return { ok: true, value: payload[key] };
 }
 
+export type OptionalIntegerResult =
+  | { ok: true; value?: number }
+  | { ok: false; response: NextResponse };
+
+/** Read an optional JSON integer; missing stays undefined, wrong type → 400. */
+export function readOptionalInteger(
+  payload: Record<string, unknown>,
+  key: string,
+  code: string,
+): OptionalIntegerResult {
+  if (payload[key] === undefined) {
+    return { ok: true };
+  }
+  if (typeof payload[key] !== "number" || !Number.isInteger(payload[key])) {
+    return { ok: false, response: jsonError(400, `${key} must be an integer.`, code) };
+  }
+  return { ok: true, value: payload[key] };
+}
+
 /** Like readOptionalString but also allows null (e.g. project description clear). */
 export function readOptionalNullableString(
   payload: Record<string, unknown>,
