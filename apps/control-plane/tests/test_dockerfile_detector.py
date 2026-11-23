@@ -176,6 +176,9 @@ def test_discover_repo_env_defaults_extracts_compose_and_dotenv(tmp_path: Path) 
     assert defaults["SESSION_SECRET_KEY"] == "dev-session-secret-change-me"
     assert "KEYCLOAK_ADMIN" not in defaults
     assert "PATH" not in defaults
+    named = discover_repo_env_defaults(tmp_path, compose_service="keycloak")
+    assert named["KEYCLOAK_ADMIN"] == "admin"
+    assert "KEYCLOAK_CLIENT_SECRET" not in named
 
 
 def test_wait_for_container_or_fast_fail_aborts_when_container_exits() -> None:

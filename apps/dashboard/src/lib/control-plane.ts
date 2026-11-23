@@ -2063,6 +2063,8 @@ export async function provisionControlPlaneEnvironment(
   options: ListOptions & {
     envVars?: Record<string, string>;
     addons?: AddonType[];
+    port?: number;
+    service?: string;
     actorUserId?: string;
   } = {},
 ): Promise<{ approvalPending: boolean }> {
@@ -2080,6 +2082,8 @@ export async function provisionControlPlaneEnvironment(
     deployment_id: string;
     env_vars?: Record<string, string>;
     addons?: AddonType[];
+    port?: number;
+    service?: string;
   } = {
     deployment_id: deploymentId,
   };
@@ -2088,6 +2092,12 @@ export async function provisionControlPlaneEnvironment(
   }
   if (options.addons && options.addons.length > 0) {
     body.addons = options.addons;
+  }
+  if (typeof options.port === "number") {
+    body.port = options.port;
+  }
+  if (options.service) {
+    body.service = options.service;
   }
   const headers: Record<string, string> = {
     accept: "application/json",
@@ -2263,6 +2273,8 @@ export async function createControlPlaneDeploymentAndProvision(
     environmentId: string;
     envVars?: Record<string, string>;
     addons?: AddonType[];
+    port?: number;
+    service?: string;
     actorUserId?: string;
   },
   options: ListOptions = {},
@@ -2285,6 +2297,8 @@ export async function createControlPlaneDeploymentAndProvision(
         ...options,
         envVars: input.envVars,
         addons: input.addons,
+        port: input.port,
+        service: input.service,
         actorUserId: input.actorUserId,
       },
     );

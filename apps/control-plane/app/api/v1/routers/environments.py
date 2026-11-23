@@ -167,9 +167,18 @@ async def _enqueue(
     deployment_id: uuid.UUID | None = None,
     env_vars: dict[str, str] | None = None,
     addons: list[str] | None = None,
+    port: int | None = None,
+    service: str | None = None,
 ) -> JobAccepted:
     ticket = await jobs.enqueue(
-        kind, project_id, environment_id, deployment_id=deployment_id, env_vars=env_vars, addons=addons
+        kind,
+        project_id,
+        environment_id,
+        deployment_id=deployment_id,
+        env_vars=env_vars,
+        addons=addons,
+        port=port,
+        service=service,
     )
     return _accepted(ticket)
 
@@ -208,12 +217,20 @@ async def provision_environment(
     deployment_id = body.deployment_id if body is not None else None
     env_vars = body.env_vars if body is not None else None
     addons = body.addons if body is not None else None
+    port = body.port if body is not None else None
+    service = body.service if body is not None else None
     if deployment_id is not None:
         # The caller decides approval. The user stored on the row is who created it.
         await deployments.get(deployment_id)
         environment = await environments.get(project_id, environment_id)
         ticket = await approval.enqueue_or_defer(
-            environment, actor_user_id, deployment_id, env_vars=env_vars, addons=addons
+            environment,
+            actor_user_id,
+            deployment_id,
+            env_vars=env_vars,
+            addons=addons,
+            port=port,
+            service=service,
         )
         if ticket is None:
             return _approval_accepted(project_id, environment_id)
@@ -226,6 +243,8 @@ async def provision_environment(
         deployment_id=deployment_id,
         env_vars=env_vars,
         addons=addons,
+        port=port,
+        service=service,
     )
 
 

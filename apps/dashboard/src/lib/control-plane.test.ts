@@ -1324,6 +1324,71 @@ describe("createControlPlaneDeploymentAndProvision", () => {
     assert.ok(calls.some((call) => call.includes("/provision") && call.startsWith("POST")));
   });
 
+  it("sends the confirmed port and Compose service on provision", async () => {
+    clearControlPlaneTokenCache();
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    const environmentId = "22222222-2222-4222-8222-222222222222";
+    const deploymentId = "33333333-3333-4333-8333-333333333333";
+    let provisionBody = "";
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      if (url.endsWith(`/environments/${environmentId}`) && (init?.method ?? "GET") === "GET") {
+        return jsonResponse({
+          id: environmentId,
+          project_id: projectId,
+          slug: "prod",
+          name: "Prod",
+          kind: "prod",
+          region: "ams3",
+          created_at: "2026-10-18T00:00:00.000Z",
+          updated_at: "2026-10-18T00:00:00.000Z",
+        });
+      }
+      if (url.endsWith("/api/v1/deployments") && init?.method === "POST") {
+        return jsonResponse({
+          id: deploymentId,
+          repo_url: "https://github.com/acme/payments",
+          owner: "acme",
+          repo: "payments",
+          project_id: projectId,
+          environment_id: environmentId,
+          status: "running",
+          started_at: "2026-10-18T00:00:00.000Z",
+        });
+      }
+      if (url.endsWith(`/environments/${environmentId}/provision`) && init?.method === "POST") {
+        provisionBody = String(init.body);
+        return jsonResponse({
+          job_id: "44444444-4444-4444-8444-444444444444",
+          kind: "provision",
+          project_id: projectId,
+          environment_id: environmentId,
+          status: "queued",
+        });
+      }
+      return jsonResponse({ detail: "unexpected" }, 500);
+    };
+
+    await createControlPlaneDeploymentAndProvision(
+      config,
+      {
+        repoUrl: "https://github.com/acme/payments",
+        projectId,
+        environmentId,
+        port: 3000,
+        service: "portal",
+      },
+      { fetch: fetchImpl },
+    );
+    assert.equal(
+      provisionBody,
+      JSON.stringify({ deployment_id: deploymentId, port: 3000, service: "portal" }),
+    );
+  });
+
   it("forwards the actor on create and on provision", async () => {
     clearControlPlaneTokenCache();
     const projectId = "11111111-1111-4111-8111-111111111111";

@@ -17,6 +17,8 @@ def test_round_trip_keeps_every_field() -> None:
         addons=["redis"],
         sealed_env_vars="sealed-token",
         sealed_replace_env_vars="sealed-replace",
+        port=3000,
+        service="portal",
     )
 
     assert ProvisionReplay.from_json(replay.to_json()) == replay

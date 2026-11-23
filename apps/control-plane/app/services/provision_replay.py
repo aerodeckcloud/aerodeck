@@ -23,6 +23,9 @@ class ProvisionReplay:
     sealed_env_vars: str | None = None
     # Full replace map for a rollback, distinct from one-off overlays (#273).
     sealed_replace_env_vars: str | None = None
+    # Confirmed after the scan. Absent means the worker keeps its own detection.
+    port: int | None = None
+    service: str | None = None
 
     def to_json(self) -> str | None:
         payload: dict[str, object] = {}
@@ -38,6 +41,10 @@ class ProvisionReplay:
             payload["sealed_env_vars"] = self.sealed_env_vars
         if self.sealed_replace_env_vars:
             payload["sealed_replace_env_vars"] = self.sealed_replace_env_vars
+        if self.port is not None:
+            payload["port"] = self.port
+        if self.service:
+            payload["service"] = self.service
         return json.dumps(payload) if payload else None
 
     @classmethod
@@ -66,11 +73,21 @@ class ProvisionReplay:
             else None,
             sealed_env_vars=_text(payload.get("sealed_env_vars")),
             sealed_replace_env_vars=_text(payload.get("sealed_replace_env_vars")),
+            port=_port(payload.get("port")),
+            service=_text(payload.get("service")),
         )
 
 
 def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _port(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if 1 <= value <= 65535:
+        return value
+    return None
 
 
 def _uuid(value: object) -> uuid.UUID | None:

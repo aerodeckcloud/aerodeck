@@ -27,6 +27,17 @@ class ProvisionJobCreate(BaseModel):
         default=None,
         description="Optional containerized database addons to provision and attach (#194, #237, #242).",
     )
+    port: int | None = Field(
+        default=None,
+        ge=1,
+        le=65535,
+        description="Container port confirmed after the repository scan. Overrides the detected EXPOSE.",
+    )
+    service: str | None = Field(
+        default=None,
+        max_length=128,
+        description="Compose service confirmed after the repository scan.",
+    )
 
     @field_validator("env_vars")
     @classmethod
@@ -44,6 +55,15 @@ class ProvisionJobCreate(BaseModel):
                 raise ValueError(f"invalid value for environment variable {key!r}")
             cleaned[key] = v
         return cleaned
+
+    @field_validator("service")
+    @classmethod
+    def validate_service(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", value):
+            raise ValueError("invalid compose service")
+        return value
 
 
 class JobAccepted(BaseModel):

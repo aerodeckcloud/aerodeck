@@ -140,6 +140,8 @@ class JobService:
         rollback_from_deployment_id: uuid.UUID | None = None,
         promote_from_deployment_id: uuid.UUID | None = None,
         git_ref: str | None = None,
+        port: int | None = None,
+        service: str | None = None,
     ) -> JobTicket:
         environment = await self._environments.get(project_id, environment_id)
         meta: dict[str, str] = {
@@ -170,6 +172,10 @@ class JobService:
             meta.update(await self._promote_meta(project_id, promote_from_deployment_id))
         if git_ref and kind is JobKind.provision:
             meta["git_ref"] = git_ref
+        if port is not None and kind is JobKind.provision:
+            meta["container_port"] = str(port)
+        if service and kind is JobKind.provision:
+            meta["compose_service"] = service
         linked_deployment_id: uuid.UUID | None = None
         admission = _Admission()
         # Only provision publishes onto a deployment log stream (#121).
@@ -195,6 +201,8 @@ class JobService:
                         addons=addons,
                         sealed_env_vars=self._seal(env_vars),
                         sealed_replace_env_vars=self._seal_replace(replace_env_vars),
+                        port=port,
+                        service=service,
                     ),
                 )
             # Seed a non-Done line before the worker runs so SSE cannot stub Done
@@ -252,6 +260,8 @@ class JobService:
         rollback_from_deployment_id: uuid.UUID | None = None,
         promote_from_deployment_id: uuid.UUID | None = None,
         replace_env_vars: dict[str, EnvVarPlain] | None = None,
+        port: int | None = None,
+        service: str | None = None,
     ) -> None:
         """Store the row as queued until an owner approves. Nothing is dispatched (#276)."""
         replay = ProvisionReplay(
@@ -261,6 +271,8 @@ class JobService:
             addons=addons,
             sealed_env_vars=self._seal(env_vars),
             sealed_replace_env_vars=self._seal_replace(replace_env_vars),
+            port=port,
+            service=service,
         )
         await self._deployments.mark_awaiting_approval(deployment_id, replay.to_json())
         try:
@@ -290,6 +302,8 @@ class JobService:
             rollback_from_deployment_id=replay.rollback_from_deployment_id,
             promote_from_deployment_id=replay.promote_from_deployment_id,
             git_ref=replay.git_ref,
+            port=replay.port,
+            service=replay.service,
         )
 
     async def release_waiting(self, finished: Deployment) -> None:
@@ -328,6 +342,8 @@ class JobService:
                 rollback_from_deployment_id=replay.rollback_from_deployment_id,
                 promote_from_deployment_id=replay.promote_from_deployment_id,
                 git_ref=replay.git_ref,
+                port=replay.port,
+                service=replay.service,
             )
         except ConflictError:
             # Override met a swap in progress. ``_override`` already cancelled the waiter.
