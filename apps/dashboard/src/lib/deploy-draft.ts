@@ -1,6 +1,6 @@
 import type { AddonType, DeploymentBlueprint, DeploymentStatus } from "@/lib/types";
 
-export type DeployRouteStep = "repository" | "build" | "resources" | "launch";
+export type DeployRouteStep = "repository" | "build" | "resources" | "variables" | "launch";
 
 export type DeployDraftVariable = {
   key: string;
@@ -25,7 +25,19 @@ export function deployStepPath(draftId: string, step: DeployDraftPlan["step"]): 
   if (step === "resources") {
     return `/deploy/${draftId}/databases`;
   }
+  if (step === "variables") {
+    return `/deploy/${draftId}/variables`;
+  }
   return `/deploy/${draftId}/launch`;
+}
+
+/** Variables are their own page only when the scan found env keys (#315). */
+export function stepAfterResources(envKeyCount: number): "variables" | "launch" {
+  return envKeyCount > 0 ? "variables" : "launch";
+}
+
+export function stepBeforeLaunch(envKeyCount: number): "variables" | "resources" {
+  return envKeyCount > 0 ? "variables" : "resources";
 }
 
 export function deploymentHref(row: {

@@ -3173,7 +3173,10 @@ function parseDeployment(value: unknown): Deployment {
     ...(approvalRequiredAt !== undefined ? { approval_required_at: approvalRequiredAt } : {}),
     ...(approvedAt !== undefined ? { approved_at: approvedAt } : {}),
     status: row.status as DeploymentStatus,
-    ...(row.draft_step === "build" || row.draft_step === "resources" || row.draft_step === "launch"
+    ...(row.draft_step === "build" ||
+    row.draft_step === "resources" ||
+    row.draft_step === "variables" ||
+    row.draft_step === "launch"
       ? { draft_step: row.draft_step }
       : {}),
     ...(snapshotNames !== undefined ? { snapshot_variable_names: snapshotNames } : {}),

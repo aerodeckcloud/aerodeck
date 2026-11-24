@@ -35,7 +35,7 @@ import {
   upsertEnvironmentVars,
 } from "@/lib/api";
 import { knownDetectedAddons } from "@/lib/deploy-addons";
-import { deployStepPath, type DeployDraftPlan, type DeployRouteStep } from "@/lib/deploy-draft";
+import { deployStepPath, stepAfterResources, stepBeforeLaunch, type DeployDraftPlan, type DeployRouteStep } from "@/lib/deploy-draft";
 import { applyBuildConfirmation, launchBuildFields } from "@/lib/deploy-build";
 import { environmentOptionKey } from "@/lib/environment-option";
 import { parseGithubRepo } from "@/lib/github";
@@ -268,6 +268,21 @@ export function NewDeploymentForm({
     }
 
     if (isControlPlane && blueprint && step === "resources") {
+      const next = stepAfterResources(blueprint.env.length);
+      if (draftId) {
+        try {
+          await updateDeployDraft(draftId, planFor(next, blueprint));
+          router.push(deployStepPath(draftId, next));
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Could not save this step.");
+        }
+        return;
+      }
+      setStep(next);
+      return;
+    }
+
+    if (isControlPlane && blueprint && step === "variables") {
       if (draftId) {
         try {
           await updateDeployDraft(draftId, planFor("launch", blueprint));
@@ -383,15 +398,19 @@ export function NewDeploymentForm({
       <div className="h-1 bg-gradient-to-r from-primary via-runway to-primary/40" />
       <CardHeader className="border-b">
         <CardTitle>
-          {step === "build" ? "Build" : step === "resources" ? "Databases" : step === "launch" ? "Deploy" : "Repository"}
+          {step === "build" ? "Build" : step === "resources" ? "Databases" : step === "variables" ? "Variables" : step === "launch" ? "Deploy" : "Repository"}
         </CardTitle>
         <CardDescription>
           {step === "build"
             ? "Detected from the scan. Change the port, and the Compose service when this repository has one."
             : step === "resources"
               ? "Databases from the scan. A scan that found none still lets you add Postgres, Redis, or MongoDB."
+              : step === "variables"
+                ? "One field for each key the scan found. A required value that is still empty blocks launch."
               : step === "launch"
-              ? "Environment and variables follow the databases you confirmed."
+              ? blueprint && blueprint.env.length > 0
+                ? "Choose the environment. The variables you entered are saved on this draft."
+                : "Environment and variables follow the databases you confirmed."
               : isControlPlane
                 ? "The GitHub repository to scan. A successful scan opens the build before anything else."
                 : "HTTPS GitHub URL. Validated in the browser, then POSTed to /api/mock/v1/deployments."}
@@ -456,7 +475,7 @@ export function NewDeploymentForm({
               onServiceChange={setServiceDraft}
               portInvalid={portInvalid}
               disabled={submitting || inspecting || enqueueBlocked}
-              confirmed={step === "resources" || step === "launch"}
+              confirmed={step === "resources" || step === "variables" || step === "launch"}
             />
           ) : null}
           {isControlPlane && blueprint && step === "resources" ? (
@@ -465,6 +484,19 @@ export function NewDeploymentForm({
               selected={selectedAddons}
               onToggle={toggleAddon}
               disabled={submitting || inspecting || enqueueBlocked}
+            />
+          ) : null}
+          {isControlPlane && blueprint && step === "variables" ? (
+            <DeploymentBlueprintFields
+              blueprint={blueprint}
+              fieldValues={fieldValues}
+              onFieldChange={(key, value) =>
+                setFieldValues((prev) => ({ ...prev, [key]: value }))
+              }
+              extraEnvText={envVarsText}
+              onExtraEnvTextChange={setEnvVarsText}
+              savedEnvKeys={savedEnvKeys}
+              disabled={submitting || enqueueBlocked}
             />
           ) : null}
           {isControlPlane && blueprint && step === "launch" ? (
@@ -487,17 +519,19 @@ export function NewDeploymentForm({
                 disabled={submitting || enqueueBlocked}
                 onRetry={reload}
               />
-              <DeploymentBlueprintFields
-                blueprint={blueprint}
-                fieldValues={fieldValues}
-                onFieldChange={(key, value) =>
-                  setFieldValues((prev) => ({ ...prev, [key]: value }))
-                }
-                extraEnvText={envVarsText}
-                onExtraEnvTextChange={setEnvVarsText}
-                savedEnvKeys={savedEnvKeys}
-                disabled={submitting || enqueueBlocked}
-              />
+              {blueprint.env.length === 0 ? (
+                <DeploymentBlueprintFields
+                  blueprint={blueprint}
+                  fieldValues={fieldValues}
+                  onFieldChange={(key, value) =>
+                    setFieldValues((prev) => ({ ...prev, [key]: value }))
+                  }
+                  extraEnvText={envVarsText}
+                  onExtraEnvTextChange={setEnvVarsText}
+                  savedEnvKeys={savedEnvKeys}
+                  disabled={submitting || enqueueBlocked}
+                />
+              ) : null}
               <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                 <input
                   type="checkbox"
@@ -535,22 +569,53 @@ export function NewDeploymentForm({
               Change build
             </Button>
           ) : null}
-          {step === "launch" ? (
+          {step === "variables" ? (
             <Button
               type="button"
               variant="outline"
               size="lg"
               onClick={() => {
                 if (draftId && blueprint) {
-                  void updateDeployDraft(draftId, planFor("resources", blueprint)).then(() => {
-                    router.push(deployStepPath(draftId, "resources"));
-                  });
+                  void updateDeployDraft(draftId, planFor("resources", blueprint))
+                    .then(() => {
+                      router.push(deployStepPath(draftId, "resources"));
+                    })
+                    .catch((cause: unknown) => {
+                      setError(cause instanceof Error ? cause.message : "Could not save this step.");
+                    });
                   return;
                 }
                 setStep("resources");
               }}
             >
               Change databases
+            </Button>
+          ) : null}
+          {step === "launch" ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={() => {
+                if (!blueprint) {
+                  setStep("resources");
+                  return;
+                }
+                const previous = stepBeforeLaunch(blueprint.env.length);
+                if (draftId) {
+                  void updateDeployDraft(draftId, planFor(previous, blueprint))
+                    .then(() => {
+                      router.push(deployStepPath(draftId, previous));
+                    })
+                    .catch((cause: unknown) => {
+                      setError(cause instanceof Error ? cause.message : "Could not save this step.");
+                    });
+                  return;
+                }
+                setStep(previous);
+              }}
+            >
+              {blueprint && blueprint.env.length > 0 ? "Change variables" : "Change databases"}
             </Button>
           ) : null}
           {isControlPlane && !blueprint ? (
@@ -562,7 +627,7 @@ export function NewDeploymentForm({
               {inspecting ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Search data-icon="inline-start" />}
               {inspecting ? "Scanning…" : "Scan repository"}
             </Button>
-          ) : isControlPlane && (step === "build" || step === "resources") ? (
+          ) : isControlPlane && (step === "build" || step === "resources" || step === "variables") ? (
             <Button type="submit" size="lg" disabled={submitting || inspecting || enqueueBlocked}>
               Continue
             </Button>
