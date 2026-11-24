@@ -70,11 +70,11 @@ them at once so `start-on-droplet.sh`, `enroll-console-client.sh`, and
 ```bash
 IMAGE=$(tr -d '[:space:]' < /etc/aerodeck/control-plane-image)
 mkdir -p /root/aerodeck
-for f in start-on-droplet.sh rewrite_do_postgres_url.py enroll-console-client.sh dashboard_env.py; do
+for f in start-on-droplet.sh dev-domain-defaults.sh rewrite_do_postgres_url.py enroll-console-client.sh dashboard_env.py; do
   docker run --rm --entrypoint cat "$IMAGE" "/app/scripts/$f" > "/root/$f"
 done
 docker run --rm --entrypoint cat "$IMAGE" /app/scripts/publish-console-route.py > /root/aerodeck/publish-console-route.py
-sed -i 's/\r$//' /root/start-on-droplet.sh /root/rewrite_do_postgres_url.py /root/enroll-console-client.sh /root/dashboard_env.py /root/aerodeck/publish-console-route.py
+sed -i 's/\r$//' /root/start-on-droplet.sh /root/dev-domain-defaults.sh /root/rewrite_do_postgres_url.py /root/enroll-console-client.sh /root/dashboard_env.py /root/aerodeck/publish-console-route.py
 chmod +x /root/start-on-droplet.sh /root/enroll-console-client.sh
 grep -n 'waiting up to 30s' /root/start-on-droplet.sh
 ```

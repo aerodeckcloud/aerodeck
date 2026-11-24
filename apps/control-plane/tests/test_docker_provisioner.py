@@ -381,7 +381,7 @@ def test_provision_rolls_back_candidate_when_health_check_fails() -> None:
     registered: list[tuple[str, str, int]] = []
     provisioner = _make_provisioner(
         runner,
-        route_base_domain="dev.app.aero-deck.app",
+        route_base_domain="dev.aerodeckcloud.com",
         health_checker=lambda _h, _p, _t: False,
         route_registrar=lambda **kw: registered.append((kw["hostname"], kw["backend_host"], kw["backend_port"])),
     )
@@ -408,7 +408,7 @@ def test_provision_registers_traefik_route_after_health_check() -> None:
     provisioner = _make_provisioner(
         runner,
         port=10555,
-        route_base_domain="dev.app.aero-deck.app",
+        route_base_domain="dev.aerodeckcloud.com",
         route_registrar=lambda **kw: registered.append((kw["hostname"], kw["backend_host"], kw["backend_port"])),
     )
 
@@ -420,16 +420,16 @@ def test_provision_registers_traefik_route_after_health_check() -> None:
         repo_url="https://github.com/mangatohjunior/demo-app",
     )
 
-    assert registered == [("payments-dev.dev.app.aero-deck.app", "10.41.0.2", 10555)]
-    assert "https://payments-dev.dev.app.aero-deck.app" in outcome.detail
+    assert registered == [("payments-dev.dev.aerodeckcloud.com", "10.41.0.2", 10555)]
+    assert "https://payments-dev.dev.aerodeckcloud.com" in outcome.detail
     assert (
         route_hostname_for(
             "payments", "dev",
             "f27ee337-a7d0-4d4d-8180-22579d6a2983",
             "bacbb040-41fa-4623-8e4b-02be2f7abf7b",
-            "dev.app.aero-deck.app",
+            "dev.aerodeckcloud.com",
         )
-        == "payments-dev.dev.app.aero-deck.app"
+        == "payments-dev.dev.aerodeckcloud.com"
     )
 
 
@@ -483,7 +483,7 @@ def test_release_command_runs_after_health_and_before_traffic() -> None:
     provisioner = _make_provisioner(
         runner,
         release_command_timeout_seconds=7,
-        route_base_domain="dev.app.aero-deck.app",
+        route_base_domain="dev.aerodeckcloud.com",
         route_registrar=lambda **_kw: registered.append(runner.calls[-1][1]),
     )
     streamed: list[str] = []

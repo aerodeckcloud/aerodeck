@@ -165,6 +165,7 @@ jobs:
             ssh "${ssh_opts[@]}" "root@${CONTROL_DROPLET_HOST}" "mkdir -p /root/aerodeck"
             scp "${ssh_opts[@]}" \
               apps/control-plane/scripts/start-on-droplet.sh \
+              apps/control-plane/scripts/dev-domain-defaults.sh \
               apps/control-plane/scripts/rewrite_do_postgres_url.py \
               apps/control-plane/scripts/configure-iac-worker.sh \
               apps/control-plane/scripts/start-dashboard-on-droplet.sh \
@@ -193,6 +194,7 @@ jobs:
             ssh "${ssh_opts[@]}" "root@${CONTROL_DROPLET_HOST}" "mkdir -p /root/aerodeck"
             scp "${ssh_opts[@]}" \
               apps/control-plane/scripts/configure-iac-worker.sh \
+              apps/control-plane/scripts/dev-domain-defaults.sh \
               "root@${CONTROL_DROPLET_HOST}:/root/aerodeck/"
             ssh "${ssh_opts[@]}" "root@${CONTROL_DROPLET_HOST}" '
               echo "logging into DOCR..."
@@ -210,6 +212,7 @@ jobs:
             ssh "${ssh_opts[@]}" "root@${CONTROL_DROPLET_HOST}" "mkdir -p /root/aerodeck"
             scp "${ssh_opts[@]}" \
               apps/control-plane/scripts/start-on-droplet.sh \
+              apps/control-plane/scripts/dev-domain-defaults.sh \
               apps/control-plane/scripts/rewrite_do_postgres_url.py \
               apps/control-plane/scripts/configure-iac-worker.sh \
               apps/control-plane/scripts/start-dashboard-on-droplet.sh \

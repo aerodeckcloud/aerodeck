@@ -123,9 +123,7 @@ no address and does not serve the console. `dev.aerodeckcloud.com` serves
 the console after [dashboard-console.md](dashboard-console.md) §4 runs
 `publish-console-route.py`.
 
-Tenant records on `aero-deck.app` stay on that zone. The API publishes those tenant records when a route is created
-(`AERODECK_DNS_RECORDS_PROVIDER=digitalocean`,
-`AERODECK_DNS_RECORD_TARGET=edge.aero-deck.app`). Port 8000 stays VPC-only.
+New tenant hostnames are `<project>-<env>.dev.aerodeckcloud.com`. The API publishes their CNAME to `edge.aerodeckcloud.com`. Delete any leftover test apps that still use `*.dev.app.aero-deck.app` and deploy again on the product zone. Port 8000 stays VPC-only.
 
 ## Public DNS records
 
@@ -141,7 +139,7 @@ curl -s http://127.0.0.1:8000/api/v1/projects/<project-id>/routes/<route-id>/dns
 | ------- | ------- | ---- |
 | `AERODECK_DNS_RECORDS_PROVIDER` | `memory` | In-process store, or `digitalocean` |
 | `AERODECK_DNS_RECORD_TYPE` | `CNAME` | `A`, `AAAA`, or `CNAME` |
-| `AERODECK_DNS_RECORD_TARGET` | `edge.aero-deck.app` | Value the hostname should resolve to (Traefik) |
+| `AERODECK_DNS_RECORD_TARGET` | `edge.aerodeckcloud.com` | Value a new or updated hostname should resolve to (Traefik). Existing records stay until republished |
 | `AERODECK_DNS_RECORD_TTL` | `300` | TTL in seconds |
 | `AERODECK_DIGITALOCEAN_TOKEN` | unset | Required when the provider is `digitalocean` |
 
@@ -231,7 +229,7 @@ cat <<EOF >> /etc/aerodeck/control-plane.env
 AERODECK_TRAEFIK_PROVIDER_TOKEN="<token-from-edge-traefik-yml>"
 AERODECK_DIGITALOCEAN_TOKEN="<digitalocean-api-token>"
 AERODECK_DNS_RECORDS_PROVIDER="digitalocean"
-AERODECK_DNS_RECORD_TARGET="edge.aero-deck.app"
+AERODECK_DNS_RECORD_TARGET="edge.aerodeckcloud.com"
 AERODECK_DNS01_PROVIDER="digitalocean"
 AERODECK_ACME_ISSUER="letsencrypt"
 AERODECK_ACME_DIRECTORY_URL="https://acme-v02.api.letsencrypt.org/directory"

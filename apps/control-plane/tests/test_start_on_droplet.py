@@ -17,6 +17,9 @@ def test_writes_bash_quoted_env_and_passes_dash_e_not_env_file() -> None:
     assert "curl -fsS --max-time 2 -o /dev/null http://127.0.0.1:8000/healthz 2>/dev/null" in TEXT
     assert 'CERT_KEY_DIR=/var/lib/aerodeck/certs' in TEXT
     assert '-v "${CERT_KEY_DIR}:${CERT_KEY_DIR}"' in TEXT
+    assert 'source "${ROOT}/dev-domain-defaults.sh"' in TEXT
+    assert "apply_dev_domain_defaults" in TEXT
+    assert "UPDATE " not in TEXT
 
 
 def test_migrate_container_receives_aerodeck_env_to_override_dockerfile_production_default() -> None:
