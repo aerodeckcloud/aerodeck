@@ -69,6 +69,48 @@ def test_inspect_checkout_blueprint_synthesizes_from_compose_and_code(tmp_path: 
     assert "SESSION_SECRET_KEY" in keys and keys["SESSION_SECRET_KEY"].generate == "hex32"
 
 
+def test_package_json_sets_the_node_runtime_and_a_dockerfile_wins(tmp_path: Path) -> None:
+    node_dir = tmp_path / "node"
+    node_dir.mkdir()
+    (node_dir / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    node = inspect_checkout_blueprint(node_dir, "https://github.com/mangatohjunior/node-app", "node-app")
+    assert node.build.strategy == "auto"
+    assert node.build.runtime == "node"
+    assert node.build.marker == "package.json"
+
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    (image_dir / "Dockerfile").write_text("FROM node:22-alpine\nEXPOSE 3000\n", encoding="utf-8")
+    (image_dir / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    image = inspect_checkout_blueprint(image_dir, "https://github.com/mangatohjunior/node-app", "node-app")
+    assert image.source == "dockerfile"
+    assert image.build.strategy == "dockerfile"
+    assert image.build.runtime is None
+    assert image.build.marker is None
+    assert image.build.port == 3000
+
+
+def test_package_json_without_start_is_not_an_auto_node_build(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+    missing.mkdir()
+    (missing / "package.json").write_text('{"name":"app"}', encoding="utf-8")
+    blueprint = inspect_checkout_blueprint(missing, "https://github.com/mangatohjunior/node-app", "node-app")
+    assert blueprint.build.runtime is None
+    assert blueprint.build.marker is None
+
+    both = tmp_path / "both"
+    both.mkdir()
+    (both / "package.json").write_text('{"name":"app"}', encoding="utf-8")
+    (both / "docker-compose.yaml").write_text("services:\n  web:\n    build: .\n", encoding="utf-8")
+    composed = inspect_checkout_blueprint(both, "https://github.com/mangatohjunior/node-app", "node-app")
+    assert composed.source == "docker-compose"
+    assert composed.build.strategy == "compose"
+    assert composed.build.compose_file == "docker-compose.yaml"
+    assert composed.build.service == "web"
+    assert composed.build.runtime is None
+    assert composed.build.marker is None
+
+
 def test_provision_environment_addons_starts_postgres_and_redis_and_injects_urls() -> None:
     calls: list[list[str]] = []
 

@@ -113,6 +113,8 @@ def inspect_checkout_blueprint(checkout: Path, repo_url: str, repo_name: str) ->
             compose_file=build_raw.get("compose_file"),
             service=build_raw.get("service"),
             port=int(build_raw.get("port", default_port)),
+            runtime=build_raw.get("runtime") or None,
+            marker=build_raw.get("marker") or None,
         )
         addons = [
             BlueprintAddon.model_validate(item)
@@ -166,6 +168,10 @@ def inspect_checkout_blueprint(checkout: Path, repo_url: str, repo_name: str) ->
 
     has_dockerfile = dockerfile.is_file() and not dockerfile.is_symlink()
     detected_auto = None if has_dockerfile else detect_dockerfile_template(checkout, default_port)
+    # A Node manifest without scripts.start is an error result, not a build we can run.
+    # ensure_dockerfile raises later; inspect must not advertise that detection.
+    if detected_auto is not None and detected_auto.error:
+        detected_auto = None
     strategy = "dockerfile" if has_dockerfile else ("compose" if compose_file and not detected_auto else "auto")
     source = "docker-compose" if compose_file else ("dockerfile" if has_dockerfile else "auto")
     return DeploymentBlueprint(
@@ -179,6 +185,8 @@ def inspect_checkout_blueprint(checkout: Path, repo_url: str, repo_name: str) ->
             compose_file=compose_file,
             service=compose_service,
             port=default_port,
+            runtime=detected_auto.runtime if detected_auto is not None else None,
+            marker=detected_auto.marker if detected_auto is not None else None,
         ),
         addons=addons,
         env=env_vars,

@@ -41,6 +41,8 @@ export function DeployBuildStep({
       <dl className="grid gap-3 sm:grid-cols-2">
         <Fact label="Source" value={blueprint.source} />
         <Fact label="Strategy" value={blueprint.build.strategy} />
+        {blueprint.build.runtime ? <Fact label="Runtime" value={blueprint.build.runtime} /> : null}
+        {blueprint.build.marker ? <Fact label="Marker" value={blueprint.build.marker} /> : null}
         {blueprint.build.strategy === "dockerfile" && blueprint.build.dockerfile ? (
           <Fact label="Dockerfile" value={blueprint.build.dockerfile} />
         ) : null}

@@ -254,6 +254,8 @@ export type BlueprintBuild = {
   compose_file: string | null;
   service: string | null;
   port: number;
+  runtime?: "node" | "python" | "go" | "java" | "rust" | "static" | null;
+  marker?: string | null;
 };
 
 export type DeploymentBlueprint = {

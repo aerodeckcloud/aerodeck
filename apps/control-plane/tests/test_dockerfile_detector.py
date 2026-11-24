@@ -61,16 +61,274 @@ def test_ensure_dockerfile_generates_and_validates_or_fails(tmp_path: Path) -> N
     with pytest.raises(PermanentJobError, match="does not contain a root Dockerfile"):
         ensure_dockerfile(empty_dir, "mangatohjunior", "empty-repo")
 
+    missing = tmp_path / "missing_start"
+    missing.mkdir()
+    (missing / "package.json").write_text('{"name":"app"}', encoding="utf-8")
+    with pytest.raises(PermanentJobError, match="scripts.start"):
+        ensure_dockerfile(missing, "mangatohjunior", "node-app")
+    assert not (missing / "Dockerfile").exists()
+
     node_dir = tmp_path / "node_app"
     node_dir.mkdir()
-    (node_dir / "package.json").write_text('{"name":"app"}', encoding="utf-8")
+    (node_dir / "package.json").write_text(
+        '{"name":"app","scripts":{"start":"node index.js"}}', encoding="utf-8"
+    )
     logs: list[str] = []
     dockerfile = ensure_dockerfile(node_dir, "mangatohjunior", "node-app", on_log=logs.append)
     assert dockerfile.is_file()
+    text = dockerfile.read_text(encoding="utf-8")
+    assert "USER node" in text
+    assert "ENV PORT=8000 HOST=0.0.0.0" in text
+    assert 'CMD ["npm", "start"]' in text
+    assert "--omit=dev" in text
+    assert "npm run build" not in text
     assert any("auto-generating Dockerfile for Node.js" in line for line in logs)
 
 
 def test_provisioner_auto_generates_dockerfile_and_uses_buildkit_cache() -> None:
+    calls: list[list[str]] = []
+
+    class NodeRepoRunner:
+        def run(
+            self,
+            args: list[str],
+            *,
+            cwd: Path | None = None,
+            env: dict[str, str] | None = None,
+            timeout: int = 600,
+            on_line: LogSink | None = None,
+        ) -> CommandResult:
+            _ = (cwd, env, timeout, on_line)
+            calls.append(args)
+            if args[:2] == ["git", "clone"]:
+                target = Path(args[-1])
+                target.mkdir(parents=True, exist_ok=True)
+                (target / "package.json").write_text(
+                    '{"name":"auto-node","scripts":{"start":"node index.js"}}', encoding="utf-8"
+                )
+            return CommandResult(0, "", "")
+
+    provisioner = DockerProvisioner(
+        docker_bin="docker",
+        git_bin="git",
+        bind_host="10.41.0.2",
+        port_range_start=10000,
+        port_range_end=19999,
+        container_port=8000,
+        memory_limit="512m",
+        cpus_limit="0.5",
+        pids_limit=256,
+        build_timeout_seconds=300,
+        runner=NodeRepoRunner(),
+        port_allocator=lambda _h, _s, _e: 10444,
+        health_checker=lambda _h, _p, _t: True,
+        route_registrar=None,
+    )
+    streamed: list[str] = []
+    provisioner.provision(
+        project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+        environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+        project_slug="payments",
+        environment_slug="dev",
+        repo_url="https://github.com/mangatohjunior/node-only-app",
+        on_log=streamed.append,
+    )
+    build_cmd = calls[2]
+    assert "--progress=plain" in build_cmd
+    assert "--cache-from" not in build_cmd
+    assert any("auto-generating Dockerfile for Node.js" in line for line in streamed)
+
+
+def test_node_build_script_installs_dev_dependencies_and_runs_before_start(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text(
+        '{"scripts":{"build":"tsc","start":"node dist/index.js"}}', encoding="utf-8"
+    )
+    detected = detect_dockerfile_template(tmp_path, container_port=3000)
+    assert detected is not None and detected.error is None
+    text = detected.contents
+    assert "npm install --no-audit --no-fund" in text
+    assert "npm install --omit=dev" not in text
+    assert text.index("RUN npm run build") < text.index("RUN npm prune --omit=dev")
+    assert text.index("RUN npm prune --omit=dev") < text.index('CMD ["npm", "start"]')
+    assert "ENV PORT=3000 HOST=0.0.0.0" in text
+    assert "USER node" in text
+
+
+def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> None:
+    pnpm_dir = tmp_path / "pnpm"
+    pnpm_dir.mkdir()
+    (pnpm_dir / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    (pnpm_dir / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+    pnpm = detect_dockerfile_template(pnpm_dir)
+    assert pnpm is not None
+    assert "pnpm install --frozen-lockfile --prod" in pnpm.contents
+    assert "npm install --omit=dev" not in pnpm.contents
+    assert "pnpm prune" not in pnpm.contents
+    assert pnpm.contents.index("COPY package.json pnpm-lock.yaml ./") < pnpm.contents.index("pnpm install")
+
+    pnpm_build = tmp_path / "pnpm_build"
+    pnpm_build.mkdir()
+    (pnpm_build / "package.json").write_text(
+        '{"scripts":{"build":"tsc","start":"node dist/index.js"}}', encoding="utf-8"
+    )
+    (pnpm_build / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+    built_pnpm = detect_dockerfile_template(pnpm_build)
+    assert built_pnpm is not None
+    assert "pnpm install --frozen-lockfile --prod" not in built_pnpm.contents
+    assert built_pnpm.contents.index("pnpm install --frozen-lockfile") < built_pnpm.contents.index("RUN pnpm run build")
+    assert built_pnpm.contents.index("RUN pnpm run build") < built_pnpm.contents.index("RUN pnpm prune --prod")
+
+    yarn_dir = tmp_path / "yarn"
+    yarn_dir.mkdir()
+    (yarn_dir / "package.json").write_text(
+        '{"scripts":{"build":"tsc","start":"node dist/index.js"}}', encoding="utf-8"
+    )
+    (yarn_dir / "yarn.lock").write_text("# yarn lockfile v1\n", encoding="utf-8")
+    yarn = detect_dockerfile_template(yarn_dir)
+    assert yarn is not None
+    assert yarn.contents.index("RUN yarn install --frozen-lockfile\n") < yarn.contents.index("RUN yarn run build")
+    assert "--production" not in yarn.contents.split("RUN yarn run build", 1)[0]
+    assert yarn.contents.index("RUN yarn run build") < yarn.contents.index(
+        "RUN yarn install --frozen-lockfile --production"
+    )
+
+    berry_dir = tmp_path / "berry"
+    berry_dir.mkdir()
+    (berry_dir / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    (berry_dir / "yarn.lock").write_text("__metadata:\n  version: 8\n", encoding="utf-8")
+    berry = detect_dockerfile_template(berry_dir)
+    assert berry is not None
+    assert "yarn install --immutable" in berry.contents
+    assert "workspaces focus" not in berry.contents
+    assert berry.contents.index("COPY package.json yarn.lock ./") < berry.contents.index("yarn install --immutable")
+
+    berry_build = tmp_path / "berry_build"
+    berry_build.mkdir()
+    (berry_build / "package.json").write_text(
+        '{"scripts":{"build":"tsc","start":"node dist/index.js"}}', encoding="utf-8"
+    )
+    (berry_build / "yarn.lock").write_text("__metadata:\n  version: 8\n", encoding="utf-8")
+    built_berry = detect_dockerfile_template(berry_build)
+    assert built_berry is not None
+    assert built_berry.contents.index("yarn install --immutable") < built_berry.contents.index("RUN yarn run build")
+    assert "NODE_ENV=production" not in built_berry.contents.split("RUN yarn run build", 1)[0]
+    assert "workspaces focus" not in built_berry.contents
+    assert built_berry.contents.index("RUN yarn run build") < built_berry.contents.index(
+        "rm -rf node_modules && NODE_ENV=production yarn install --immutable"
+    )
+
+    workspace_dir = tmp_path / "workspaces"
+    workspace_dir.mkdir()
+    (workspace_dir / "package.json").write_text(
+        '{"workspaces":["packages/*"],"scripts":{"start":"node index.js"}}', encoding="utf-8"
+    )
+    (workspace_dir / "yarn.lock").write_text("__metadata:\n  version: 8\n", encoding="utf-8")
+    workspace = detect_dockerfile_template(workspace_dir)
+    assert workspace is not None
+    assert workspace.contents.index("COPY . .") < workspace.contents.index("yarn workspaces focus --production")
+    assert workspace.contents.count("COPY . .") == 1
+    assert "yarn install --immutable" not in workspace.contents
+
+    built_dir = tmp_path / "workspace_build"
+    built_dir.mkdir()
+    (built_dir / "package.json").write_text(
+        '{"workspaces":["packages/*"],"scripts":{"build":"tsc","start":"node index.js"}}',
+        encoding="utf-8",
+    )
+    (built_dir / "yarn.lock").write_text("__metadata:\n  version: 8\n", encoding="utf-8")
+    built = detect_dockerfile_template(built_dir)
+    assert built is not None
+    assert built.contents.index("COPY . .") < built.contents.index("yarn install --immutable")
+    assert built.contents.count("COPY . .") == 1
+    assert built.contents.index("yarn install --immutable") < built.contents.index("RUN yarn run build")
+    assert built.contents.index("RUN yarn run build") < built.contents.index(
+        "yarn workspaces focus --all --production"
+    )
+    assert "workspaces focus --production" not in built.contents.split("RUN yarn run build", 1)[0]
+
+    pnpm_workspace = tmp_path / "pnpm_workspace"
+    pnpm_workspace.mkdir()
+    (pnpm_workspace / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    (pnpm_workspace / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+    (pnpm_workspace / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n", encoding="utf-8")
+    pnpm_tree = detect_dockerfile_template(pnpm_workspace)
+    assert pnpm_tree is not None
+    assert pnpm_tree.contents.index("COPY . .") < pnpm_tree.contents.index("pnpm install --frozen-lockfile --prod")
+    assert pnpm_tree.contents.count("COPY . .") == 1
+    assert "COPY package.json pnpm-lock.yaml" not in pnpm_tree.contents
+
+    classic_workspace = tmp_path / "classic_workspace"
+    classic_workspace.mkdir()
+    (classic_workspace / "package.json").write_text(
+        '{"workspaces":["packages/*"],"scripts":{"start":"node index.js"}}', encoding="utf-8"
+    )
+    (classic_workspace / "yarn.lock").write_text("# yarn lockfile v1\n", encoding="utf-8")
+    classic_tree = detect_dockerfile_template(classic_workspace)
+    assert classic_tree is not None
+    assert classic_tree.contents.index("COPY . .") < classic_tree.contents.index(
+        "yarn install --frozen-lockfile --production"
+    )
+    assert classic_tree.contents.count("COPY . .") == 1
+    assert "COPY package.json yarn.lock" not in classic_tree.contents
+
+    berry_config = tmp_path / "berry_config"
+    berry_config.mkdir()
+    (berry_config / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    (berry_config / "yarn.lock").write_text("__metadata:\n  version: 8\n", encoding="utf-8")
+    (berry_config / ".yarnrc.yml").write_text("nodeLinker: node-modules\n", encoding="utf-8")
+    (berry_config / ".yarn").mkdir()
+    configured = detect_dockerfile_template(berry_config)
+    assert configured is not None
+    assert configured.contents.index("COPY . .") < configured.contents.index(
+        "NODE_ENV=production yarn install --immutable"
+    )
+    assert configured.contents.count("COPY . .") == 1
+    assert "COPY package.json yarn.lock" not in configured.contents
+    assert "workspaces focus" not in configured.contents
+
+    npm_workspace = tmp_path / "npm_workspace"
+    npm_workspace.mkdir()
+    (npm_workspace / "package.json").write_text(
+        '{"workspaces":["packages/*"],"scripts":{"start":"node index.js"}}', encoding="utf-8"
+    )
+    npm_tree = detect_dockerfile_template(npm_workspace)
+    assert npm_tree is not None
+    assert npm_tree.contents.index("COPY . .") < npm_tree.contents.index("npm install --omit=dev")
+    assert npm_tree.contents.count("COPY . .") == 1
+    assert "COPY package*.json" not in npm_tree.contents
+
+
+def test_yarn_classic_probe_stops_after_four_kibibytes(tmp_path: Path) -> None:
+    classic = tmp_path / "classic"
+    classic.mkdir()
+    (classic / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    (classic / "yarn.lock").write_bytes(b"# yarn lockfile v1\n" + b"x" * 200_000)
+    detected_classic = detect_dockerfile_template(classic)
+    assert detected_classic is not None
+    assert "yarn@1.22.22" in detected_classic.contents
+    assert "corepack prepare" not in detected_classic.contents
+
+    late = tmp_path / "late"
+    late.mkdir()
+    (late / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    (late / "yarn.lock").write_bytes(b"x" * 5000 + b"yarn lockfile v1\n")
+    detected_late = detect_dockerfile_template(late)
+    assert detected_late is not None
+    assert "corepack prepare yarn@4.6.0" in detected_late.contents
+    assert "yarn@1.22.22" not in detected_late.contents
+
+
+def test_root_dockerfile_is_not_replaced_by_a_node_generator(tmp_path: Path) -> None:
+    original = "FROM node:22-alpine\nUSER node\n"
+    (tmp_path / "Dockerfile").write_text(original, encoding="utf-8")
+    (tmp_path / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    logs: list[str] = []
+    path = ensure_dockerfile(tmp_path, "mangatohjunior", "node-app", on_log=logs.append)
+    assert path.read_text(encoding="utf-8") == original
+    assert logs == []
+
+
+def test_missing_start_fails_provision_before_docker_build() -> None:
     calls: list[list[str]] = []
 
     class NodeRepoRunner:
@@ -107,19 +365,15 @@ def test_provisioner_auto_generates_dockerfile_and_uses_buildkit_cache() -> None
         health_checker=lambda _h, _p, _t: True,
         route_registrar=None,
     )
-    streamed: list[str] = []
-    provisioner.provision(
-        project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
-        environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
-        project_slug="payments",
-        environment_slug="dev",
-        repo_url="https://github.com/mangatohjunior/node-only-app",
-        on_log=streamed.append,
-    )
-    build_cmd = calls[2]
-    assert "--progress=plain" in build_cmd
-    assert "--cache-from" not in build_cmd
-    assert any("auto-generating Dockerfile for Node.js" in line for line in streamed)
+    with pytest.raises(PermanentJobError, match="scripts.start"):
+        provisioner.provision(
+            project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+            environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+            project_slug="payments",
+            environment_slug="dev",
+            repo_url="https://github.com/mangatohjunior/node-only-app",
+        )
+    assert not any(args[:2] == ["docker", "build"] for args in calls)
 
 
 def test_requires_disabled_statement_cache_detects_pgbouncer_port_and_query() -> None:

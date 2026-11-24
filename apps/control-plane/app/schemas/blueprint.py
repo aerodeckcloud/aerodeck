@@ -11,6 +11,7 @@ from app.core.github import parse_github_repo
 
 AddonType = Literal["postgres", "redis", "mongodb"]
 BuildStrategy = Literal["dockerfile", "compose", "auto"]
+BlueprintRuntime = Literal["node", "python", "go", "java", "rust", "static"]
 BlueprintSource = Literal["aerodeck.yaml", "docker-compose", "dockerfile", "auto"]
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
@@ -30,6 +31,8 @@ class BlueprintBuild(BaseModel):
     compose_file: str | None = None
     service: str | None = None
     port: int = Field(default=8000, ge=1, le=65535)
+    runtime: BlueprintRuntime | None = None
+    marker: str | None = Field(default=None, max_length=64)
 
 
 class BlueprintAddon(BaseModel):
