@@ -61,16 +61,133 @@ def test_ensure_dockerfile_generates_and_validates_or_fails(tmp_path: Path) -> N
     with pytest.raises(PermanentJobError, match="does not contain a root Dockerfile"):
         ensure_dockerfile(empty_dir, "mangatohjunior", "empty-repo")
 
+    missing = tmp_path / "missing_start"
+    missing.mkdir()
+    (missing / "package.json").write_text('{"name":"app"}', encoding="utf-8")
+    with pytest.raises(PermanentJobError, match="scripts.start"):
+        ensure_dockerfile(missing, "mangatohjunior", "node-app")
+    assert not (missing / "Dockerfile").exists()
+
     node_dir = tmp_path / "node_app"
     node_dir.mkdir()
-    (node_dir / "package.json").write_text('{"name":"app"}', encoding="utf-8")
+    (node_dir / "package.json").write_text(
+        '{"name":"app","scripts":{"start":"node index.js"}}', encoding="utf-8"
+    )
     logs: list[str] = []
     dockerfile = ensure_dockerfile(node_dir, "mangatohjunior", "node-app", on_log=logs.append)
     assert dockerfile.is_file()
+    text = dockerfile.read_text(encoding="utf-8")
+    assert "USER node" in text
+    assert "ENV PORT=8000 HOST=0.0.0.0" in text
+    assert 'CMD ["npm", "start"]' in text
+    assert "--omit=dev" in text
+    assert "npm run build" not in text
     assert any("auto-generating Dockerfile for Node.js" in line for line in logs)
 
 
 def test_provisioner_auto_generates_dockerfile_and_uses_buildkit_cache() -> None:
+    calls: list[list[str]] = []
+
+    class NodeRepoRunner:
+        def run(
+            self,
+            args: list[str],
+            *,
+            cwd: Path | None = None,
+            env: dict[str, str] | None = None,
+            timeout: int = 600,
+            on_line: LogSink | None = None,
+        ) -> CommandResult:
+            _ = (cwd, env, timeout, on_line)
+            calls.append(args)
+            if args[:2] == ["git", "clone"]:
+                target = Path(args[-1])
+                target.mkdir(parents=True, exist_ok=True)
+                (target / "package.json").write_text(
+                    '{"name":"auto-node","scripts":{"start":"node index.js"}}', encoding="utf-8"
+                )
+            return CommandResult(0, "", "")
+
+    provisioner = DockerProvisioner(
+        docker_bin="docker",
+        git_bin="git",
+        bind_host="10.41.0.2",
+        port_range_start=10000,
+        port_range_end=19999,
+        container_port=8000,
+        memory_limit="512m",
+        cpus_limit="0.5",
+        pids_limit=256,
+        build_timeout_seconds=300,
+        runner=NodeRepoRunner(),
+        port_allocator=lambda _h, _s, _e: 10444,
+        health_checker=lambda _h, _p, _t: True,
+        route_registrar=None,
+    )
+    streamed: list[str] = []
+    provisioner.provision(
+        project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+        environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+        project_slug="payments",
+        environment_slug="dev",
+        repo_url="https://github.com/mangatohjunior/node-only-app",
+        on_log=streamed.append,
+    )
+    build_cmd = calls[2]
+    assert "--progress=plain" in build_cmd
+    assert "--cache-from" not in build_cmd
+    assert any("auto-generating Dockerfile for Node.js" in line for line in streamed)
+
+
+def test_node_build_script_installs_dev_dependencies_and_runs_before_start(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text(
+        '{"scripts":{"build":"tsc","start":"node dist/index.js"}}', encoding="utf-8"
+    )
+    detected = detect_dockerfile_template(tmp_path, container_port=3000)
+    assert detected is not None and detected.error is None
+    text = detected.contents
+    assert "npm install --no-audit --no-fund" in text
+    assert "--omit=dev" not in text
+    assert "RUN npm run build" in text
+    assert text.index("RUN npm run build") < text.index('CMD ["npm", "start"]')
+    assert "ENV PORT=3000 HOST=0.0.0.0" in text
+    assert "USER node" in text
+
+
+def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> None:
+    pnpm_dir = tmp_path / "pnpm"
+    pnpm_dir.mkdir()
+    (pnpm_dir / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    (pnpm_dir / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+    pnpm = detect_dockerfile_template(pnpm_dir)
+    assert pnpm is not None
+    assert "pnpm install --frozen-lockfile --prod" in pnpm.contents
+    assert "npm install --omit=dev" not in pnpm.contents
+
+    yarn_dir = tmp_path / "yarn"
+    yarn_dir.mkdir()
+    (yarn_dir / "package.json").write_text(
+        '{"scripts":{"build":"tsc","start":"node dist/index.js"}}', encoding="utf-8"
+    )
+    (yarn_dir / "yarn.lock").write_text("# yarn lockfile v1\n", encoding="utf-8")
+    yarn = detect_dockerfile_template(yarn_dir)
+    assert yarn is not None
+    assert "yarn install --frozen-lockfile" in yarn.contents
+    assert "--production" not in yarn.contents
+    assert "RUN yarn run build" in yarn.contents
+
+
+def test_root_dockerfile_is_not_replaced_by_a_node_generator(tmp_path: Path) -> None:
+    original = "FROM node:22-alpine\nUSER node\n"
+    (tmp_path / "Dockerfile").write_text(original, encoding="utf-8")
+    (tmp_path / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    logs: list[str] = []
+    path = ensure_dockerfile(tmp_path, "mangatohjunior", "node-app", on_log=logs.append)
+    assert path.read_text(encoding="utf-8") == original
+    assert logs == []
+
+
+def test_missing_start_fails_provision_before_docker_build() -> None:
     calls: list[list[str]] = []
 
     class NodeRepoRunner:
@@ -107,19 +224,15 @@ def test_provisioner_auto_generates_dockerfile_and_uses_buildkit_cache() -> None
         health_checker=lambda _h, _p, _t: True,
         route_registrar=None,
     )
-    streamed: list[str] = []
-    provisioner.provision(
-        project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
-        environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
-        project_slug="payments",
-        environment_slug="dev",
-        repo_url="https://github.com/mangatohjunior/node-only-app",
-        on_log=streamed.append,
-    )
-    build_cmd = calls[2]
-    assert "--progress=plain" in build_cmd
-    assert "--cache-from" not in build_cmd
-    assert any("auto-generating Dockerfile for Node.js" in line for line in streamed)
+    with pytest.raises(PermanentJobError, match="scripts.start"):
+        provisioner.provision(
+            project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+            environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+            project_slug="payments",
+            environment_slug="dev",
+            repo_url="https://github.com/mangatohjunior/node-only-app",
+        )
+    assert not any(args[:2] == ["docker", "build"] for args in calls)
 
 
 def test_requires_disabled_statement_cache_detects_pgbouncer_port_and_query() -> None:

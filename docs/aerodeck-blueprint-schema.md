@@ -74,6 +74,8 @@ env:
 | `compose_file` | `string \| null` | `null` | Relative path to `docker-compose.yaml` when `strategy: compose`. |
 | `service` | `string \| null` | `null` | Primary web service name in `docker-compose.yaml`. |
 | `port` | `integer` (`1–65535`) | `8000` | Internal container TCP port receiving HTTP traffic from Traefik. |
+| `runtime` | `"node" \| "python" \| "go" \| "java" \| "rust" \| "static" \| null` | `null` | Runtime chosen from a root project file when `strategy` is `auto`. Authors may omit it. A root `Dockerfile` does not set it. |
+| `marker` | `string \| null` | `null` | Root file that chose `runtime`. A `package.json` with `scripts.start` sets `runtime` to `node` and `marker` to `package.json`. `pnpm-lock.yaml` or `yarn.lock` beside it selects that package manager; otherwise npm is used. |
 
 ### `addons[]` Items (`BlueprintAddon`)
 | Field | Type | Default | Description |

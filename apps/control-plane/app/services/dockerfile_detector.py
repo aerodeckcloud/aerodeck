@@ -9,9 +9,11 @@ When a repository cloned by ``DockerProvisioner`` does not contain a root
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any, NamedTuple
 
 from app.services.docker_env_discovery import (
     build_runtime_env_file,
@@ -20,6 +22,7 @@ from app.services.docker_env_discovery import (
     write_secure_env_file,
 )
 from app.services.docker_policy import CommandRunner, sanitize_log_line, validate_dockerfile
+from app.services.provisioning import PermanentJobError
 
 __all__ = [
     "build_runtime_env_file",
@@ -34,6 +37,95 @@ __all__ = [
 
 LogSink = Callable[[str], None]
 _EXPOSE_RE = re.compile(r"^\s*EXPOSE\s+(\d+)(?:/tcp)?\b", re.IGNORECASE | re.MULTILINE)
+_PACKAGE_JSON_BYTES = 512 * 1024
+_PNPM_VERSION = "9.15.9"
+_YARN_CLASSIC_VERSION = "1.22.22"
+_YARN_BERRY_VERSION = "4.6.0"
+_MISSING_START = "package.json is missing scripts.start"
+
+
+class DockerfileTemplate(NamedTuple):
+    label: str
+    contents: str
+    runtime: str | None = None
+    marker: str | None = None
+    error: str | None = None
+
+
+def _package_json(checkout: Path) -> dict[str, Any] | None:
+    path = checkout / "package.json"
+    if not path.is_file() or path.is_symlink() or path.stat().st_size > _PACKAGE_JSON_BYTES:
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _script(package: dict[str, Any], name: str) -> str | None:
+    scripts = package.get("scripts")
+    if not isinstance(scripts, dict):
+        return None
+    value = scripts.get(name)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _regular_file(checkout: Path, name: str) -> bool:
+    path = checkout / name
+    return path.is_file() and not path.is_symlink()
+
+
+def _yarn_classic(checkout: Path) -> bool:
+    text = (checkout / "yarn.lock").read_text(encoding="utf-8", errors="replace")[:4096]
+    return "yarn lockfile v1" in text
+
+
+def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
+    """Install with the lockfile's package manager, then run start as the node user."""
+    build = _script(package, "build") is not None
+    lines = ["FROM node:22-alpine", "WORKDIR /app"]
+    if _regular_file(checkout, "pnpm-lock.yaml"):
+        lines.append(f"RUN npm install -g pnpm@{_PNPM_VERSION}")
+        lines.append("COPY package.json pnpm-lock.yaml ./")
+        install = "pnpm install --frozen-lockfile" if build else "pnpm install --frozen-lockfile --prod"
+        lines.append(f"RUN {install}")
+        build_line = "RUN pnpm run build"
+        start = 'CMD ["pnpm", "start"]'
+    elif _regular_file(checkout, "yarn.lock"):
+        if _yarn_classic(checkout):
+            lines.append(f"RUN npm install -g yarn@{_YARN_CLASSIC_VERSION}")
+            install = "yarn install --frozen-lockfile" if build else "yarn install --frozen-lockfile --production"
+        else:
+            lines.append(f"RUN corepack enable && corepack prepare yarn@{_YARN_BERRY_VERSION} --activate")
+            install = "yarn install --immutable"
+        lines.append("COPY package.json yarn.lock ./")
+        lines.append(f"RUN {install}")
+        build_line = "RUN yarn run build"
+        start = 'CMD ["yarn", "start"]'
+    else:
+        lines.append("COPY package*.json ./")
+        install = "npm install --no-audit --no-fund" if build else "npm install --omit=dev --no-audit --no-fund"
+        lines.append(f"RUN {install}")
+        build_line = "RUN npm run build"
+        start = 'CMD ["npm", "start"]'
+    lines.append("COPY . .")
+    if build:
+        lines.append(build_line)
+    lines.extend(
+        [
+            "RUN chown -R node:node /app",
+            f"ENV PORT={port} HOST=0.0.0.0",
+            f"EXPOSE {port}",
+            "USER node",
+            start,
+        ]
+    )
+    return "\n".join(lines) + "\n"
 
 
 def detect_exposed_port(dockerfile: Path, default_port: int = 8000) -> int:
@@ -70,23 +162,24 @@ def stream_container_crash_logs(
     return lines[-1] if lines else ""
 
 
-def detect_dockerfile_template(checkout: Path, container_port: int = 8000) -> tuple[str, str] | None:
-    """Return ``(runtime_label, dockerfile_contents)`` if a supported language is detected."""
+def detect_dockerfile_template(checkout: Path, container_port: int = 8000) -> DockerfileTemplate | None:
+    """Return a generated Dockerfile when a supported root manifest is present."""
     port = int(container_port)
-    if (checkout / "package.json").is_file() and not (checkout / "package.json").is_symlink():
-        return (
+    package = _package_json(checkout)
+    if package is not None:
+        if _script(package, "start") is None:
+            return DockerfileTemplate(
+                "Node.js (package.json)",
+                "",
+                "node",
+                "package.json",
+                _MISSING_START,
+            )
+        return DockerfileTemplate(
             "Node.js (package.json)",
-            (
-                "FROM node:22-alpine\n"
-                "WORKDIR /app\n"
-                "COPY package*.json ./\n"
-                "RUN npm install --omit=dev --no-audit --no-fund\n"
-                "COPY . .\n"
-                f"ENV PORT={port} HOST=0.0.0.0\n"
-                f"EXPOSE {port}\n"
-                "USER node\n"
-                'CMD ["npm", "start"]\n'
-            ),
+            _node_dockerfile(checkout, package, port),
+            "node",
+            "package.json",
         )
     has_reqs = (checkout / "requirements.txt").is_file() and not (checkout / "requirements.txt").is_symlink()
     has_pyproject = (checkout / "pyproject.toml").is_file() and not (checkout / "pyproject.toml").is_symlink()
@@ -103,7 +196,7 @@ def detect_dockerfile_template(checkout: Path, container_port: int = 8000) -> tu
             if (checkout / "main.py").is_file()
             else f'CMD ["python", "-m", "http.server", "{port}"]\n'
         )
-        return (
+        return DockerfileTemplate(
             "Python (requirements.txt / pyproject.toml)",
             (
                 "FROM python:3.12-slim\n"
@@ -118,7 +211,7 @@ def detect_dockerfile_template(checkout: Path, container_port: int = 8000) -> tu
             ),
         )
     if (checkout / "go.mod").is_file() and not (checkout / "go.mod").is_symlink():
-        return (
+        return DockerfileTemplate(
             "Go (go.mod)",
             (
                 "FROM golang:1.23-alpine AS build\n"
@@ -137,7 +230,7 @@ def detect_dockerfile_template(checkout: Path, container_port: int = 8000) -> tu
             ),
         )
     if (checkout / "index.html").is_file() and not (checkout / "index.html").is_symlink():
-        return (
+        return DockerfileTemplate(
             "Static HTML (index.html)",
             (
                 "FROM python:3.12-alpine\n"
@@ -165,8 +258,11 @@ def ensure_dockerfile(
     if not dockerfile.exists() and not dockerfile.is_symlink():
         detected = detect_dockerfile_template(checkout, container_port=container_port)
         if detected is not None:
-            label, content = detected
+            if detected.error:
+                raise PermanentJobError(f"Repository {owner}/{repo} {detected.error}")
             if on_log is not None:
-                on_log(f"No root Dockerfile found in {owner}/{repo}; auto-generating Dockerfile for {label}...")
-            dockerfile.write_text(content, encoding="utf-8")
+                on_log(
+                    f"No root Dockerfile found in {owner}/{repo}; auto-generating Dockerfile for {detected.label}..."
+                )
+            dockerfile.write_text(detected.contents, encoding="utf-8")
     return validate_dockerfile(checkout, owner, repo)
