@@ -9,11 +9,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { PRODUCT_NAME } from "@/lib/brand";
 
 export const metadata: Metadata = {
   title: "About",
-  description:
-    "AeroDeck is the operator console for GitOps on DigitalOcean. A GitHub repository is the source. Sandboxes are short-lived Firecracker microVMs.",
+  description: `${PRODUCT_NAME} is the operator console for GitOps on DigitalOcean. A GitHub repository is the source. Sandboxes are short-lived Firecracker microVMs.`,
 };
 
 const PILLARS = [
@@ -44,14 +44,14 @@ export default function AboutPage() {
         <BrandMark className="size-16 shrink-0 text-primary" />
         <div className="max-w-2xl">
           <p className="font-mono text-[11px] tracking-[0.22em] text-primary uppercase">
-            About AeroDeck
+            About {PRODUCT_NAME}
           </p>
           <h1 className="mt-3 font-heading text-4xl font-semibold tracking-tight md:text-5xl">
             The flight deck for GitOps on DigitalOcean
           </h1>
           <div className="mt-6 space-y-4 text-sm leading-relaxed text-muted-foreground md:text-base">
             <p>
-              AeroDeck is the console an operator uses to run a workload from a GitHub
+              {PRODUCT_NAME} is the console an operator uses to run a workload from a GitHub
               repository onto DigitalOcean. The repository is the source of the change.
               The control plane plans that change and applies it. The deck is where you
               watch the flight: the project, the deployment, the hostname, and any

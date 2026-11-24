@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 
+import { PRODUCT_NAME } from "@/lib/brand";
+
 import "./globals.css";
 
 const deckSans = Space_Grotesk({
@@ -15,8 +17,8 @@ const deckMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AeroDeck · Console",
-  description: "Operator dashboard for AeroDeck GitOps deployments.",
+  title: `${PRODUCT_NAME} · Console`,
+  description: `Operator dashboard for ${PRODUCT_NAME} GitOps deployments.`,
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 
 import { PublicNavLink } from "@/components/public-nav-link";
 import { buttonVariants } from "@/components/ui/button";
+import { PRODUCT_NAME } from "@/lib/brand";
 import { PUBLIC_AUTH_NAV, PUBLIC_NAV } from "@/lib/public-nav";
 import { cn } from "@/lib/utils";
 
@@ -38,7 +39,7 @@ export function PublicMobileNav() {
                 className="relative z-10 flex h-full w-72 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
               >
                 <div className="flex items-center justify-between px-4 py-4">
-                  <p className="text-sm font-semibold">AeroDeck</p>
+                  <p className="text-sm font-semibold">{PRODUCT_NAME}</p>
                   <button
                     type="button"
                     className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }))}

@@ -7,22 +7,22 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { PRODUCT_NAME } from "@/lib/brand";
 
 export const metadata: Metadata = {
   title: "Policy",
-  description:
-    "AeroDeck privacy and acceptable use. Static copy for the local mock — no analytics pixels.",
+  description: `${PRODUCT_NAME} privacy and acceptable use. Static copy for the local mock — no analytics pixels.`,
 };
 
 const PRIVACY = [
   "This UI is a local mock. It does not load analytics pixels, ad trackers, or third-party identity widgets.",
   "When accounts exist, email lives in the same-origin mock store and is wiped when the Next.js process restarts. It is not sold.",
   "The browser must not embed control-plane JWTs, DigitalOcean tokens, or other secrets. Credentials stay on the server.",
-  "When AeroDeck is deployed, compute and data stay on DigitalOcean. This page is not a transfer to AWS or GCP.",
+  `When ${PRODUCT_NAME} is deployed, compute and data stay on DigitalOcean. This page is not a transfer to AWS or GCP.`,
 ];
 
 const ACCEPTABLE_USE = [
-  "Use AeroDeck to GitOps your own workloads onto DigitalOcean. Do not use it to attack systems you do not operate.",
+  `Use ${PRODUCT_NAME} to GitOps your own workloads onto DigitalOcean. Do not use it to attack systems you do not operate.`,
   "Do not put secrets, customer PII, or production credentials into the dashboard client or mock API.",
   "Firecracker sandboxes are short-lived labs, not production tenants. Do not treat them as durable hosts.",
   "This is product policy for the current mock, not a law-firm terms of service. FastAPI identity is a later story.",
