@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 
 import { DeckSlider } from "@/components/deck-slider";
 import { LinkButton } from "@/components/link-button";
+import { PRODUCT_NAME } from "@/lib/brand";
 
 export const metadata: Metadata = {
   title: "Home",
-  description:
-    "Step through an AeroDeck flight: a GitHub repository, a deployment, a hostname, and a short-lived sandbox.",
+  description: `Step through an ${PRODUCT_NAME} flight: a GitHub repository, a deployment, a hostname, and a short-lived sandbox.`,
 };
 
 export default function HomePage() {
@@ -17,7 +17,7 @@ export default function HomePage() {
         See the flight before you open the deck
       </h1>
       <p className="mt-4 max-w-2xl text-sm leading-relaxed text-muted-foreground md:text-base">
-        AeroDeck is the console for GitOps on DigitalOcean. Choose a frame: the repository
+        {PRODUCT_NAME} is the console for GitOps on DigitalOcean. Choose a frame: the repository
         the flight leaves from, the deployment on the strip, the hostname in the air, and
         the sandbox that expires when the work is done.
       </p>
@@ -29,7 +29,7 @@ export default function HomePage() {
       <div className="mt-8 flex flex-wrap gap-3">
         <LinkButton href="/login">Open the deck</LinkButton>
         <LinkButton href="/about" variant="outline">
-          Read about AeroDeck
+          Read about {PRODUCT_NAME}
         </LinkButton>
       </div>
     </div>

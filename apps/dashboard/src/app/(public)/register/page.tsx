@@ -4,11 +4,12 @@ import { Suspense } from "react";
 import { AuthFrame } from "@/components/auth-frame";
 import { GuestOnly } from "@/components/guest-only";
 import { RegisterForm } from "@/components/register-form";
+import { PRODUCT_NAME } from "@/lib/brand";
 import { readControlPlaneConfig } from "@/lib/control-plane";
 
 export const metadata: Metadata = {
   title: "Register",
-  description: "Create an AeroDeck account with email and password.",
+  description: `Create an ${PRODUCT_NAME} account with email and password.`,
 };
 
 export default function RegisterPage() {

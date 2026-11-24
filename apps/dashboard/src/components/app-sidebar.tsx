@@ -15,6 +15,7 @@ import { BrandMark } from "@/components/brand-mark";
 import { ControlPlaneLamp } from "@/components/control-plane-lamp";
 import { buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { PRODUCT_NAME } from "@/lib/brand";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -56,7 +57,7 @@ export function AppSidebar({ mobileOpen, onCloseMobile, controlPlane = false }: 
             <BrandMark className="size-9 text-primary" />
             <div>
               <p className="font-heading text-base leading-none font-semibold tracking-tight">
-                AeroDeck
+                {PRODUCT_NAME}
               </p>
               <p className="mt-1 font-mono text-[10px] tracking-[0.18em] text-muted-foreground uppercase">
                 Flight deck

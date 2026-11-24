@@ -14,6 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { fetchDeployments, fetchProjectPage, fetchSandboxPage } from "@/lib/api";
+import { PRODUCT_NAME } from "@/lib/brand";
 import type { Deployment, DeploymentStatus, ProjectPage, SandboxPage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -47,7 +48,7 @@ export function OverviewConsole({ controlPlane = false }: { controlPlane?: boole
     <div className="mx-auto w-full max-w-5xl">
       <PageHeader
         eyebrow="Overview"
-        title="AeroDeck console"
+        title={`${PRODUCT_NAME} console`}
         description={
           isControlPlane
             ? "Projects, sandboxes, and deployments are read by this server from the control plane."

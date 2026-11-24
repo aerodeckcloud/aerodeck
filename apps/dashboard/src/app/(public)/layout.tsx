@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
 
 import { PublicShell } from "@/components/public-shell";
+import { PRODUCT_NAME } from "@/lib/brand";
 
 export const metadata: Metadata = {
   title: {
-    default: "AeroDeck",
-    template: "%s · AeroDeck",
+    default: PRODUCT_NAME,
+    template: `%s · ${PRODUCT_NAME}`,
   },
 };
 

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { BrandMark } from "@/components/brand-mark";
 import { PublicMobileNav } from "@/components/public-mobile-nav";
 import { PublicNavLink } from "@/components/public-nav-link";
+import { PRODUCT_NAME } from "@/lib/brand";
 import { PUBLIC_AUTH_NAV, PUBLIC_HOME, PUBLIC_NAV } from "@/lib/public-nav";
 
 export function PublicShell({ children }: { children: React.ReactNode }) {
@@ -12,7 +13,7 @@ export function PublicShell({ children }: { children: React.ReactNode }) {
         <div className="flex h-14 w-full items-center gap-3 px-4 md:px-8">
           <Link href={PUBLIC_HOME} className="flex items-center gap-2.5">
             <BrandMark className="size-8 text-primary" />
-            <span className="font-heading text-sm font-semibold tracking-tight">AeroDeck</span>
+            <span className="font-heading text-sm font-semibold tracking-tight">{PRODUCT_NAME}</span>
           </Link>
 
           <nav aria-label="Public" className="ml-6 hidden items-center gap-4 md:flex">
@@ -40,7 +41,7 @@ export function PublicShell({ children }: { children: React.ReactNode }) {
           <div className="flex flex-col gap-2">
             <Link href={PUBLIC_HOME} className="flex items-center gap-2 text-foreground">
               <BrandMark className="size-6 text-primary" />
-              <span className="font-heading text-sm font-semibold tracking-tight">AeroDeck</span>
+              <span className="font-heading text-sm font-semibold tracking-tight">{PRODUCT_NAME}</span>
             </Link>
             <p>GitOps on DigitalOcean</p>
             <p>Local mock UI. No FastAPI and no cloud apply from this page.</p>

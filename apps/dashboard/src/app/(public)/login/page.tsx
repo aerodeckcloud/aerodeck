@@ -4,11 +4,12 @@ import { Suspense } from "react";
 import { AuthFrame } from "@/components/auth-frame";
 import { GuestOnly } from "@/components/guest-only";
 import { LoginForm } from "@/components/login-form";
+import { PRODUCT_NAME } from "@/lib/brand";
 import { readControlPlaneConfig } from "@/lib/control-plane";
 
 export const metadata: Metadata = {
   title: "Login",
-  description: "Sign in to AeroDeck with email and password.",
+  description: `Sign in to ${PRODUCT_NAME} with email and password.`,
 };
 
 export default function LoginPage() {

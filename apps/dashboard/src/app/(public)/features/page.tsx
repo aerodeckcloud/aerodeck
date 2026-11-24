@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 
 import { LinkButton } from "@/components/link-button";
+import { PRODUCT_NAME } from "@/lib/brand";
 
 export const metadata: Metadata = {
   title: "Features",
-  description:
-    "What AeroDeck does today: projects, GitHub deployments, logs, promotion, rollback, pause, production approval, hostnames, and Firecracker sandboxes.",
+  description: `What ${PRODUCT_NAME} does today: projects, GitHub deployments, logs, promotion, rollback, pause, production approval, hostnames, and Firecracker sandboxes.`,
 };
 
 const FEATURES = [
@@ -57,7 +57,7 @@ export default function FeaturesPage() {
         What the deck does today
       </h1>
       <p className="mt-4 max-w-2xl text-sm leading-relaxed text-muted-foreground md:text-base">
-        AeroDeck is the console for GitOps on DigitalOcean. These are the flights an
+        {PRODUCT_NAME} is the console for GitOps on DigitalOcean. These are the flights an
         operator can run now: the project, the deployment, the hold, the hostname, and
         the sandbox.
       </p>
@@ -79,7 +79,7 @@ export default function FeaturesPage() {
       <div className="mt-8 flex flex-wrap gap-3">
         <LinkButton href="/login">Open the deck</LinkButton>
         <LinkButton href="/about" variant="outline">
-          Read about AeroDeck
+          Read about {PRODUCT_NAME}
         </LinkButton>
       </div>
     </div>
