@@ -443,6 +443,7 @@ async def test_findings_block_launch_until_they_are_acknowledged(
         assert launched.status_code == 202, launched.text
     finally:
         app.dependency_overrides[get_package_source] = lambda: _NoManifest()
+        app.dependency_overrides[get_advisory_source] = lambda: _QuietAdvisories()
         app.dependency_overrides.pop(get_job_dispatcher, None)
 
 
@@ -488,3 +489,37 @@ async def test_an_unreachable_advisory_source_is_not_a_clear_scan(
 class _QuietAdvisories:
     async def query(self, packages: list[PackageQuery]) -> list[SecurityFinding]:
         return []
+
+
+async def test_launch_rescans_so_a_stored_clear_result_cannot_go_stale(
+    client: AsyncClient, app: FastAPI
+) -> None:
+    app.dependency_overrides[get_package_source] = lambda: _LodashManifest()
+    app.dependency_overrides[get_advisory_source] = lambda: _QuietAdvisories()
+    try:
+        token = await obtain_token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        owner = await _user(client, headers, "draft-security-stale@aerodeck.test")
+        created = await client.post(
+            f"{DEPLOYMENTS}/draft", json={"repo_url": REPO, "plan": _plan()}, headers=owner
+        )
+        assert created.status_code == 201, created.text
+        draft_id = created.json()["deployment"]["id"]
+        scanned = await client.get(f"{DEPLOYMENTS}/{draft_id}/security", headers=owner)
+        assert scanned.status_code == 200, scanned.text
+        assert scanned.json()["outcome"] == "clear"
+        app.dependency_overrides[get_advisory_source] = lambda: _OneFinding()
+        blocked = await client.post(
+            f"{DEPLOYMENTS}/{draft_id}/launch",
+            json={
+                "plan": _plan(step="launch"),
+                "project_id": "11111111-1111-4111-8111-111111111111",
+                "environment_id": "22222222-2222-4222-8222-222222222222",
+            },
+            headers=owner,
+        )
+        assert blocked.status_code == 422, blocked.text
+        assert blocked.json()["detail"] == "Acknowledge the dependency findings before deploying."
+    finally:
+        app.dependency_overrides[get_package_source] = lambda: _NoManifest()
+        app.dependency_overrides[get_advisory_source] = lambda: _QuietAdvisories()

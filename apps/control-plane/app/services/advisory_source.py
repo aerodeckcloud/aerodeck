@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Protocol
+from urllib.parse import quote
 
 import httpx
 
@@ -11,6 +13,7 @@ from app.services.manifest_packages import PackageQuery
 
 _SEVERITY = {"CRITICAL": "critical", "HIGH": "high", "MODERATE": "medium", "MEDIUM": "medium", "LOW": "low"}
 _RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
+_MAX_FINDINGS = 30
 
 
 class AdvisorySource(Protocol):
@@ -19,35 +22,52 @@ class AdvisorySource(Protocol):
 
 
 class OsvAdvisorySource:
-    def __init__(self, base_url: str = "https://api.osv.dev") -> None:
+    def __init__(
+        self,
+        base_url: str = "https://api.osv.dev",
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._transport = transport
 
     async def query(self, packages: list[PackageQuery]) -> list[SecurityFinding]:
         if not packages:
             return []
-        payload = {
-            "queries": [
-                {
-                    "version": package.version,
-                    "package": {"name": package.name, "ecosystem": package.ecosystem},
-                }
-                for package in packages
-            ]
-        }
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(f"{self._base_url}/v1/querybatch", json=payload)
+        async with httpx.AsyncClient(
+            timeout=10.0, transport=self._transport, base_url=self._base_url
+        ) as client:
+            response = await client.post(
+                "/v1/querybatch",
+                json={
+                    "queries": [
+                        {
+                            "version": package.version,
+                            "package": {"name": package.name, "ecosystem": package.ecosystem},
+                        }
+                        for package in packages
+                    ]
+                },
+            )
             response.raise_for_status()
-            body = response.json()
-        return findings_from_osv(body, packages)
+            pairs = advisory_ids_from_batch(response.json(), packages)
+            details = await asyncio.gather(
+                *(client.get(f"/v1/vulns/{quote(advisory_id, safe='')}") for _, advisory_id in pairs)
+            )
+        findings: list[SecurityFinding] = []
+        for (package_name, _), detail in zip(pairs, details, strict=True):
+            detail.raise_for_status()
+            findings.append(finding_from_advisory(package_name, detail.json()))
+        return sorted(findings, key=lambda item: _RANK[item.severity])
 
 
-def findings_from_osv(body: object, packages: list[PackageQuery]) -> list[SecurityFinding]:
+def advisory_ids_from_batch(body: object, packages: list[PackageQuery]) -> list[tuple[str, str]]:
+    """Ids from a querybatch body. That response has no summary or severity."""
     if not isinstance(body, dict) or not isinstance(body.get("results"), list):
         raise ValueError("advisory response was not a result list")
     results = body["results"]
     if len(results) != len(packages):
         raise ValueError("advisory response did not match the query")
-    found: list[SecurityFinding] = []
+    found: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for package, result in zip(packages, results, strict=True):
         if not isinstance(result, dict):
@@ -65,21 +85,29 @@ def findings_from_osv(body: object, packages: list[PackageQuery]) -> list[Securi
             if key in seen:
                 continue
             seen.add(key)
-            summary = vuln.get("summary")
-            text = " ".join(summary.split()) if isinstance(summary, str) else ""
-            if not text:
-                text = f"Public advisory {advisory_id.strip()}."
-            found.append(
-                SecurityFinding(
-                    severity=_severity(vuln),
-                    package=package.name[:200],
-                    advisory_id=advisory_id.strip()[:64],
-                    summary=text[:160],
-                )
-            )
-            if len(found) >= 30:
-                return sorted(found, key=lambda item: _RANK[item.severity])
-    return sorted(found, key=lambda item: _RANK[item.severity])
+            found.append((package.name[:200], advisory_id.strip()))
+            if len(found) >= _MAX_FINDINGS:
+                return found
+    return found
+
+
+def finding_from_advisory(package_name: str, vuln: object) -> SecurityFinding:
+    """One stored row from GET /v1/vulns/{id}. Details and references are not copied."""
+    if not isinstance(vuln, dict):
+        raise ValueError("advisory detail was not an object")
+    advisory_id = vuln.get("id")
+    if not isinstance(advisory_id, str) or not advisory_id.strip():
+        raise ValueError("advisory detail had no id")
+    summary = vuln.get("summary")
+    text = " ".join(summary.split()) if isinstance(summary, str) else ""
+    if not text:
+        text = f"Public advisory {advisory_id.strip()}."
+    return SecurityFinding(
+        severity=_severity(vuln),
+        package=package_name[:200],
+        advisory_id=advisory_id.strip()[:64],
+        summary=text[:160],
+    )
 
 
 def _severity(vuln: dict[str, object]) -> str:

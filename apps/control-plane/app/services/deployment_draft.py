@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from app.core.errors import AppError, ConflictError, NotFoundError, QueueUnavailableError, UnprocessableError
+from app.core.logging import get_logger
 from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
 from app.schemas.deployment import DeploymentCreate, deployment_to_read
 from app.schemas.draft_security import DraftSecurityRead, DraftSecurityRecord, SecurityAcknowledgement
@@ -27,6 +28,8 @@ from app.services.deployments import DeploymentService
 from app.services.environment_vars import decrypt_env_value, encrypt_env_value
 from app.services.manifest_packages import PackageSource
 from app.services.environments import EnvironmentService
+
+logger = get_logger("services.deployment_draft")
 
 _PLAN_TOO_LARGE = "Draft plan is too large."
 _MAX_PLAN_CHARS = 64_000
@@ -90,7 +93,7 @@ def _keep_acknowledgement(
         item.advisory_id for item in previous.findings
     } == {item.advisory_id for item in record.findings}
     same_incomplete = previous.acknowledgement == "incomplete" and record.outcome == "incomplete"
-    if previous.acknowledgement == "findings" and same_findings or same_incomplete:
+    if (previous.acknowledgement == "findings" and same_findings) or same_incomplete:
         return record.model_copy(
             update={
                 "acknowledgement": previous.acknowledgement,
@@ -229,7 +232,12 @@ class DeploymentDraftService:
     async def _scan_record(self, repo_url: str) -> DraftSecurityRecord:
         try:
             read = await run_in_threadpool(self._packages.read, repo_url)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "event=dependency_scan_incomplete stage=manifest error_type=%s",
+                type(exc).__name__,
+                exc_info=exc,
+            )
             return DraftSecurityRecord(outcome="incomplete")
         if not read.found:
             return DraftSecurityRecord(outcome="no_manifest")
@@ -237,7 +245,12 @@ class DeploymentDraftService:
             return DraftSecurityRecord(outcome="incomplete" if read.unpinned else "clear")
         try:
             findings = await self._advisories.query(list(read.packages))
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "event=dependency_scan_incomplete stage=advisory error_type=%s",
+                type(exc).__name__,
+                exc_info=exc,
+            )
             return DraftSecurityRecord(outcome="incomplete")
         if findings:
             return DraftSecurityRecord(outcome="findings", findings=findings)
@@ -253,10 +266,8 @@ class DeploymentDraftService:
         merged = merge_plan(self.open(stored.draft_plan), body.plan)
         if merged.step != "launch":
             raise UnprocessableError("Confirm the launch step before deploying.")
-        record = _load_security(stored)
-        if record is None:
-            record = await self._scan_record(stored.repo_url)
-            stored.draft_security = record.model_dump_json()
+        record = _keep_acknowledgement(_load_security(stored), await self._scan_record(stored.repo_url))
+        stored.draft_security = record.model_dump_json()
         if record.outcome == "findings" and record.acknowledgement != "findings":
             raise UnprocessableError("Acknowledge the dependency findings before deploying.")
         if record.outcome == "incomplete" and record.acknowledgement != "incomplete":
