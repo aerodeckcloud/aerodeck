@@ -168,6 +168,10 @@ def inspect_checkout_blueprint(checkout: Path, repo_url: str, repo_name: str) ->
 
     has_dockerfile = dockerfile.is_file() and not dockerfile.is_symlink()
     detected_auto = None if has_dockerfile else detect_dockerfile_template(checkout, default_port)
+    # A Node manifest without scripts.start is an error result, not a build we can run.
+    # ensure_dockerfile raises later; inspect must not advertise that detection.
+    if detected_auto is not None and detected_auto.error:
+        detected_auto = None
     strategy = "dockerfile" if has_dockerfile else ("compose" if compose_file and not detected_auto else "auto")
     source = "docker-compose" if compose_file else ("dockerfile" if has_dockerfile else "auto")
     return DeploymentBlueprint(
