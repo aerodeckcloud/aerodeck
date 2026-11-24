@@ -1,4 +1,5 @@
 import { isControlPlaneUuid } from "./control-plane-uuid";
+import { parseSecurityReport, SECURITY_LAUNCH_REJECTION_DETAILS, type SecurityReport } from "./deploy-draft";
 import type {
   AcceptedJob,
   AddonType,
@@ -1618,9 +1619,12 @@ export type ControlPlaneDraft = {
   plan: import("@/lib/deploy-draft").DeployDraftPlan;
 };
 
-function isDraftStep(value: unknown): value is "build" | "resources" | "variables" | "target" | "launch" {
+function isDraftStep(
+  value: unknown,
+): value is "build" | "security" | "resources" | "variables" | "target" | "launch" {
   return (
     value === "build" ||
+    value === "security" ||
     value === "resources" ||
     value === "variables" ||
     value === "target" ||
@@ -1708,6 +1712,78 @@ export async function readControlPlaneDraft(
   );
 }
 
+async function securityRequest(
+  config: ControlPlaneConfig,
+  draftId: string,
+  path: "/scan" | "/acknowledge",
+  body: unknown,
+  options: ListOptions & { actorUserId?: string },
+): Promise<SecurityReport> {
+  if (!isControlPlaneUuid(draftId)) {
+    throw new ControlPlaneError("control plane draft id was not a uuid");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const accessToken = await accessTokenFor(config, fetchImpl, options.now ?? defaultNow);
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(draftId)}/security${path}`,
+    {
+      method: "POST",
+      headers: controlPlaneHeaders(
+        accessToken,
+        options.actorUserId,
+        body === undefined ? undefined : { "content-type": "application/json" },
+      ),
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+    },
+  );
+  if (response.status === 404) {
+    throw new ControlPlaneError("control plane draft was not found", 404);
+  }
+  if (response.status === 422) {
+    throw new ControlPlaneError("control plane security scan was rejected", 422);
+  }
+  if (!response.ok) {
+    throw new ControlPlaneError(`control plane security scan failed (${response.status})`, response.status);
+  }
+  return parseSecurityReport(await response.json());
+}
+
+const LAUNCH_REJECTION_DETAILS = new Set([
+  ...SECURITY_LAUNCH_REJECTION_DETAILS,
+  "Confirm the launch step before deploying.",
+]);
+
+async function launchFailureMessage(response: Response): Promise<string> {
+  const fallback = "The draft could not be launched.";
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    if (typeof body.detail === "string" && LAUNCH_REJECTION_DETAILS.has(body.detail)) {
+      return body.detail;
+    }
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+
+export async function scanControlPlaneSecurity(
+  config: ControlPlaneConfig,
+  draftId: string,
+  options: ListOptions & { actorUserId?: string } = {},
+): Promise<SecurityReport> {
+  return securityRequest(config, draftId, "/scan", undefined, options);
+}
+
+export async function acknowledgeControlPlaneSecurity(
+  config: ControlPlaneConfig,
+  draftId: string,
+  acknowledgement: "findings" | "incomplete",
+  options: ListOptions & { actorUserId?: string } = {},
+): Promise<SecurityReport> {
+  return securityRequest(config, draftId, "/acknowledge", { acknowledgement }, options);
+}
+
 export async function updateControlPlaneDraft(
   config: ControlPlaneConfig,
   draftId: string,
@@ -1758,6 +1834,9 @@ export async function launchControlPlaneDraft(
       cache: "no-store",
     },
   );
+  if (response.status === 422) {
+    throw new ControlPlaneError(await launchFailureMessage(response), 422, draftId);
+  }
   if (!response.ok) {
     throw new ControlPlaneError(
       `control plane draft launch failed (${response.status})`,

@@ -84,6 +84,8 @@ class Deployment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     draft_step: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # Encrypted blueprint, addon selection, and variable values. Cleared once the row leaves draft.
     draft_plan: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Public advisory list and the acknowledgement. Not the upstream response (#345).
+    draft_security: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[DeploymentStatus] = mapped_column(
         Enum(DeploymentStatus, name="deployment_status", native_enum=False, length=16),
         nullable=False,

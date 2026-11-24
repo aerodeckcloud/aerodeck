@@ -1,6 +1,91 @@
 import type { AddonType, DeploymentBlueprint, DeploymentStatus } from "@/lib/types";
 
-export type DeployRouteStep = "repository" | "build" | "resources" | "variables" | "target" | "launch";
+export type DeployRouteStep = "repository" | "build" | "security" | "resources" | "variables" | "target" | "launch";
+
+export type SecurityOutcome = "no_advisories" | "findings" | "incomplete" | "no_manifest";
+
+export const NO_ADVISORIES_FOR_DIRECT_PINS =
+  "No advisories for pinned direct dependencies in root manifests.";
+
+export type SecurityFinding = {
+  severity: "critical" | "high" | "medium" | "low" | "unknown";
+  package: string;
+  advisory_id: string;
+  summary: string;
+};
+
+export type SecurityReport = {
+  outcome: SecurityOutcome;
+  findings: SecurityFinding[];
+  acknowledgement: "findings" | "incomplete" | null;
+};
+
+export function securityNeedsAcknowledgement(outcome: SecurityOutcome): boolean {
+  return outcome === "findings" || outcome === "incomplete";
+}
+
+export const SECURITY_LAUNCH_REJECTION_DETAILS = new Set([
+  "Acknowledge the dependency findings before deploying.",
+  "The dependency scan did not complete.",
+  "Run the dependency scan before deploying.",
+  "The dependency scan is out of date. Run it again before deploying.",
+]);
+
+export function launchReturnsToSecurity(detail: string): boolean {
+  return SECURITY_LAUNCH_REJECTION_DETAILS.has(detail);
+}
+
+export function parseSecurityReport(value: unknown): SecurityReport {
+  if (!value || typeof value !== "object") {
+    throw new Error("The dependency scan did not complete.");
+  }
+  const row = value as Record<string, unknown>;
+  const outcome = row.outcome;
+  if (
+    outcome !== "no_advisories" &&
+    outcome !== "findings" &&
+    outcome !== "incomplete" &&
+    outcome !== "no_manifest"
+  ) {
+    throw new Error("The dependency scan did not complete.");
+  }
+  const findings: SecurityFinding[] = [];
+  if (Array.isArray(row.findings)) {
+    for (const item of row.findings) {
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+      const finding = item as Record<string, unknown>;
+      if (
+        typeof finding.package !== "string" ||
+        typeof finding.advisory_id !== "string" ||
+        typeof finding.summary !== "string"
+      ) {
+        continue;
+      }
+      findings.push({
+        severity:
+          finding.severity === "critical" ||
+          finding.severity === "high" ||
+          finding.severity === "medium" ||
+          finding.severity === "low"
+            ? finding.severity
+            : "unknown",
+        package: finding.package,
+        advisory_id: finding.advisory_id,
+        summary: finding.summary.replace(/\s+/g, " ").slice(0, 160),
+      });
+    }
+  }
+  return {
+    outcome,
+    findings,
+    acknowledgement:
+      row.acknowledgement === "findings" || row.acknowledgement === "incomplete"
+        ? row.acknowledgement
+        : null,
+  };
+}
 
 export type DeployDraftVariable = {
   key: string;
@@ -21,6 +106,9 @@ export type DeployDraftPlan = {
 export function deployStepPath(draftId: string, step: DeployDraftPlan["step"]): string {
   if (step === "build") {
     return `/deploy/${draftId}/build`;
+  }
+  if (step === "security") {
+    return `/deploy/${draftId}/security`;
   }
   if (step === "resources") {
     return `/deploy/${draftId}/databases`;

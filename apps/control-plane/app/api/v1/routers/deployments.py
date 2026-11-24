@@ -49,7 +49,8 @@ from app.schemas.deployment_draft import (
     DeploymentDraftRead,
     DeploymentDraftWrite,
 )
-from app.services.deployment_draft import draft_read
+from app.schemas.draft_security import DraftSecurityAcknowledge, DraftSecurityRead
+from app.services.deployment_draft import draft_read, security_read
 from app.services.blueprint_inspector import inspect_github_repository_sync
 from app.services.docker_policy import normalize_git_sha
 from app.services.container_logs import ContainerLogsRead, dispatch_container_logs
@@ -205,6 +206,59 @@ async def read_deployment_draft(
 ) -> DeploymentDraftRead:
     stored, plan = await drafts.read(deployment_id, await _known_actor(users, actor_user_id))
     return draft_read(stored, plan)
+
+
+@router.get(
+    "/{deployment_id}/security",
+    response_model=DraftSecurityRead,
+    summary="Read the stored dependency scan (#345)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED,
+)
+async def read_deployment_security(
+    deployment_id: uuid.UUID,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DraftSecurityRead:
+    record = await drafts.read_security(deployment_id, await _known_actor(users, actor_user_id))
+    return security_read(record)
+
+
+@router.post(
+    "/{deployment_id}/security/scan",
+    response_model=DraftSecurityRead,
+    summary="Scan the draft's dependency manifests for public advisories (#345)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED,
+)
+async def scan_deployment_security(
+    deployment_id: uuid.UUID,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DraftSecurityRead:
+    record = await drafts.scan_security(deployment_id, await _known_actor(users, actor_user_id))
+    return security_read(record)
+
+
+@router.post(
+    "/{deployment_id}/security/acknowledge",
+    response_model=DraftSecurityRead,
+    summary="Record that the operator saw the dependency scan (#345)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED | _UNPROCESSABLE,
+)
+async def acknowledge_deployment_security(
+    deployment_id: uuid.UUID,
+    body: DraftSecurityAcknowledge,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DraftSecurityRead:
+    record = await drafts.acknowledge_security(
+        deployment_id,
+        body.acknowledgement,
+        await _known_actor(users, actor_user_id),
+    )
+    return security_read(record)
 
 
 @router.put(

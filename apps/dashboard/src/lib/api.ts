@@ -1,5 +1,5 @@
 import { MOCK_API_PREFIX } from "@/lib/catalog";
-import type { DeployDraftPlan } from "@/lib/deploy-draft";
+import { parseSecurityReport, type DeployDraftPlan, type SecurityReport } from "@/lib/deploy-draft";
 import {
   PROVISION_ENQUEUE_FAILED,
   type AcceptedJob,
@@ -777,6 +777,31 @@ export async function readDeployDraft(draftId: string): Promise<DeployDraftRecor
     cache: "no-store",
   });
   return readDraft(response);
+}
+
+export async function scanDeploySecurity(draftId: string): Promise<SecurityReport> {
+  const response = await fetch(`/api/console/deployments/${encodeURIComponent(draftId)}/security/scan`, {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  return parseSecurityReport(await readJson(response));
+}
+
+export async function acknowledgeDeploySecurity(
+  draftId: string,
+  acknowledgement: "findings" | "incomplete",
+): Promise<SecurityReport> {
+  const response = await fetch(
+    `/api/console/deployments/${encodeURIComponent(draftId)}/security/acknowledge`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ acknowledgement }),
+    },
+  );
+  return parseSecurityReport(await readJson(response));
 }
 
 export async function updateDeployDraft(

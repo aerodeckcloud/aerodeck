@@ -18,6 +18,7 @@ import {
   createControlPlaneDeploymentAndProvision,
   launchControlPlaneDraft,
   readControlPlaneDraft,
+  scanControlPlaneSecurity,
   provisionControlPlaneEnvironment,
   deployLatestControlPlaneDeployment,
   promoteControlPlaneDeployment,
@@ -2487,5 +2488,188 @@ describe("launchControlPlaneDraft", () => {
         return true;
       },
     );
+  });
+
+  it("keeps an acknowledgement rejection and drops any other 422 body", async () => {
+    clearControlPlaneTokenCache();
+    const draftId = "33333333-3333-4333-8333-333333333333";
+    const plan = {
+      step: "launch" as const,
+      blueprint: {
+        version: 1 as const,
+        name: "demo",
+        repo_url: "https://github.com/acme/demo",
+        source: "dockerfile" as const,
+        build: {
+          strategy: "dockerfile" as const,
+          dockerfile: "Dockerfile",
+          compose_file: null,
+          service: null,
+          port: 8000,
+        },
+        addons: [],
+        env: [],
+      },
+      detected_addons: [],
+      selected_addons: [],
+      variables: [],
+      extra_env: "",
+    };
+    const acknowledged: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse({ detail: "Acknowledge the dependency findings before deploying." }, 422);
+    };
+    await assert.rejects(
+      () => launchControlPlaneDraft(config, draftId, plan, draftId, draftId, { fetch: acknowledged }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.equal(cause.status, 422);
+        assert.equal(cause.message, "Acknowledge the dependency findings before deploying.");
+        return true;
+      },
+    );
+
+    clearControlPlaneTokenCache();
+    const stale: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse(
+        { detail: "The dependency scan is out of date. Run it again before deploying." },
+        422,
+      );
+    };
+    await assert.rejects(
+      () => launchControlPlaneDraft(config, draftId, plan, draftId, draftId, { fetch: stale }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.equal(cause.message, "The dependency scan is out of date. Run it again before deploying.");
+        return true;
+      },
+    );
+
+    clearControlPlaneTokenCache();
+    const confirmStep: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse({ detail: "Confirm the launch step before deploying." }, 422);
+    };
+    await assert.rejects(
+      () => launchControlPlaneDraft(config, draftId, plan, draftId, draftId, { fetch: confirmStep }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.equal(cause.message, "Confirm the launch step before deploying.");
+        return true;
+      },
+    );
+
+    clearControlPlaneTokenCache();
+    const leaked: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse({ detail: "internal query SELECT secret" }, 422);
+    };
+    await assert.rejects(
+      () => launchControlPlaneDraft(config, draftId, plan, draftId, draftId, { fetch: leaked }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.equal(cause.message, "The draft could not be launched.");
+        assert.equal(cause.message.includes("SELECT"), false);
+        return true;
+      },
+    );
+  });
+});
+
+describe("scanControlPlaneSecurity", () => {
+  it("keeps the advisory summary and drops the rest of the response", async () => {
+    clearControlPlaneTokenCache();
+    const draftId = "33333333-3333-4333-8333-333333333333";
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      assert.equal(init?.method, "POST");
+      assert.match(url, /\/api\/v1\/deployments\/[^/]+\/security\/scan$/);
+      return jsonResponse({
+        outcome: "findings",
+        acknowledgement: null,
+        acknowledged_at: "2026-11-24T00:00:00.000Z",
+        findings: [
+          {
+            severity: "high",
+            package: "lodash",
+            advisory_id: "GHSA-test",
+            summary: "Prototype pollution in lodash",
+            details: "payload example",
+            references: ["https://example.invalid/advisory"],
+          },
+        ],
+      });
+    };
+
+    const report = await scanControlPlaneSecurity(config, draftId, { fetch: fetchImpl });
+    assert.equal(report.outcome, "findings");
+    assert.equal(report.findings.length, 1);
+    assert.equal(report.findings[0]?.summary, "Prototype pollution in lodash");
+    assert.equal(JSON.stringify(report).includes("payload"), false);
+    assert.equal(JSON.stringify(report).includes("example.invalid"), false);
+  });
+
+  it("parses a draft saved on the security step", async () => {
+    clearControlPlaneTokenCache();
+    const draftId = "33333333-3333-4333-8333-333333333333";
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse({
+        deployment: {
+          id: draftId,
+          repo_url: "https://github.com/acme/demo",
+          owner: "acme",
+          repo: "demo",
+          started_at: "2026-11-24T00:00:00.000Z",
+          status: "draft",
+          draft_step: "security",
+        },
+        plan: {
+          step: "security",
+          blueprint: {
+            version: 1,
+            name: "demo",
+            repo_url: "https://github.com/acme/demo",
+            source: "dockerfile",
+            build: {
+              strategy: "dockerfile",
+              dockerfile: "Dockerfile",
+              compose_file: null,
+              service: null,
+              port: 8000,
+            },
+            addons: [],
+            env: [],
+          },
+          detected_addons: [],
+          selected_addons: [],
+          variables: [],
+          extra_env: "",
+        },
+      });
+    };
+
+    const draft = await readControlPlaneDraft(config, draftId, { fetch: fetchImpl });
+    assert.equal(draft.deployment.draft_step, "security");
+    assert.equal(draft.plan.step, "security");
   });
 });

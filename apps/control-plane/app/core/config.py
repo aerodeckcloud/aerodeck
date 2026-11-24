@@ -14,6 +14,7 @@ in configuration::
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -138,6 +139,8 @@ class Settings(BaseSettings):
     # Docker container provisioner (#209, #210, #215).
     docker_bin: str = "docker"
     git_bin: str = "git"
+    # Public OSV API. Override in tests or an air-gapped deploy.
+    advisory_base_url: str = "https://api.osv.dev"
     # Optional DOCKER_HOST URI (e.g. unix:///run/user/1000/docker.sock for rootless Docker or a remote build host).
     docker_host: str | None = None
     # Optional OCI runtime for stronger tenant isolation (e.g. "runsc" for gVisor or "sysbox-runc").
@@ -163,6 +166,15 @@ class Settings(BaseSettings):
     docker_network: str = DOCKER_DEFAULT_NETWORK
     # Optional base domain for auto-registered Traefik routes (e.g. "dev.app.aero-deck.app").
     docker_route_base_domain: str | None = None
+
+    @field_validator("advisory_base_url")
+    @classmethod
+    def _advisory_base_url_is_https(cls, value: str) -> str:
+        cleaned = value.strip().rstrip("/")
+        parsed = urlsplit(cleaned)
+        if parsed.scheme != "https" or parsed.netloc == "":
+            raise ValueError("AERODECK_ADVISORY_BASE_URL must be an https origin")
+        return cleaned
 
     @field_validator("auth_clients")
     @classmethod

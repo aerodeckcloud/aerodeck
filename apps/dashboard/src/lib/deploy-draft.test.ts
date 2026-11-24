@@ -6,6 +6,10 @@ import {
   deployStepPath,
   deploymentHref,
   launchReview,
+  parseSecurityReport,
+  launchReturnsToSecurity,
+  NO_ADVISORIES_FOR_DIRECT_PINS,
+  securityNeedsAcknowledgement,
   stepAfterResources,
   stepBeforeTarget,
 } from "./deploy-draft";
@@ -13,10 +17,53 @@ import {
 describe("deploy draft routes", () => {
   it("gives each confirmed step its own page", () => {
     assert.equal(deployStepPath("draft-1", "build"), "/deploy/draft-1/build");
+    assert.equal(deployStepPath("draft-1", "security"), "/deploy/draft-1/security");
     assert.equal(deployStepPath("draft-1", "resources"), "/deploy/draft-1/databases");
     assert.equal(deployStepPath("draft-1", "variables"), "/deploy/draft-1/variables");
     assert.equal(deployStepPath("draft-1", "target"), "/deploy/draft-1/target");
     assert.equal(deployStepPath("draft-1", "launch"), "/deploy/draft-1/launch");
+  });
+
+  it("asks for an acknowledgement only when the scan found findings or did not finish", () => {
+    assert.equal(securityNeedsAcknowledgement("no_advisories"), false);
+    assert.equal(
+      NO_ADVISORIES_FOR_DIRECT_PINS,
+      "No advisories for pinned direct dependencies in root manifests.",
+    );
+    assert.equal(
+      parseSecurityReport({ outcome: "no_advisories", acknowledgement: null, findings: [] }).outcome,
+      "no_advisories",
+    );
+    assert.throws(
+      () => parseSecurityReport({ outcome: "clear", acknowledgement: null, findings: [] }),
+      /did not complete/,
+    );
+    assert.equal(securityNeedsAcknowledgement("no_manifest"), false);
+    assert.equal(securityNeedsAcknowledgement("findings"), true);
+    assert.equal(securityNeedsAcknowledgement("incomplete"), true);
+    assert.equal(launchReturnsToSecurity("Acknowledge the dependency findings before deploying."), true);
+    assert.equal(launchReturnsToSecurity("The dependency scan did not complete."), true);
+    assert.equal(launchReturnsToSecurity("Run the dependency scan before deploying."), true);
+    assert.equal(
+      launchReturnsToSecurity("The dependency scan is out of date. Run it again before deploying."),
+      true,
+    );
+    assert.equal(launchReturnsToSecurity("Confirm the launch step before deploying."), false);
+    assert.equal(launchReturnsToSecurity("The draft could not be launched."), false);
+    const report = parseSecurityReport({
+      outcome: "findings",
+      acknowledgement: null,
+      findings: [
+        {
+          severity: "high",
+          package: "lodash",
+          advisory_id: "GHSA-test",
+          summary: "Prototype pollution in lodash\nRequest a payload",
+        },
+      ],
+    });
+    assert.equal(report.findings[0]?.summary, "Prototype pollution in lodash Request a payload");
+    assert.equal(report.findings[0]?.summary.includes("\n"), false);
   });
 
   it("puts the target after variables, or after databases when the scan found no env keys", () => {
