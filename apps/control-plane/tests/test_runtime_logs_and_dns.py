@@ -168,6 +168,48 @@ async def test_ensure_dns_skips_publish_when_record_already_published(
 
 
 @pytest.mark.asyncio
+async def test_a_new_edge_target_does_not_rename_an_old_hostname(
+    app: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _ = app
+    async with SessionLocal() as session:
+        project = Project(slug="portal", name="Portal")
+        session.add(project)
+        await session.flush()
+        env = Environment(project_id=project.id, slug="dev", name="Dev", kind=EnvironmentKind.dev, region="ams3")
+        session.add(env)
+        await session.flush()
+        route = Route(
+            project_id=project.id,
+            environment_id=env.id,
+            hostname="portal-dev.dev.app.aero-deck.app",
+            path_prefix="/",
+            backend_host="10.41.0.2",
+            backend_port=10000,
+            entrypoint="web",
+            enabled=True,
+        )
+        session.add(route)
+        await session.flush()
+        cert = Certificate(route_id=route.id, hostname=route.hostname, status=CertificateStatus.issued)
+        session.add(cert)
+        await session.flush()
+        (tmp_path / f"{cert.id}.key").write_text("dummy-key", encoding="utf-8")
+        settings = Settings(
+            auth_signing_key="a" * 32,
+            dns_record_type="CNAME",
+            dns_record_target="edge.aerodeckcloud.com",
+            certificate_key_dir=str(tmp_path),
+        )
+        monkeypatch.setattr("app.services.docker_routes.get_settings", lambda: settings)
+        monkeypatch.setattr("app.services.docker_routes.get_dns_record_publisher", lambda _s: MagicMock())
+
+        await _ensure_dns_and_tls(session, route, cert)
+
+        assert route.hostname == "portal-dev.dev.app.aero-deck.app"
+
+
+@pytest.mark.asyncio
 async def test_runtime_logs_endpoint_returns_not_found_for_unlinked_deployment(
     client: AsyncClient, auth: dict[str, str]
 ) -> None:

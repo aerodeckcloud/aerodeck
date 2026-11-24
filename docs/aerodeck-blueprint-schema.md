@@ -101,5 +101,5 @@ env:
 On every deployment, AeroDeck automatically injects:
 - `PORT`: The detected or declared `build.port`.
 - `HOST`: `0.0.0.0`.
-- `AERODECK_PUBLIC_URL`, `PUBLIC_URL`, `PORTAL_PUBLIC_URL`: `https://<project>-<env>.dev.app.aero-deck.app`.
+- `AERODECK_PUBLIC_URL`, `PUBLIC_URL`, `PORTAL_PUBLIC_URL`: `https://<project>-<env>.dev.aerodeckcloud.com`.
 - `DATABASE_URL` / `REDIS_URL`: Automatically populated whenever the `postgres` or `redis` addon is enabled.

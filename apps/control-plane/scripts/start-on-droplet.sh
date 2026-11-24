@@ -98,7 +98,14 @@ if [[ -z "${AERODECK_DOCKER_BIND_HOST:-}" || "${AERODECK_DOCKER_BIND_HOST}" == 1
   AERODECK_DOCKER_BIND_HOST="${PRIVATE_VPC_IP:-127.0.0.1}"
 fi
 AERODECK_DOCKER_CONTAINER_PORT="${AERODECK_DOCKER_CONTAINER_PORT:-8000}"
-AERODECK_DOCKER_ROUTE_BASE_DOMAIN="${AERODECK_DOCKER_ROUTE_BASE_DOMAIN:-dev.app.aero-deck.app}"
+# New apps publish on the product zone. Move only the previous dev default.
+# A custom base domain is left alone, and stored route hostnames are not rewritten.
+if [[ -z "${AERODECK_DOCKER_ROUTE_BASE_DOMAIN:-}" || "${AERODECK_DOCKER_ROUTE_BASE_DOMAIN}" == "dev.app.aero-deck.app" ]]; then
+  AERODECK_DOCKER_ROUTE_BASE_DOMAIN="dev.aerodeckcloud.com"
+fi
+if [[ -z "${AERODECK_DNS_RECORD_TARGET:-}" || "${AERODECK_DNS_RECORD_TARGET}" == "edge.aero-deck.app" ]]; then
+  AERODECK_DNS_RECORD_TARGET="edge.aerodeckcloud.com"
+fi
 AERODECK_DOCKER_HEALTH_TIMEOUT_SECONDS="${AERODECK_DOCKER_HEALTH_TIMEOUT_SECONDS:-30}"
 
 mkdir -p /etc/aerodeck

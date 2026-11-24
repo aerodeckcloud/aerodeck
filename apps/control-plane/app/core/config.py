@@ -116,7 +116,7 @@ class Settings(BaseSettings):
     # Public address record created and deleted with each route.
     dns_records_provider: Literal["memory", "digitalocean"] = "memory"
     dns_record_type: Literal["A", "AAAA", "CNAME"] = "CNAME"
-    dns_record_target: str = "edge.aero-deck.app"
+    dns_record_target: str = "edge.aerodeckcloud.com"
     dns_record_ttl: int = Field(default=300, ge=30, le=86_400)
 
     # Firecracker microVMs. "memory" is the fake used in tests and local laptops.
@@ -164,7 +164,7 @@ class Settings(BaseSettings):
         le=DOCKER_MAX_RELEASE_COMMAND_TIMEOUT_SECONDS,
     )
     docker_network: str = DOCKER_DEFAULT_NETWORK
-    # Optional base domain for auto-registered Traefik routes (e.g. "dev.app.aero-deck.app").
+    # Optional base domain for auto-registered Traefik routes (e.g. "dev.aerodeckcloud.com").
     docker_route_base_domain: str | None = None
 
     @field_validator("advisory_base_url")

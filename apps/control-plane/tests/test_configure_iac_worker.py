@@ -20,6 +20,12 @@ def test_env_file_security_permissions() -> None:
     assert 'ENV_FILE="/etc/aerodeck/control-plane.env"' in TEXT
 
 
+def test_moves_only_the_previous_dev_domain_default() -> None:
+    assert 'AERODECK_DOCKER_ROUTE_BASE_DOMAIN="dev.aerodeckcloud.com"' in TEXT
+    assert 'AERODECK_DNS_RECORD_TARGET="edge.aerodeckcloud.com"' in TEXT
+    assert 'AERODECK_DOCKER_ROUTE_BASE_DOMAIN}" == "dev.app.aero-deck.app"' in TEXT
+
+
 def test_handles_iac_keys() -> None:
     assert "AERODECK_IAC_WORKER" in TEXT
     assert "AERODECK_IAC_APPLY" in TEXT
