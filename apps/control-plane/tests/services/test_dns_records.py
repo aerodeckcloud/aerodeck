@@ -15,6 +15,7 @@ from app.services.dns_records import (
 def test_address_record_name_uses_at_for_apex() -> None:
     assert address_record_name("payments.example.com") == ("example.com", "payments")
     assert address_record_name("dev.app.aero-deck.app") == ("aero-deck.app", "dev.app")
+    assert address_record_name("dev.aerodeckcloud.com") == ("aerodeckcloud.com", "dev")
     assert address_record_name("example.com") == ("example.com", "@")
 
 

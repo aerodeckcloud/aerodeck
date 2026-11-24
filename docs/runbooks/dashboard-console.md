@@ -391,35 +391,44 @@ done
 laptop. `--network host` is what lets the server reach the API on
 `127.0.0.1:8000`.
 
-## 4. Publish dev.app.aero-deck.app
+## 4. Publish dev.aerodeckcloud.com
 
 Before running `publish-console-route.py`, ensure `/etc/aerodeck/control-plane.env`
 has the DigitalOcean DNS and Let's Encrypt settings configured ([edge-routing.md](edge-routing.md)),
 otherwise the route stays in memory and issues a self-signed `AeroDeck Fake CA` certificate.
+Set `AERODECK_DNS_RECORD_TARGET=edge.aerodeckcloud.com` so the new name is a
+CNAME to the new edge. That does not rewrite the existing `dev.app.aero-deck.app`
+record. Restart the control plane after changing the env file
+([startup-control-plane.md](startup-control-plane.md)).
 
 Operator scripts live in `/root/aerodeck` on the control Droplet.
 `start-dashboard-on-droplet.sh` automatically copies and invokes
 `apps/control-plane/scripts/publish-console-route.py` during deployment once
-`:3000/login` responds 200. It creates the console project, the dev environment,
-and the route to the control private IPv4 (`10.41.0.2`, or `AERODECK_CONTROL_PRIVATE_IP`)
-port 3000, then issues or renews the certificate. If the route was previously created with an older
-`backend_host` or a fake/staging certificate (`AeroDeck Fake CA` or staging),
-re-running the script updates `backend_host` and automatically calls
-`/certificate/renew` (or pass `--renew` to force renewal). The client secret
-stays in `/etc/aerodeck/dashboard.env`.
+`:3000/login` responds 200. It reuses the console project and the dev
+environment, adds the route `dev.aerodeckcloud.com` to the control private
+IPv4 (`10.41.0.2`, or `AERODECK_CONTROL_PRIVATE_IP`) port 3000, and issues or
+renews that route's certificate. Running it again updates that same route
+instead of creating another console project. The route for
+`dev.app.aero-deck.app` stays, so the old URL still opens the console.
+If the new route was previously created with an older `backend_host` or a
+fake/staging certificate (`AeroDeck Fake CA` or staging), re-running the
+script updates `backend_host` and automatically calls `/certificate/renew`
+(or pass `--renew` to force renewal). The client secret stays in
+`/etc/aerodeck/dashboard.env`.
 
 ```bash
 mkdir -p /root/aerodeck
 python3 /root/aerodeck/publish-console-route.py
 ```
 
-That publishes a CNAME `dev.app` to `edge.aero-deck.app`. Open
-`https://dev.app.aero-deck.app`. `dev` uses a trusted certificate only when
+Open `https://dev.aerodeckcloud.com/login` and `https://dev.app.aero-deck.app/login`.
+Both should show the sign-in page. `dev` uses a trusted certificate only when
 `AERODECK_ACME_DIRECTORY_URL` is the Let's Encrypt production directory.
 `AERODECK_ENV=staging` and `AERODECK_ENV=production` always use that directory
-([edge-routing.md](edge-routing.md)). Sign in there. The session cookie is
-`Secure` in this container, so sign-in is on HTTPS. `app.aero-deck.app` stays
-unused until the production console exists.
+([edge-routing.md](edge-routing.md)). The session cookie has no `Domain`
+attribute, so a sign-in on one host is not sent to the other. Sign in on the
+new host to use it. `app.aero-deck.app` stays unused until the production
+console exists.
 
 ## 5. Boot sandboxes from the console
 

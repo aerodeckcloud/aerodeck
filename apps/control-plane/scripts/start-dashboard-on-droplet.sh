@@ -80,7 +80,7 @@ publish_console_route_if_present() {
     script="/root/publish-console-route.py"
   fi
   if [[ -f "${script}" && -f "${DASHBOARD_ENV}" ]]; then
-    echo "ensuring console route and certificate at dev.app.aero-deck.app"
+    echo "ensuring console route and certificate at dev.aerodeckcloud.com"
     python3 "${script}" || echo "warning: publish-console-route.py returned non-zero status" >&2
   fi
 }
