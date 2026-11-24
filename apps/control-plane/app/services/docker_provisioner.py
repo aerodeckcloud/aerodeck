@@ -22,7 +22,7 @@ from app.services.docker_policy import (
 )
 from app.services.docker_addons import parse_addons_json, provision_environment_addons
 from app.services.docker_env_discovery import build_docker_run_command, ensure_default_docker_config
-from app.services.docker_routes import upsert_environment_route_sync
+from app.services.docker_routes import lookup_enabled_route_hostname, upsert_environment_route_sync
 from app.services.dockerfile_detector import (
     build_runtime_env_file, detect_exposed_port, ensure_dockerfile,
     stream_container_crash_logs, wait_for_container_or_fast_fail,
@@ -52,6 +52,15 @@ class RouteRegistrar(Protocol):
     def __call__(self, *, project_id: uuid.UUID, environment_id: uuid.UUID, hostname: str, backend_host: str, backend_port: int) -> None: ...
 
 
+class RouteHostnameLookup(Protocol):
+    def __call__(self, *, project_id: uuid.UUID, environment_id: uuid.UUID) -> str | None: ...
+
+
+def _no_stored_route(*, project_id: uuid.UUID, environment_id: uuid.UUID) -> str | None:
+    _ = (project_id, environment_id)
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class DockerProvisioner:
     docker_bin: str
@@ -75,6 +84,7 @@ class DockerProvisioner:
     port_allocator: PortAllocator = find_available_port
     health_checker: HealthChecker = wait_for_tcp_health
     route_registrar: RouteRegistrar | None = upsert_environment_route_sync
+    route_hostname_lookup: RouteHostnameLookup = _no_stored_route
 
     @classmethod
     def from_settings(
@@ -95,6 +105,7 @@ class DockerProvisioner:
             route_base_domain=settings.docker_route_base_domain,
             port_allocator=port_allocator or find_available_port, health_checker=health_checker or wait_for_tcp_health,
             route_registrar=route_registrar,
+            route_hostname_lookup=lookup_enabled_route_hostname,
         )
 
     def _docker_env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -103,6 +114,18 @@ class DockerProvisioner:
     def _image_exists(self, docker_bin: str, docker_env: dict[str, str], tag: str) -> bool:
         inspected = self.runner.run([docker_bin, "image", "inspect", tag], env=docker_env, timeout=15)
         return inspected.returncode == 0
+
+    def _route_hostname(
+        self, project_slug: str, environment_slug: str, project_id: uuid.UUID, environment_id: uuid.UUID,
+    ) -> str | None:
+        """Use the hostname already serving this environment, otherwise the current base domain."""
+        if not self.route_base_domain or self.route_registrar is None:
+            return None
+        desired = route_hostname_for(
+            project_slug, environment_slug, str(project_id), str(environment_id), self.route_base_domain,
+        )
+        existing = self.route_hostname_lookup(project_id=project_id, environment_id=environment_id)
+        return existing or desired
 
     def provision(
         self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",
@@ -127,7 +150,7 @@ class DockerProvisioner:
         docker_bin, git_bin = validate_binary(self.docker_bin, "docker_bin"), validate_binary(self.git_bin, "git_bin")
         runtime, network, docker_env = validate_runtime(self.docker_runtime), validate_network(self.docker_network), self._docker_env()
         emit = on_log or (lambda _m: None)
-        route_hostname = route_hostname_for(project_slug, environment_slug, str(p_uuid), str(e_uuid), self.route_base_domain) if self.route_base_domain and self.route_registrar is not None else None
+        route_hostname = self._route_hostname(project_slug, environment_slug, p_uuid, e_uuid)
         addon_net, addon_env = provision_environment_addons(
             runner=self.runner, docker_bin=docker_bin, docker_env=docker_env,
             project_id=p_uuid, environment_id=e_uuid, addons=parse_addons_json(addons_json), on_log=on_log,

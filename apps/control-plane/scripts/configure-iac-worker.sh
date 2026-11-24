@@ -20,6 +20,7 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+ROOT="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="/etc/aerodeck/control-plane.env"
 IMAGE_FILE="/etc/aerodeck/control-plane-image"
 
@@ -175,13 +176,9 @@ if [[ -z "${AERODECK_DOCKER_BIND_HOST:-}" || "${AERODECK_DOCKER_BIND_HOST}" == 1
   AERODECK_DOCKER_BIND_HOST="${PRIVATE_VPC_IP:-127.0.0.1}"
 fi
 AERODECK_DOCKER_CONTAINER_PORT="${AERODECK_DOCKER_CONTAINER_PORT:-8000}"
-# New apps publish on the product zone. Move only the previous dev default.
-if [[ -z "${AERODECK_DOCKER_ROUTE_BASE_DOMAIN:-}" || "${AERODECK_DOCKER_ROUTE_BASE_DOMAIN}" == "dev.app.aero-deck.app" ]]; then
-  AERODECK_DOCKER_ROUTE_BASE_DOMAIN="dev.aerodeckcloud.com"
-fi
-if [[ -z "${AERODECK_DNS_RECORD_TARGET:-}" || "${AERODECK_DNS_RECORD_TARGET}" == "edge.aero-deck.app" ]]; then
-  AERODECK_DNS_RECORD_TARGET="edge.aerodeckcloud.com"
-fi
+# shellcheck source=dev-domain-defaults.sh
+source "${ROOT}/dev-domain-defaults.sh"
+apply_dev_domain_defaults
 AERODECK_DOCKER_HEALTH_TIMEOUT_SECONDS="${AERODECK_DOCKER_HEALTH_TIMEOUT_SECONDS:-30}"
 AERODECK_IAC_WORKER="${ENABLE}"
 AERODECK_IAC_APPLY="${APPLY}"

@@ -26,6 +26,16 @@ class RouteRepository:
         result = await self._session.execute(select(Route).where(Route.hostname == hostname))
         return result.scalar_one_or_none()
 
+    async def list_for_environment(
+        self, project_id: uuid.UUID, environment_id: uuid.UUID
+    ) -> Sequence[Route]:
+        rows = await self._session.scalars(
+            select(Route)
+            .where(Route.project_id == project_id, Route.environment_id == environment_id)
+            .order_by(Route.created_at, Route.hostname)
+        )
+        return rows.all()
+
     async def list(self, project_id: uuid.UUID, *, limit: int, offset: int) -> tuple[Sequence[Route], int]:
         base = select(Route).where(Route.project_id == project_id)
         total = await self._session.scalar(select(func.count()).select_from(base.subquery()))

@@ -21,7 +21,9 @@ from app.services.container_logs import (
     fetch_container_logs_sync,
 )
 from app.services.docker_policy import CommandResult, LogSink
-from app.services.docker_routes import _ensure_dns_and_tls
+from app.repositories.routes import RouteRepository
+from app.services.dns_records import MemoryDnsRecords
+from app.services.docker_routes import _ensure_dns_and_tls, upsert_environment_route
 
 
 class FakeLogsRunner:
@@ -168,10 +170,12 @@ async def test_ensure_dns_skips_publish_when_record_already_published(
 
 
 @pytest.mark.asyncio
-async def test_a_new_edge_target_does_not_rename_an_old_hostname(
+async def test_redeploy_keeps_the_old_hostname_and_refreshes_its_backend(
     app: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _ = app
+    old = "portal-dev.dev.app.aero-deck.app"
+    new = "portal-dev.dev.aerodeckcloud.com"
     async with SessionLocal() as session:
         project = Project(slug="portal", name="Portal")
         session.add(project)
@@ -182,7 +186,7 @@ async def test_a_new_edge_target_does_not_rename_an_old_hostname(
         route = Route(
             project_id=project.id,
             environment_id=env.id,
-            hostname="portal-dev.dev.app.aero-deck.app",
+            hostname=old,
             path_prefix="/",
             backend_host="10.41.0.2",
             backend_port=10000,
@@ -195,18 +199,36 @@ async def test_a_new_edge_target_does_not_rename_an_old_hostname(
         session.add(cert)
         await session.flush()
         (tmp_path / f"{cert.id}.key").write_text("dummy-key", encoding="utf-8")
-        settings = Settings(
-            auth_signing_key="a" * 32,
-            dns_record_type="CNAME",
-            dns_record_target="edge.aerodeckcloud.com",
-            certificate_key_dir=str(tmp_path),
-        )
-        monkeypatch.setattr("app.services.docker_routes.get_settings", lambda: settings)
-        monkeypatch.setattr("app.services.docker_routes.get_dns_record_publisher", lambda _s: MagicMock())
+        project_id, environment_id = project.id, env.id
+        await session.commit()
 
-        await _ensure_dns_and_tls(session, route, cert)
+    settings = Settings(
+        auth_signing_key="a" * 32,
+        dns_record_type="CNAME",
+        dns_record_target="edge.aerodeckcloud.com",
+        certificate_key_dir=str(tmp_path),
+    )
+    publisher = MemoryDnsRecords()
+    monkeypatch.setattr("app.services.docker_routes.get_settings", lambda: settings)
+    monkeypatch.setattr("app.services.docker_routes.get_dns_record_publisher", lambda _s: publisher)
 
-        assert route.hostname == "portal-dev.dev.app.aero-deck.app"
+    saved = await upsert_environment_route(
+        project_id=project_id,
+        environment_id=environment_id,
+        hostname=new,
+        backend_host="10.41.0.2",
+        backend_port=10555,
+    )
+
+    assert saved.hostname == old
+    assert saved.backend_port == 10555
+    async with SessionLocal() as session:
+        rows = list(await RouteRepository(session).list_for_environment(project_id, environment_id))
+    assert [row.hostname for row in rows] == [old]
+    assert rows[0].backend_port == 10555
+    assert rows[0].enabled is True
+    assert set(publisher.published) == {old}
+    assert publisher.published[old].data == "edge.aerodeckcloud.com"
 
 
 @pytest.mark.asyncio
