@@ -35,6 +35,55 @@ def test_an_advisory_detail_keeps_the_summary_and_drops_the_rest() -> None:
     assert "example.invalid" not in finding.model_dump_json()
 
 
+def test_a_cvss_vector_outranks_database_specific_severity() -> None:
+    finding = finding_from_advisory(
+        "lodash",
+        {
+            "id": _ADVISORY_ID,
+            "summary": "Prototype pollution in lodash",
+            "severity": [
+                {
+                    "type": "CVSS_V3",
+                    "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                }
+            ],
+            "database_specific": {"severity": "LOW"},
+        },
+    )
+    assert finding.severity == "critical"
+
+
+def test_database_specific_severity_is_used_when_the_cvss_score_cannot_be_read() -> None:
+    finding = finding_from_advisory(
+        "lodash",
+        {
+            "id": _ADVISORY_ID,
+            "summary": "Prototype pollution in lodash",
+            "severity": [{"type": "CVSS_V4", "score": "CVSS:4.0/AV:N"}],
+            "database_specific": {"severity": "HIGH"},
+        },
+    )
+    assert finding.severity == "high"
+
+
+def test_a_cvss_v2_score_of_ten_stays_high() -> None:
+    finding = finding_from_advisory(
+        "lodash",
+        {
+            "id": _ADVISORY_ID,
+            "summary": "A public advisory.",
+            "severity": [{"type": "CVSS_V2", "score": "AV:N/AC:L/Au:N/C:C/I:C/A:C"}],
+        },
+    )
+    assert finding.severity == "high"
+
+
+def test_every_batch_id_is_kept_until_severity_is_known() -> None:
+    ids = [f"OSV-{index}" for index in range(121)]
+    body = {"results": [{"vulns": [{"id": advisory_id, "modified": "2021-01-01T00:00:00Z"} for advisory_id in ids]}]}
+    assert [advisory_id for _, advisory_id in advisory_ids_from_batch(body, _PACKAGES)] == ids
+
+
 def test_a_malformed_advisory_response_is_not_a_clear_scan() -> None:
     with pytest.raises(ValueError):
         advisory_ids_from_batch({"results": []}, _PACKAGES)
@@ -128,4 +177,44 @@ async def test_a_later_critical_advisory_is_kept_ahead_of_earlier_lows() -> None
     assert len(findings) == 30
     assert findings[0].advisory_id == critical_id
     assert findings[0].severity == "critical"
+    assert low_ids[-1] not in {item.advisory_id for item in findings}
+
+
+async def test_a_cvss_critical_after_many_lows_is_kept() -> None:
+    low_ids = [f"LOW-{index}" for index in range(120)]
+    critical_id = "CRIT-CVSS"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/querybatch":
+            vulns = [
+                {"id": advisory_id, "modified": "2021-01-01T00:00:00Z"} for advisory_id in [*low_ids, critical_id]
+            ]
+            return httpx.Response(200, json={"results": [{"vulns": vulns}]})
+        if request.url.path.startswith("/v1/vulns/"):
+            advisory_id = request.url.path.rsplit("/", 1)[-1]
+            if advisory_id == critical_id:
+                body = {
+                    "id": advisory_id,
+                    "summary": "A public advisory.",
+                    "severity": [
+                        {
+                            "type": "CVSS_V3",
+                            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                        }
+                    ],
+                }
+            else:
+                body = {
+                    "id": advisory_id,
+                    "summary": "A public advisory.",
+                    "severity": [{"type": "CVSS_V3", "score": "3.1"}],
+                }
+            return httpx.Response(200, json=body)
+        return httpx.Response(404)
+
+    findings = await OsvAdvisorySource(transport=httpx.MockTransport(handler)).query(_PACKAGES)
+    assert len(findings) == 30
+    assert findings[0].advisory_id == critical_id
+    assert findings[0].severity == "critical"
+    assert all(item.severity == "low" for item in findings[1:])
     assert low_ids[-1] not in {item.advisory_id for item in findings}

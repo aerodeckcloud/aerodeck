@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from typing import Protocol
 from urllib.parse import quote
 
@@ -14,9 +15,17 @@ from app.services.manifest_packages import PackageQuery
 _SEVERITY = {"CRITICAL": "critical", "HIGH": "high", "MODERATE": "medium", "MEDIUM": "medium", "LOW": "low"}
 _RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
 _MAX_STORED_FINDINGS = 30
-# Severity is only on the detail record, so the stored page is chosen after those fetches.
-_MAX_DETAIL_IDS = 120
+# Every id in the batch is fetched. Severity is on the detail, so the page is chosen after that.
 _DETAIL_CONCURRENCY = 5
+_V3_AV = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2}
+_V3_AC = {"L": 0.77, "H": 0.44}
+_V3_UI = {"N": 0.85, "R": 0.62}
+_V3_CIA = {"N": 0.0, "L": 0.22, "H": 0.56}
+_V3_PR = {"U": {"N": 0.85, "L": 0.62, "H": 0.27}, "C": {"N": 0.85, "L": 0.68, "H": 0.5}}
+_V2_AV = {"L": 0.395, "A": 0.646, "N": 1.0}
+_V2_AC = {"H": 0.35, "M": 0.61, "L": 0.71}
+_V2_AU = {"M": 0.45, "S": 0.56, "N": 0.704}
+_V2_CIA = {"N": 0.0, "P": 0.275, "C": 0.66}
 
 
 class AdvisorySource(Protocol):
@@ -98,8 +107,6 @@ def advisory_ids_from_batch(body: object, packages: list[PackageQuery]) -> list[
                 continue
             seen.add(key)
             found.append((package.name[:200], advisory_id.strip()))
-            if len(found) >= _MAX_DETAIL_IDS:
-                return found
     return found
 
 
@@ -123,9 +130,150 @@ def finding_from_advisory(package_name: str, vuln: object) -> SecurityFinding:
 
 
 def _severity(vuln: dict[str, object]) -> str:
+    """CVSS on ``severity[]`` wins. ``database_specific.severity`` is the fallback."""
+    ranked = _severity_from_array(vuln.get("severity"))
+    if ranked is not None:
+        return ranked
     specific = vuln.get("database_specific")
     if isinstance(specific, dict):
-        raw = specific.get("severity")
-        if isinstance(raw, str) and raw.upper() in _SEVERITY:
-            return _SEVERITY[raw.upper()]
+        label = _named_severity(specific.get("severity"))
+        if label is not None:
+            return label
     return "unknown"
+
+
+def _severity_from_array(value: object) -> str | None:
+    if not isinstance(value, list):
+        return None
+    best: str | None = None
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        label = _label_from_score(item.get("type"), item.get("score"))
+        if label is None:
+            continue
+        if best is None or _RANK[label] < _RANK[best]:
+            best = label
+    return best
+
+
+def _label_from_score(kind: object, score: object) -> str | None:
+    if not isinstance(score, str) or not score.strip():
+        return None
+    text = score.strip()
+    named = _named_severity(text)
+    if named is not None and not text.upper().startswith("CVSS:"):
+        return named
+    numeric = _numeric_score(text)
+    if numeric is not None:
+        return _band(numeric, critical=_cvss_has_critical(kind, text))
+    base = _cvss_base(kind, text)
+    if base is None:
+        return None
+    return _band(base, critical=_cvss_has_critical(kind, text))
+
+
+def _named_severity(value: object) -> str | None:
+    if isinstance(value, str) and value.strip().upper() in _SEVERITY:
+        return _SEVERITY[value.strip().upper()]
+    return None
+
+
+def _numeric_score(text: str) -> float | None:
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    if 0 < value <= 10:
+        return value
+    return None
+
+
+def _cvss_has_critical(kind: object, text: str) -> bool:
+    if isinstance(kind, str) and kind.upper() == "CVSS_V2":
+        return False
+    return not text.upper().startswith("CVSS:2")
+
+
+def _cvss_base(kind: object, text: str) -> float | None:
+    metrics = _metrics(text)
+    family = text.upper()
+    version = kind.upper() if isinstance(kind, str) else ""
+    if version == "CVSS_V2" or family.startswith("CVSS:2"):
+        return _v2_base(metrics)
+    if version == "CVSS_V4" or family.startswith("CVSS:4"):
+        return None
+    if version == "CVSS_V3" or family.startswith("CVSS:3") or "AV" in metrics:
+        return _v3_base(metrics)
+    return None
+
+
+def _metrics(score: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for part in score.split("/"):
+        key, separator, raw = part.partition(":")
+        if separator and not key.upper().startswith("CVSS"):
+            found[key.upper()] = raw.upper()
+    return found
+
+
+def _v3_base(metrics: dict[str, str]) -> float | None:
+    try:
+        scope = metrics["S"]
+        impact = 1 - (
+            (1 - _V3_CIA[metrics["C"]]) * (1 - _V3_CIA[metrics["I"]]) * (1 - _V3_CIA[metrics["A"]])
+        )
+        exploitability = (
+            8.22 * _V3_AV[metrics["AV"]] * _V3_AC[metrics["AC"]] * _V3_PR[scope][metrics["PR"]] * _V3_UI[metrics["UI"]]
+        )
+    except KeyError:
+        return None
+    if scope == "U":
+        impact_sub = 6.42 * impact
+    elif scope == "C":
+        impact_sub = 7.52 * (impact - 0.029) - 3.25 * (impact - 0.02) ** 15
+    else:
+        return None
+    if impact_sub <= 0:
+        return 0.0
+    raw = impact_sub + exploitability
+    if scope == "C":
+        raw *= 1.08
+    return _roundup(min(raw, 10))
+
+
+def _v2_base(metrics: dict[str, str]) -> float | None:
+    try:
+        impact = 10.41 * (
+            1
+            - (1 - _V2_CIA[metrics["C"]]) * (1 - _V2_CIA[metrics["I"]]) * (1 - _V2_CIA[metrics["A"]])
+        )
+        exploitability = 20 * _V2_AV[metrics["AV"]] * _V2_AC[metrics["AC"]] * _V2_AU[metrics["AU"]]
+    except KeyError:
+        return None
+    if impact <= 0:
+        return 0.0
+    return _round1(((0.6 * impact) + (0.4 * exploitability) - 1.5) * 1.176)
+
+
+def _band(score: float, *, critical: bool) -> str | None:
+    if score >= 9.0 and critical:
+        return "critical"
+    if score >= 7.0:
+        return "high"
+    if score >= 4.0:
+        return "medium"
+    if score > 0:
+        return "low"
+    return None
+
+
+def _roundup(value: float) -> float:
+    scaled = int(value * 100000)
+    if scaled % 10000 == 0:
+        return scaled / 100000
+    return (scaled // 10000 + 1) / 10
+
+
+def _round1(value: float) -> float:
+    return math.floor(value * 10 + 0.5) / 10
