@@ -36,6 +36,10 @@ _PLAN_TOO_LARGE = "Draft plan is too large."
 _MAX_PLAN_CHARS = 64_000
 # Covers the batch query and the detail fan-out. A stall becomes an incomplete scan.
 _ADVISORY_DEADLINE_SECONDS = 30
+# Launch reuses this scan. A later visit runs the scan again instead of cloning inside Deploy.
+_SCAN_TTL_SECONDS = 15 * 60
+_SCAN_MISSING = "Run the dependency scan before deploying."
+_SCAN_STALE = "The dependency scan is out of date. Run it again before deploying."
 
 
 def mask_plan(plan: DeploymentDraftPlan) -> DeploymentDraftPlan:
@@ -85,6 +89,19 @@ def _load_security(deployment: Deployment) -> DraftSecurityRecord | None:
         return DraftSecurityRecord.model_validate_json(deployment.draft_security)
     except ValidationError:
         return None
+
+
+def _launch_scan(deployment: Deployment) -> DraftSecurityRecord:
+    """The scan Deploy is allowed to trust. Clone and OSV stay on the scan route."""
+    record = _load_security(deployment)
+    if record is None or record.scanned_at is None:
+        raise UnprocessableError(_SCAN_MISSING)
+    scanned_at = record.scanned_at
+    if scanned_at.tzinfo is None:
+        scanned_at = scanned_at.replace(tzinfo=UTC)
+    if (datetime.now(UTC) - scanned_at).total_seconds() > _SCAN_TTL_SECONDS:
+        raise UnprocessableError(_SCAN_STALE)
+    return record
 
 
 def _keep_acknowledgement(
@@ -223,6 +240,7 @@ class DeploymentDraftService:
         previous = _load_security(stored)
         await self._deployments.commit()
         record = _keep_acknowledgement(previous, await self._scan_record(repo_url))
+        record = record.model_copy(update={"scanned_at": datetime.now(UTC)})
         stored = await self._deployments.get(deployment_id)
         self.require_owner(stored, actor_user_id)
         stored.draft_security = record.model_dump_json()
@@ -294,7 +312,7 @@ class DeploymentDraftService:
         merged = merge_plan(self.open(stored.draft_plan), body.plan)
         if merged.step != "launch":
             raise UnprocessableError("Confirm the launch step before deploying.")
-        stored, record = await self._rescan(deployment_id, actor_user_id)
+        record = _launch_scan(stored)
         if record.outcome == "findings" and record.acknowledgement != "findings":
             raise UnprocessableError("Acknowledge the dependency findings before deploying.")
         if record.outcome == "incomplete" and record.acknowledgement != "incomplete":

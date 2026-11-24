@@ -2533,6 +2533,26 @@ describe("launchControlPlaneDraft", () => {
     );
 
     clearControlPlaneTokenCache();
+    const stale: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse(
+        { detail: "The dependency scan is out of date. Run it again before deploying." },
+        422,
+      );
+    };
+    await assert.rejects(
+      () => launchControlPlaneDraft(config, draftId, plan, draftId, draftId, { fetch: stale }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.equal(cause.message, "The dependency scan is out of date. Run it again before deploying.");
+        return true;
+      },
+    );
+
+    clearControlPlaneTokenCache();
     const leaked: typeof fetch = async (input) => {
       const url = String(input);
       if (url.endsWith("/api/v1/auth/token")) {

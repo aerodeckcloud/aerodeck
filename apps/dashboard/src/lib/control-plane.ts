@@ -1752,6 +1752,8 @@ async function securityRequest(
 const LAUNCH_REJECTION_DETAILS = new Set([
   "Acknowledge the dependency findings before deploying.",
   "The dependency scan did not complete.",
+  "Run the dependency scan before deploying.",
+  "The dependency scan is out of date. Run it again before deploying.",
   "Confirm the launch step before deploying.",
 ]);
 

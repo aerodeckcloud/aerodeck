@@ -236,6 +236,8 @@ async def _launch_and_assert_queued(app: FastAPI) -> None:
         )
         assert created.status_code == 201, created.text
         draft_id = created.json()["deployment"]["id"]
+        scanned = await client.post(f"{DEPLOYMENTS}/{draft_id}/security/scan", headers=owner)
+        assert scanned.status_code == 200, scanned.text
         launched = await client.post(
             f"{DEPLOYMENTS}/{draft_id}/launch",
             json={
@@ -289,6 +291,8 @@ async def test_launch_broker_failure_leaves_the_draft(app: FastAPI) -> None:
             )
             assert created.status_code == 201, created.text
             draft_id = created.json()["deployment"]["id"]
+            scanned = await client.post(f"{DEPLOYMENTS}/{draft_id}/security/scan", headers=owner)
+            assert scanned.status_code == 200, scanned.text
             launched = await client.post(
                 f"{DEPLOYMENTS}/{draft_id}/launch",
                 json={
@@ -497,41 +501,92 @@ class _QuietAdvisories:
         return []
 
 
-async def test_launch_rescans_so_a_stored_clear_result_cannot_go_stale(
-    client: AsyncClient, app: FastAPI
+class _MustNotRead:
+    def read(self, repo_url: str) -> ManifestRead:
+        raise AssertionError("launch must not clone")
+
+
+class _MustNotQuery:
+    async def query(self, packages: list[PackageQuery]) -> list[SecurityFinding]:
+        raise AssertionError("launch must not query advisories")
+
+
+async def test_launch_reuses_a_fresh_scan_and_rejects_a_stale_one(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app.dependency_overrides[get_package_source] = lambda: _LodashManifest()
     app.dependency_overrides[get_advisory_source] = lambda: _QuietAdvisories()
+    app.dependency_overrides[get_job_dispatcher] = _eager_dispatcher
     try:
         token = await obtain_token(client)
         headers = {"Authorization": f"Bearer {token}"}
         owner = await _user(client, headers, "draft-security-stale@aerodeck.test")
+        project = await client.post(PROJECTS, json={"slug": "fresh", "name": "Fresh"}, headers=headers)
+        assert project.status_code == 201, project.text
+        environment = await client.post(
+            f"{PROJECTS}/{project.json()['id']}/environments",
+            json={"slug": "dev", "name": "Dev", "kind": "dev"},
+            headers=headers,
+        )
+        assert environment.status_code == 201, environment.text
         created = await client.post(
             f"{DEPLOYMENTS}/draft", json={"repo_url": REPO, "plan": _plan()}, headers=owner
         )
         assert created.status_code == 201, created.text
         draft_id = created.json()["deployment"]["id"]
-        unread = await client.get(f"{DEPLOYMENTS}/{draft_id}/security", headers=owner)
-        assert unread.status_code == 404, unread.text
-        assert unread.json()["detail"] == "Dependency scan has not been run."
-        scanned = await client.post(f"{DEPLOYMENTS}/{draft_id}/security/scan", headers=owner)
-        assert scanned.status_code == 200, scanned.text
-        assert scanned.json()["outcome"] == "clear"
-        app.dependency_overrides[get_advisory_source] = lambda: _OneFinding()
-        blocked = await client.post(
+        missing = await client.post(
             f"{DEPLOYMENTS}/{draft_id}/launch",
             json={
                 "plan": _plan(step="launch"),
-                "project_id": "11111111-1111-4111-8111-111111111111",
-                "environment_id": "22222222-2222-4222-8222-222222222222",
+                "project_id": project.json()["id"],
+                "environment_id": environment.json()["id"],
+            },
+            headers=owner,
+        )
+        assert missing.status_code == 422, missing.text
+        assert missing.json()["detail"] == "Run the dependency scan before deploying."
+        scanned = await client.post(f"{DEPLOYMENTS}/{draft_id}/security/scan", headers=owner)
+        assert scanned.status_code == 200, scanned.text
+        assert scanned.json()["outcome"] == "clear"
+        app.dependency_overrides[get_package_source] = lambda: _MustNotRead()
+        app.dependency_overrides[get_advisory_source] = lambda: _MustNotQuery()
+        launched = await client.post(
+            f"{DEPLOYMENTS}/{draft_id}/launch",
+            json={
+                "plan": _plan(step="launch", secret="", redacted=True),
+                "project_id": project.json()["id"],
+                "environment_id": environment.json()["id"],
+            },
+            headers=owner,
+        )
+        assert launched.status_code == 202, launched.text
+        monkeypatch.setattr("app.services.deployment_draft._SCAN_TTL_SECONDS", -1)
+        aged = await client.post(
+            f"{DEPLOYMENTS}/draft", json={"repo_url": REPO, "plan": _plan()}, headers=owner
+        )
+        assert aged.status_code == 201, aged.text
+        aged_id = aged.json()["deployment"]["id"]
+        app.dependency_overrides[get_package_source] = lambda: _LodashManifest()
+        app.dependency_overrides[get_advisory_source] = lambda: _QuietAdvisories()
+        aged_scan = await client.post(f"{DEPLOYMENTS}/{aged_id}/security/scan", headers=owner)
+        assert aged_scan.status_code == 200, aged_scan.text
+        app.dependency_overrides[get_package_source] = lambda: _MustNotRead()
+        app.dependency_overrides[get_advisory_source] = lambda: _MustNotQuery()
+        blocked = await client.post(
+            f"{DEPLOYMENTS}/{aged_id}/launch",
+            json={
+                "plan": _plan(step="launch"),
+                "project_id": project.json()["id"],
+                "environment_id": environment.json()["id"],
             },
             headers=owner,
         )
         assert blocked.status_code == 422, blocked.text
-        assert blocked.json()["detail"] == "Acknowledge the dependency findings before deploying."
+        assert blocked.json()["detail"] == "The dependency scan is out of date. Run it again before deploying."
     finally:
         app.dependency_overrides[get_package_source] = lambda: _NoManifest()
         app.dependency_overrides[get_advisory_source] = lambda: _QuietAdvisories()
+        app.dependency_overrides.pop(get_job_dispatcher, None)
 
 
 async def test_a_repository_with_no_manifest_can_launch_without_acknowledgement(

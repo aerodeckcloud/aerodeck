@@ -29,6 +29,7 @@ class DraftSecurityRecord(BaseModel):
     acknowledgement: SecurityAcknowledgement | None = None
     acknowledged_at: datetime | None = None
     acknowledged_by: uuid.UUID | None = None
+    scanned_at: datetime | None = None
 
 
 class DraftSecurityRead(BaseModel):

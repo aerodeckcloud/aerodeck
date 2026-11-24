@@ -30,6 +30,11 @@ describe("deploy draft routes", () => {
     assert.equal(securityNeedsAcknowledgement("incomplete"), true);
     assert.equal(launchReturnsToSecurity("Acknowledge the dependency findings before deploying."), true);
     assert.equal(launchReturnsToSecurity("The dependency scan did not complete."), true);
+    assert.equal(launchReturnsToSecurity("Run the dependency scan before deploying."), true);
+    assert.equal(
+      launchReturnsToSecurity("The dependency scan is out of date. Run it again before deploying."),
+      true,
+    );
     assert.equal(launchReturnsToSecurity("The draft could not be launched."), false);
     const report = parseSecurityReport({
       outcome: "findings",

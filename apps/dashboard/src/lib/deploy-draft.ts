@@ -24,7 +24,9 @@ export function securityNeedsAcknowledgement(outcome: SecurityOutcome): boolean 
 export function launchReturnsToSecurity(detail: string): boolean {
   return (
     detail === "Acknowledge the dependency findings before deploying." ||
-    detail === "The dependency scan did not complete."
+    detail === "The dependency scan did not complete." ||
+    detail === "Run the dependency scan before deploying." ||
+    detail === "The dependency scan is out of date. Run it again before deploying."
   );
 }
 
