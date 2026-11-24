@@ -422,7 +422,9 @@ python3 /root/aerodeck/publish-console-route.py
 ```
 
 Open `https://dev.aerodeckcloud.com/login` and `https://dev.app.aero-deck.app/login`.
-Both should show the sign-in page. `dev` uses a trusted certificate only when
+Both should show the sign-in page. Continue with Google on the new host needs
+`https://dev.aerodeckcloud.com` and its callback added beside the old host in
+[google-sign-in.md](google-sign-in.md). `dev` uses a trusted certificate only when
 `AERODECK_ACME_DIRECTORY_URL` is the Let's Encrypt production directory.
 `AERODECK_ENV=staging` and `AERODECK_ENV=production` always use that directory
 ([edge-routing.md](edge-routing.md)). The session cookie has no `Domain`

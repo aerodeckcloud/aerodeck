@@ -89,12 +89,12 @@ record to the same Traefik public IPv4 as `edge.aero-deck.app`. Staging and
 prod leave `product_dns_zone` empty so they cannot replace that record.
 `aero-deck.app` records stay as they are.
 
-This step does not publish a console:
+The Terraform apply only creates the edge address. It does not publish the console:
 
-| Name | This story |
-| ---- | ---------- |
+| Name | Role |
+| ---- | ---- |
 | `edge.aerodeckcloud.com` | A record to the current edge |
-| `dev.aerodeckcloud.com` | No record. Not the console yet |
+| `dev.aerodeckcloud.com` | Dev console, published by `publish-console-route.py` ([dashboard-console.md](dashboard-console.md) §4). Not created by Terraform |
 | `aerodeckcloud.com` | No address record. Not the production console yet |
 
 Confirm before the dev apply:
@@ -118,8 +118,10 @@ nslookup dev.aerodeckcloud.com
 nslookup aerodeckcloud.com
 ```
 
-`edge.aerodeckcloud.com` matches `edge.aero-deck.app`. The other two names
-do not serve the console.
+`edge.aerodeckcloud.com` matches `edge.aero-deck.app`. The apex still has
+no address and does not serve the console. `dev.aerodeckcloud.com` serves
+the console after [dashboard-console.md](dashboard-console.md) §4 runs
+`publish-console-route.py`.
 
 Tenant records on `aero-deck.app` stay on that zone. The API publishes those tenant records when a route is created
 (`AERODECK_DNS_RECORDS_PROVIDER=digitalocean`,
@@ -203,7 +205,8 @@ VPC. Cloud-init runs pinned Traefik v3 (`--network host`) polling
 `http://<control private ipv4>:8000/api/v1/edge/traefik`. Terraform also
 creates the `edge.aero-deck.app` **A** record. The dev stack also creates
 `edge.aerodeckcloud.com` when `product_dns_zone` is set. It does not create
-`dev.aerodeckcloud.com` or an apex address.
+`dev.aerodeckcloud.com` or an apex address. The dev console name is published
+by `publish-console-route.py` ([dashboard-console.md](dashboard-console.md) §4).
 
 Apply from CI only ([iac-apply.md](iac-apply.md)). Because `traefik_provider_token`
 is marked sensitive in Terraform outputs, read it directly from `/etc/aerodeck/traefik.yml`
