@@ -4,7 +4,6 @@ import { ControlPlaneError, launchControlPlaneDraft, readControlPlaneConfig } fr
 import type { DeployDraftPlan } from "@/lib/deploy-draft";
 import { jsonError } from "@/lib/mock-http";
 import { requireSessionUser } from "@/lib/session";
-import { PROVISION_ENQUEUE_FAILED } from "@/lib/types";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   await connection();
@@ -40,13 +39,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return NextResponse.json(deployment, { status: 202 });
   } catch (cause) {
     if (cause instanceof ControlPlaneError && cause.status !== undefined && cause.status >= 500) {
-      return NextResponse.json(
-        {
-          detail: "Deployment was created but provision could not be queued.",
-          code: PROVISION_ENQUEUE_FAILED,
-          deployment_id: cause.deploymentId ?? id,
-        },
-        { status: cause.status === 503 ? 503 : 502 },
+      const detail = "Launch did not start. This draft is still open, so you can try again.";
+      console.error("event=console_draft_launch_failed detail=%s", cause.message);
+      return jsonError(
+        cause.status === 503 ? 503 : 502,
+        detail,
+        cause.status === 503 ? "queue_unavailable" : "control_plane_unavailable",
       );
     }
     if (cause instanceof ControlPlaneError && cause.status === 404) {

@@ -351,12 +351,17 @@ export function NewDeploymentForm({
             : await createDeployment(repoUrl, false);
       router.push(`/deployments/${deployment.id}`);
     } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Deploy failed.";
+      if (isControlPlane && draftId) {
+        setError(message);
+        return;
+      }
       if (cause instanceof ProvisionEnqueueFailed) {
         setEnqueueBlocked(true);
         setError(`${cause.message} Do not Deploy again; that row may already be marked failed.`);
         return;
       }
-      setError(cause instanceof Error ? cause.message : "Deploy failed.");
+      setError(message);
     } finally {
       setSubmitting(false);
     }

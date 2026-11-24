@@ -104,6 +104,22 @@ export class ControlPlaneError extends Error {
 
 const defaultNow = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
+function controlPlaneHeaders(
+  accessToken: string,
+  actorUserId?: string,
+  extras?: Record<string, string>,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${accessToken}`,
+    ...extras,
+  };
+  if (actorUserId && isControlPlaneUuid(actorUserId)) {
+    headers["x-aerodeck-user-id"] = actorUserId;
+  }
+  return headers;
+}
+
 export function clearControlPlaneTokenCache(): void {
   tokens.clear();
 }
@@ -554,13 +570,9 @@ export async function openControlPlaneDeploymentLogs(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
-  const headers: Record<string, string> = {
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId, {
     accept: "text/event-stream",
-    authorization: `Bearer ${accessToken}`,
-  };
-  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
-    headers["x-aerodeck-user-id"] = options.actorUserId;
-  }
+  });
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/logs`,
     {
@@ -600,13 +612,7 @@ export async function getControlPlaneDeploymentRuntimeLogs(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${accessToken}`,
-  };
-  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
-    headers["x-aerodeck-user-id"] = options.actorUserId;
-  }
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId);
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/runtime-logs?tail=${safeTail}`,
     {
@@ -906,13 +912,7 @@ export async function listControlPlaneProjectDeployments(
   if (environmentId) {
     query.set("environment_id", environmentId);
   }
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${accessToken}`,
-  };
-  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
-    headers["x-aerodeck-user-id"] = options.actorUserId;
-  }
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId);
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/deployments?${query.toString()}`,
     {
@@ -942,13 +942,7 @@ async function triggerControlPlaneDeploymentAction(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${accessToken}`,
-  };
-  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
-    headers["x-aerodeck-user-id"] = options.actorUserId;
-  }
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId);
   if (body) {
     headers["content-type"] = "application/json";
   }
@@ -1377,13 +1371,7 @@ async function postDeploymentStatus(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${accessToken}`,
-  };
-  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
-    headers["x-aerodeck-user-id"] = options.actorUserId;
-  }
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId);
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/${outcome}`,
     {
@@ -1549,13 +1537,7 @@ export async function listControlPlaneDeployments(
   let offset = 0;
   let total = 0;
   for (let page = 0; page < PAGE_CAP; page += 1) {
-    const headers: Record<string, string> = {
-      accept: "application/json",
-      authorization: `Bearer ${accessToken}`,
-    };
-    if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
-      headers["x-aerodeck-user-id"] = options.actorUserId;
-    }
+    const headers = controlPlaneHeaders(accessToken, options.actorUserId);
     const response = await fetchImpl(
       `${config.baseUrl}/api/v1/deployments?limit=${PAGE_LIMIT}&offset=${offset}`,
       {
@@ -1663,16 +1645,11 @@ async function draftRequest(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${accessToken}`,
-  };
-  if (actorUserId && isControlPlaneUuid(actorUserId)) {
-    headers["x-aerodeck-user-id"] = actorUserId;
-  }
-  if (body !== undefined) {
-    headers["content-type"] = "application/json";
-  }
+  const headers = controlPlaneHeaders(
+    accessToken,
+    actorUserId,
+    body === undefined ? undefined : { "content-type": "application/json" },
+  );
   const response = await fetchImpl(`${config.baseUrl}${path}`, {
     method,
     headers,
@@ -1763,14 +1740,9 @@ export async function launchControlPlaneDraft(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${accessToken}`,
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId, {
     "content-type": "application/json",
-  };
-  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
-    headers["x-aerodeck-user-id"] = options.actorUserId;
-  }
+  });
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(draftId)}/launch`,
     {
@@ -2137,13 +2109,7 @@ async function controlPlaneRequest<T>(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${accessToken}`,
-  };
-  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
-    headers["x-aerodeck-user-id"] = options.actorUserId;
-  }
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId);
   let body: string | undefined;
   if (spec.body !== undefined) {
     headers["content-type"] = "application/json";
@@ -2512,13 +2478,7 @@ export async function getControlPlaneDeployment(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${accessToken}`,
-  };
-  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
-    headers["x-aerodeck-user-id"] = options.actorUserId;
-  }
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId);
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}`,
     {
