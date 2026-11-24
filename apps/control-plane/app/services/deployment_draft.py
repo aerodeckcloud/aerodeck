@@ -149,7 +149,9 @@ class DeploymentDraftService:
         environment = await self._environments.get(body.project_id, body.environment_id)
         stored.project_id = body.project_id
         stored.environment_id = body.environment_id
-        self.apply(stored, merged)
+        # Leave draft before the broker call. A refused enqueue marks the row
+        # failed, and that path rejects a row that is still a draft.
+        self.finish(stored)
         await self._approval.enqueue_or_defer(
             environment,
             actor_user_id,
@@ -159,7 +161,6 @@ class DeploymentDraftService:
             port=merged.blueprint.build.port,
             service=merged.blueprint.build.service or None,
         )
-        self.finish(stored)
         return stored
 
     def seal(self, plan: DeploymentDraftPlan) -> str:
@@ -189,7 +190,7 @@ class DeploymentDraftService:
         deployment.draft_plan = self.seal(plan)
 
     def finish(self, deployment: Deployment) -> None:
-        """Leave draft after the existing provision path accepts the row."""
+        """Leave draft before provision is queued."""
         if deployment.status is DeploymentStatus.draft:
             deployment.status = DeploymentStatus.running
         deployment.draft_step = None

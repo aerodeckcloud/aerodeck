@@ -436,11 +436,13 @@ async def _enqueue_copy(
 async def redeploy_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
     users: ConsoleUserServiceDep,
     environments: EnvironmentServiceDep,
     approval: DeployApprovalServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     source = await deployments.get(deployment_id)
     _require_linked(source)
     sha = normalize_git_sha(source.git_sha)
@@ -470,11 +472,13 @@ async def redeploy_deployment(
 async def deploy_latest_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
     users: ConsoleUserServiceDep,
     environments: EnvironmentServiceDep,
     approval: DeployApprovalServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     source = await deployments.get(deployment_id)
     return await _enqueue_copy(
         source,
@@ -559,11 +563,13 @@ async def reject_deployment(
 async def promote_deployment(
     deployment_id: uuid.UUID,
     body: DeploymentPromote,
+    drafts: DeploymentDraftServiceDep,
     promotions: PromotionServiceDep,
     users: ConsoleUserServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
     """The target's overlap setting applies: the new row may come back waiting."""
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     promoted = await promotions.promote(
         deployment_id,
         body.environment_id,
@@ -583,12 +589,14 @@ async def promote_deployment(
 async def rollback_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
     rollbacks: RollbackServiceDep,
     users: ConsoleUserServiceDep,
     actor_user_id: ActorUserIdDep,
     body: DeploymentRollback | None = None,
 ) -> DeploymentRead:
     """Restore the release variables when a snapshot exists, then retag the image (#273)."""
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     request = body or DeploymentRollback()
     stored, variables_restored = await rollbacks.rollback(
         deployment_id,

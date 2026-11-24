@@ -89,9 +89,15 @@ async def test_draft_is_private_and_does_not_queue(
     assert denied_logs.status_code == 404
     denied_runtime = await client.get(f"{DEPLOYMENTS}/{draft_id}/runtime-logs", headers=other)
     assert denied_runtime.status_code == 404
-    for action in ("succeeded", "failed", "cancel"):
+    for action in ("succeeded", "failed", "cancel", "redeploy", "deploy-latest", "rollback"):
         denied_action = await client.post(f"{DEPLOYMENTS}/{draft_id}/{action}", headers=other)
         assert denied_action.status_code == 404, action
+    denied_promote = await client.post(
+        f"{DEPLOYMENTS}/{draft_id}/promote",
+        json={"environment_id": str(uuid4())},
+        headers=other,
+    )
+    assert denied_promote.status_code == 404
     own_logs = await client.get(f"{DEPLOYMENTS}/{draft_id}/logs", headers=owner)
     assert own_logs.status_code == 200
 
@@ -223,6 +229,57 @@ async def _launch_and_assert_queued(app: FastAPI) -> None:
         assert stored.json()["status"] != "draft"
         assert stored.json()["draft_step"] is None
         assert stored.json()["provision_job_id"]
+
+
+class _BrokenDispatcher:
+    def dispatch(self, kind: object, *, project_id: str, environment_id: str, **meta: str) -> str:
+        raise ConnectionError("broker down")
+
+    def state(self, job_id: str) -> None:  # pragma: no cover
+        raise AssertionError("state should not be called")
+
+    def revoke(self, job_id: str) -> None:  # pragma: no cover
+        raise AssertionError("revoke should not be called")
+
+
+async def test_launch_broker_failure_marks_the_row_failed(app: FastAPI) -> None:
+    app.dependency_overrides[get_job_dispatcher] = lambda: _BrokenDispatcher()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            token = await obtain_token(client)
+            headers = {"Authorization": f"Bearer {token}"}
+            owner = await _user(client, headers, "draft-broker@aerodeck.test")
+            project = await client.post(
+                PROJECTS, json={"slug": "broker", "name": "Broker"}, headers=headers
+            )
+            assert project.status_code == 201, project.text
+            environment = await client.post(
+                f"{PROJECTS}/{project.json()['id']}/environments",
+                json={"slug": "dev", "name": "Dev", "kind": "dev"},
+                headers=headers,
+            )
+            assert environment.status_code == 201, environment.text
+            created = await client.post(
+                f"{DEPLOYMENTS}/draft", json={"repo_url": REPO, "plan": _plan()}, headers=owner
+            )
+            assert created.status_code == 201, created.text
+            draft_id = created.json()["deployment"]["id"]
+            with pytest.raises(ConnectionError, match="broker down"):
+                await client.post(
+                    f"{DEPLOYMENTS}/{draft_id}/launch",
+                    json={
+                        "plan": _plan(step="launch"),
+                        "project_id": project.json()["id"],
+                        "environment_id": environment.json()["id"],
+                    },
+                    headers=owner,
+                )
+            stored = await client.get(f"{DEPLOYMENTS}/{draft_id}", headers=owner)
+            assert stored.status_code == 200, stored.text
+            assert stored.json()["status"] == "failed"
+            assert stored.json()["draft_step"] is None
+    finally:
+        app.dependency_overrides.pop(get_job_dispatcher, None)
 
 
 async def test_draft_requires_a_known_user(client: AsyncClient, auth: dict[str, str]) -> None:
