@@ -284,9 +284,13 @@ async def get_deployment(
 async def succeed_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
     jobs: ReleaseJobServiceDep,
     retention: ImageRetentionServiceDep,
 ) -> DeploymentRead:
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     stored = await deployments.mark_succeeded(deployment_id)
     if jobs is not None:
         await jobs.release_waiting(stored)
@@ -307,8 +311,12 @@ async def succeed_deployment(
 async def fail_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
     jobs: ReleaseJobServiceDep,
 ) -> DeploymentRead:
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     stored = await deployments.mark_failed(deployment_id)
     if jobs is not None:
         await jobs.release_waiting(stored)
@@ -489,9 +497,13 @@ async def deploy_latest_deployment(
 async def cancel_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
     jobs: JobServiceDep,
     release: ReleaseJobServiceDep,
 ) -> DeploymentRead:
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     stored = await deployments.cancel(deployment_id)
     await jobs.revoke_quietly(stored.provision_job_id)
     # Same rule as the outcome routes: without a queue the waiter stays queued.

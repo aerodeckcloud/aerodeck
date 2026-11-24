@@ -89,6 +89,9 @@ async def test_draft_is_private_and_does_not_queue(
     assert denied_logs.status_code == 404
     denied_runtime = await client.get(f"{DEPLOYMENTS}/{draft_id}/runtime-logs", headers=other)
     assert denied_runtime.status_code == 404
+    for action in ("succeeded", "failed", "cancel"):
+        denied_action = await client.post(f"{DEPLOYMENTS}/{draft_id}/{action}", headers=other)
+        assert denied_action.status_code == 404, action
     own_logs = await client.get(f"{DEPLOYMENTS}/{draft_id}/logs", headers=owner)
     assert own_logs.status_code == 200
 

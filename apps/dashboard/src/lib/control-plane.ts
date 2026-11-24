@@ -1369,7 +1369,7 @@ async function postDeploymentStatus(
   config: ControlPlaneConfig,
   deploymentId: string,
   outcome: "succeeded" | "failed",
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   if (!isControlPlaneUuid(deploymentId)) {
     throw new ControlPlaneError("control plane deployment id was not a uuid");
@@ -1377,14 +1377,18 @@ async function postDeploymentStatus(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${accessToken}`,
+  };
+  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
+    headers["x-aerodeck-user-id"] = options.actorUserId;
+  }
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/${outcome}`,
     {
       method: "POST",
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${accessToken}`,
-      },
+      headers,
       cache: "no-store",
     },
   );
@@ -1400,7 +1404,7 @@ async function postDeploymentStatus(
 export function succeedControlPlaneDeployment(
   config: ControlPlaneConfig,
   deploymentId: string,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   return postDeploymentStatus(config, deploymentId, "succeeded", options);
 }
@@ -1408,7 +1412,7 @@ export function succeedControlPlaneDeployment(
 export function failControlPlaneDeployment(
   config: ControlPlaneConfig,
   deploymentId: string,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   return postDeploymentStatus(config, deploymentId, "failed", options);
 }

@@ -38,7 +38,7 @@ export async function recordConsoleDeploymentOutcome(
   try {
     const mark =
       outcome === "succeeded" ? succeedControlPlaneDeployment : failControlPlaneDeployment;
-    const deployment = await mark(config, id);
+    const deployment = await mark(config, id, { actorUserId: user.id });
     return NextResponse.json(deployment);
   } catch (cause) {
     return jsonControlPlaneError(cause, event);
