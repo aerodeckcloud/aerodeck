@@ -210,8 +210,9 @@ def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> N
     assert built_berry is not None
     assert built_berry.contents.index("yarn install --immutable") < built_berry.contents.index("RUN yarn run build")
     assert "NODE_ENV=production" not in built_berry.contents.split("RUN yarn run build", 1)[0]
+    assert "workspaces focus" not in built_berry.contents
     assert built_berry.contents.index("RUN yarn run build") < built_berry.contents.index(
-        "yarn workspaces focus --all --production"
+        "rm -rf node_modules && NODE_ENV=production yarn install --immutable"
     )
 
     workspace_dir = tmp_path / "workspaces"

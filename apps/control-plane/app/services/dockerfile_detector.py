@@ -118,9 +118,8 @@ def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
             prune = "yarn install --frozen-lockfile --production"
         else:
             lines.append(f"RUN corepack enable && corepack prepare yarn@{_YARN_BERRY_VERSION} --activate")
-            # focus --production requires a workspaces field. A single package uses an immutable install.
+            # focus requires a workspaces field. A single package uses an immutable install.
             # Workspace manifests must be present before that install, so the tree is copied once here.
-            # After a build, focus --all --production is Yarn's replacement for install --production.
             if _yarn_workspaces(package):
                 lines.append("COPY . .")
                 copy_source_later = False
@@ -129,10 +128,11 @@ def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
                     if build
                     else "yarn plugin import workspace-tools && yarn workspaces focus --production"
                 )
+                prune = "yarn plugin import workspace-tools && yarn workspaces focus --all --production"
             else:
                 lines.append("COPY package.json yarn.lock ./")
                 install = "yarn install --immutable" if build else "NODE_ENV=production yarn install --immutable"
-            prune = "yarn plugin import workspace-tools && yarn workspaces focus --all --production"
+                prune = "rm -rf node_modules && NODE_ENV=production yarn install --immutable"
         if classic:
             lines.append("COPY package.json yarn.lock ./")
         lines.append(f"RUN {install}")
