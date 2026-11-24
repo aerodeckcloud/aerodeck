@@ -83,12 +83,19 @@ def main() -> None:
         raise SystemExit("the product record must be the edge name")
     if 'name   = "@"' in product_record:
         raise SystemExit("do not publish an apex address for the product zone")
+    _must(product_record, "for_each = toset(compact([var.product_dns_zone]))", "modules/edge/main.tf")
+
+    distinct_zone = 'var.product_dns_zone == "" || var.product_dns_zone != var.dns_zone'
+    _must(VARS, distinct_zone, "variables.tf")
+    _must(CHILD, distinct_zone, "modules/edge")
 
     dev_tfvars = (ROOT / "envs" / "dev.tfvars").read_text(encoding="utf-8")
     staging_tfvars = (ROOT / "envs" / "staging.tfvars").read_text(encoding="utf-8")
     prod_tfvars = (ROOT / "envs" / "prod.tfvars").read_text(encoding="utf-8")
-    _must(dev_tfvars, 'product_dns_zone       = "aerodeckcloud.com"', "envs/dev.tfvars")
-    if 'product_dns_zone       = "aerodeckcloud.com"' in staging_tfvars or 'product_dns_zone       = "aerodeckcloud.com"' in prod_tfvars:
+    zone_assignment = re.compile(r'product_dns_zone\s*=\s*"aerodeckcloud.com"')
+    if zone_assignment.search(dev_tfvars) is None:
+        raise SystemExit("envs/dev.tfvars must set product_dns_zone to aerodeckcloud.com")
+    if zone_assignment.search(staging_tfvars) or zone_assignment.search(prod_tfvars):
         raise SystemExit("only dev may own edge.aerodeckcloud.com")
     print("edge module shape looks right")
 
