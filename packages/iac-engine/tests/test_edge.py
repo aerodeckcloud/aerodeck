@@ -79,14 +79,16 @@ def main() -> None:
         raise SystemExit("the product edge record must not use the aero-deck.app zone")
     if "digitalocean_domain" in MODULE:
         raise SystemExit("do not create aerodeckcloud.com; the zone already exists")
-    if "ip_address" in product_record:
+    if 'name   = "edge"' not in product_record:
+        raise SystemExit("the product record must be the edge name")
+    if 'name   = "@"' in product_record:
         raise SystemExit("do not publish an apex address for the product zone")
 
     dev_tfvars = (ROOT / "envs" / "dev.tfvars").read_text(encoding="utf-8")
     staging_tfvars = (ROOT / "envs" / "staging.tfvars").read_text(encoding="utf-8")
     prod_tfvars = (ROOT / "envs" / "prod.tfvars").read_text(encoding="utf-8")
-    _must(dev_tfvars, 'product_dns_zone = "aerodeckcloud.com"', "envs/dev.tfvars")
-    if 'product_dns_zone = "aerodeckcloud.com"' in staging_tfvars or 'product_dns_zone = "aerodeckcloud.com"' in prod_tfvars:
+    _must(dev_tfvars, 'product_dns_zone       = "aerodeckcloud.com"', "envs/dev.tfvars")
+    if 'product_dns_zone       = "aerodeckcloud.com"' in staging_tfvars or 'product_dns_zone       = "aerodeckcloud.com"' in prod_tfvars:
         raise SystemExit("only dev may own edge.aerodeckcloud.com")
     print("edge module shape looks right")
 

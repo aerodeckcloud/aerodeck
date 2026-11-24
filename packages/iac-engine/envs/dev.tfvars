@@ -7,5 +7,5 @@ control_plane_image    = "registry.digitalocean.com/aerodeck/control-plane:main"
 postgres_size          = "db-s-1vcpu-1gb"
 redis_size             = "db-s-1vcpu-1gb"
 managed_cache_enabled  = false
+product_dns_zone       = "aerodeckcloud.com"
 # Dev owns this record. Staging and prod leave product_dns_zone empty.
-product_dns_zone = "aerodeckcloud.com"
