@@ -432,8 +432,8 @@ def get_package_source(settings: SettingsDep) -> PackageSource:
     return GitPackageSource(settings.git_bin)
 
 
-def get_advisory_source() -> AdvisorySource:
-    return OsvAdvisorySource()
+def get_advisory_source(settings: SettingsDep) -> AdvisorySource:
+    return OsvAdvisorySource(settings.advisory_base_url)
 
 
 PackageSourceDep = Annotated[PackageSource, Depends(get_package_source)]

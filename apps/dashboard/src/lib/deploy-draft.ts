@@ -21,6 +21,13 @@ export function securityNeedsAcknowledgement(outcome: SecurityOutcome): boolean 
   return outcome === "findings" || outcome === "incomplete";
 }
 
+export function launchReturnsToSecurity(detail: string): boolean {
+  return (
+    detail === "Acknowledge the dependency findings before deploying." ||
+    detail === "The dependency scan did not complete."
+  );
+}
+
 export function parseSecurityReport(value: unknown): SecurityReport {
   if (!value || typeof value !== "object") {
     throw new Error("The dependency scan did not complete.");

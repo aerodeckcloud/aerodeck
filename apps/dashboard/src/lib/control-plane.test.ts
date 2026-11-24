@@ -18,7 +18,7 @@ import {
   createControlPlaneDeploymentAndProvision,
   launchControlPlaneDraft,
   readControlPlaneDraft,
-  readControlPlaneSecurity,
+  scanControlPlaneSecurity,
   provisionControlPlaneEnvironment,
   deployLatestControlPlaneDeployment,
   promoteControlPlaneDeployment,
@@ -2489,9 +2489,70 @@ describe("launchControlPlaneDraft", () => {
       },
     );
   });
+
+  it("keeps an acknowledgement rejection and drops any other 422 body", async () => {
+    clearControlPlaneTokenCache();
+    const draftId = "33333333-3333-4333-8333-333333333333";
+    const plan = {
+      step: "launch" as const,
+      blueprint: {
+        version: 1 as const,
+        name: "demo",
+        repo_url: "https://github.com/acme/demo",
+        source: "dockerfile" as const,
+        build: {
+          strategy: "dockerfile" as const,
+          dockerfile: "Dockerfile",
+          compose_file: null,
+          service: null,
+          port: 8000,
+        },
+        addons: [],
+        env: [],
+      },
+      detected_addons: [],
+      selected_addons: [],
+      variables: [],
+      extra_env: "",
+    };
+    const acknowledged: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse({ detail: "Acknowledge the dependency findings before deploying." }, 422);
+    };
+    await assert.rejects(
+      () => launchControlPlaneDraft(config, draftId, plan, draftId, draftId, { fetch: acknowledged }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.equal(cause.status, 422);
+        assert.equal(cause.message, "Acknowledge the dependency findings before deploying.");
+        return true;
+      },
+    );
+
+    clearControlPlaneTokenCache();
+    const leaked: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse({ detail: "internal query SELECT secret" }, 422);
+    };
+    await assert.rejects(
+      () => launchControlPlaneDraft(config, draftId, plan, draftId, draftId, { fetch: leaked }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.equal(cause.message, "The draft could not be launched.");
+        assert.equal(cause.message.includes("SELECT"), false);
+        return true;
+      },
+    );
+  });
 });
 
-describe("readControlPlaneSecurity", () => {
+describe("scanControlPlaneSecurity", () => {
   it("keeps the advisory summary and drops the rest of the response", async () => {
     clearControlPlaneTokenCache();
     const draftId = "33333333-3333-4333-8333-333333333333";
@@ -2519,7 +2580,7 @@ describe("readControlPlaneSecurity", () => {
       });
     };
 
-    const report = await readControlPlaneSecurity(config, draftId, { fetch: fetchImpl });
+    const report = await scanControlPlaneSecurity(config, draftId, { fetch: fetchImpl });
     assert.equal(report.outcome, "findings");
     assert.equal(report.findings.length, 1);
     assert.equal(report.findings[0]?.summary, "Prototype pollution in lodash");

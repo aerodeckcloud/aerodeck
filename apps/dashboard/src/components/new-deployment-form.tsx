@@ -33,7 +33,7 @@ import {
   launchDeployDraft,
   ProvisionEnqueueFailed,
   readDeployDraft,
-  readDeploySecurity,
+  scanDeploySecurity,
   acknowledgeDeploySecurity,
   updateDeployDraft,
   upsertEnvironmentVars,
@@ -42,6 +42,7 @@ import { knownDetectedAddons } from "@/lib/deploy-addons";
 import {
   countLaunchVariables,
   deployStepPath,
+  launchReturnsToSecurity,
   launchReview,
   securityNeedsAcknowledgement,
   stepAfterResources,
@@ -262,7 +263,7 @@ export function NewDeploymentForm({
       return;
     }
     let cancelled = false;
-    void readDeploySecurity(draftId)
+    void scanDeploySecurity(draftId)
       .then((report) => {
         if (cancelled) {
           return;
@@ -569,6 +570,10 @@ export function NewDeploymentForm({
       setTakingOff(false);
       const message = cause instanceof Error ? cause.message : "Deploy failed.";
       if (isControlPlane && draftId) {
+        if (launchReturnsToSecurity(message)) {
+          router.push(deployStepPath(draftId, "security"));
+          return;
+        }
         setError(message);
         return;
       }

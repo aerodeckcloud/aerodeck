@@ -35,7 +35,7 @@ class DraftSecurityRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     outcome: SecurityOutcome
-    findings: list[SecurityFinding]
+    findings: list[SecurityFinding] = Field(default_factory=list, max_length=30)
     acknowledgement: SecurityAcknowledgement | None = None
 
 

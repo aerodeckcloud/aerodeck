@@ -779,7 +779,7 @@ export async function readDeployDraft(draftId: string): Promise<DeployDraftRecor
   return readDraft(response);
 }
 
-export async function readDeploySecurity(draftId: string): Promise<SecurityReport> {
+export async function scanDeploySecurity(draftId: string): Promise<SecurityReport> {
   const response = await fetch(`/api/console/deployments/${encodeURIComponent(draftId)}/security/scan`, {
     method: "POST",
     credentials: "same-origin",

@@ -1749,7 +1749,26 @@ async function securityRequest(
   return parseSecurityReport(await response.json());
 }
 
-export async function readControlPlaneSecurity(
+const LAUNCH_REJECTION_DETAILS = new Set([
+  "Acknowledge the dependency findings before deploying.",
+  "The dependency scan did not complete.",
+  "Confirm the launch step before deploying.",
+]);
+
+async function launchFailureMessage(response: Response): Promise<string> {
+  const fallback = "The draft could not be launched.";
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    if (typeof body.detail === "string" && LAUNCH_REJECTION_DETAILS.has(body.detail)) {
+      return body.detail;
+    }
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+
+export async function scanControlPlaneSecurity(
   config: ControlPlaneConfig,
   draftId: string,
   options: ListOptions & { actorUserId?: string } = {},
@@ -1816,6 +1835,9 @@ export async function launchControlPlaneDraft(
       cache: "no-store",
     },
   );
+  if (response.status === 422) {
+    throw new ControlPlaneError(await launchFailureMessage(response), 422, draftId);
+  }
   if (!response.ok) {
     throw new ControlPlaneError(
       `control plane draft launch failed (${response.status})`,

@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -72,3 +73,35 @@ async def test_osv_query_loads_each_advisory_after_the_batch() -> None:
     assert findings[0].summary == "Prototype pollution in lodash"
     assert "payload" not in findings[0].model_dump_json()
     assert "example.invalid" not in findings[0].model_dump_json()
+
+
+async def test_advisory_detail_fetches_stay_bounded() -> None:
+    in_flight = 0
+    peak = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal in_flight, peak
+        if request.url.path == "/v1/querybatch":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"vulns": [{"id": f"OSV-2021-{index}", "modified": "2021-01-01T00:00:00Z"} for index in range(6)]}
+                    ]
+                },
+            )
+        if request.url.path.startswith("/v1/vulns/"):
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            in_flight -= 1
+            advisory_id = request.url.path.rsplit("/", 1)[-1]
+            return httpx.Response(
+                200,
+                json={"id": advisory_id, "summary": "A public advisory.", "database_specific": {"severity": "LOW"}},
+            )
+        return httpx.Response(404)
+
+    findings = await OsvAdvisorySource(transport=httpx.MockTransport(handler)).query(_PACKAGES)
+    assert len(findings) == 6
+    assert peak == 5

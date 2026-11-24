@@ -7,6 +7,7 @@ import {
   deploymentHref,
   launchReview,
   parseSecurityReport,
+  launchReturnsToSecurity,
   securityNeedsAcknowledgement,
   stepAfterResources,
   stepBeforeTarget,
@@ -27,6 +28,9 @@ describe("deploy draft routes", () => {
     assert.equal(securityNeedsAcknowledgement("no_manifest"), false);
     assert.equal(securityNeedsAcknowledgement("findings"), true);
     assert.equal(securityNeedsAcknowledgement("incomplete"), true);
+    assert.equal(launchReturnsToSecurity("Acknowledge the dependency findings before deploying."), true);
+    assert.equal(launchReturnsToSecurity("The dependency scan did not complete."), true);
+    assert.equal(launchReturnsToSecurity("The draft could not be launched."), false);
     const report = parseSecurityReport({
       outcome: "findings",
       acknowledgement: null,

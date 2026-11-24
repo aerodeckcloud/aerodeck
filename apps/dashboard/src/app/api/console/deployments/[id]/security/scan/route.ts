@@ -1,6 +1,6 @@
 import { connection, NextResponse } from "next/server";
 
-import { ControlPlaneError, readControlPlaneConfig, readControlPlaneSecurity } from "@/lib/control-plane";
+import { ControlPlaneError, readControlPlaneConfig, scanControlPlaneSecurity } from "@/lib/control-plane";
 import { jsonError } from "@/lib/mock-http";
 import { requireSessionUser } from "@/lib/session";
 
@@ -16,7 +16,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   }
   const { id } = await context.params;
   try {
-    const report = await readControlPlaneSecurity(config, id, { actorUserId: user.id });
+    const report = await scanControlPlaneSecurity(config, id, { actorUserId: user.id });
     return NextResponse.json(report);
   } catch (cause) {
     if (cause instanceof ControlPlaneError && cause.status === 404) {

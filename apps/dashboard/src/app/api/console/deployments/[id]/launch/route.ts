@@ -50,6 +50,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (cause instanceof ControlPlaneError && cause.status === 404) {
       return jsonError(404, "Draft was not found.", "not_found");
     }
+    if (cause instanceof ControlPlaneError && cause.status === 422) {
+      return jsonError(400, cause.message, "invalid_draft");
+    }
     const detail = cause instanceof ControlPlaneError ? cause.message : "request failed";
     console.error("event=console_draft_launch_failed detail=%s", detail);
     return jsonError(502, "Control plane request failed.", "control_plane_unavailable");

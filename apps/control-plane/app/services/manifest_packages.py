@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 _MAX_BYTES = 512 * 1024
+_MAX_PACKAGE_NAME = 200
 _EXACT_VERSION = re.compile(r"^v?(\d+\.\d+\.\d+)$", re.IGNORECASE)
 _EXACT_EQUAL = re.compile(r"^==\s*(\d+\.\d+\.\d+)$")
 _PY_NAME = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.-]*)")
@@ -95,6 +96,14 @@ def _pinned_version(raw: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _package_name(raw: str) -> str | None:
+    """Names longer than the stored finding are not queried. A prefix could match a different package."""
+    name = raw.strip()
+    if not name or len(name) > _MAX_PACKAGE_NAME:
+        return None
+    return name
+
+
 def _version_table(
     block: object, *, ecosystem: str, skip: frozenset[str] = frozenset()
 ) -> tuple[list[PackageQuery], int]:
@@ -108,15 +117,16 @@ def _version_table(
     for name, raw in block.items():
         if not isinstance(name, str) or name in skip:
             continue
+        accepted = _package_name(name)
         version_text = raw if isinstance(raw, str) else raw.get("version") if isinstance(raw, dict) else None
-        if not isinstance(version_text, str):
+        if accepted is None or not isinstance(version_text, str):
             missed += 1
             continue
         version = _pinned_version(version_text)
         if version is None:
             missed += 1
             continue
-        pinned.append(PackageQuery(ecosystem, name.strip(), version))
+        pinned.append(PackageQuery(ecosystem, accepted, version))
     return pinned, missed
 
 
@@ -178,11 +188,12 @@ def _requirements(text: str) -> tuple[list[PackageQuery], int]:
         if match is None:
             missed += 1
             continue
+        accepted = _package_name(match.group(1))
         version = _pinned_version(line[match.end() :])
-        if version is None:
+        if accepted is None or version is None:
             missed += 1
             continue
-        pinned.append(PackageQuery("PyPI", match.group(1), version))
+        pinned.append(PackageQuery("PyPI", accepted, version))
     return pinned, missed
 
 
@@ -230,10 +241,11 @@ def _pyproject(text: str) -> tuple[list[PackageQuery], int]:
 
 
 def _go_require(path: str, version: str) -> tuple[PackageQuery | None, int]:
+    accepted = _package_name(path)
     pinned = _pinned_version(version)
-    if pinned is None:
+    if accepted is None or pinned is None:
         return None, 1
-    return PackageQuery("Go", path, pinned), 0
+    return PackageQuery("Go", accepted, pinned), 0
 
 
 def _go_mod(text: str) -> tuple[list[PackageQuery], int]:

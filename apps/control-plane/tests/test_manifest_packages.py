@@ -99,6 +99,36 @@ def test_go_mod_directives_other_than_require_are_not_unpinned(tmp_path) -> None
     assert found == {("Go", "github.com/pkg/errors", "0.9.1")}
 
 
+def test_an_oversize_package_name_is_not_queried(tmp_path) -> None:
+    long_name = "a" * 201
+    (tmp_path / "package.json").write_text(
+        '{"dependencies": {"' + long_name + '": "1.2.3", "left-pad": "1.3.0"}}',
+        encoding="utf-8",
+    )
+    (tmp_path / "requirements.txt").write_text(f"{'b' * 201}==1.2.3\n", encoding="utf-8")
+    (tmp_path / "go.mod").write_text(
+        "\n".join(
+            (
+                "module example.com/demo",
+                "",
+                "go 1.22",
+                "",
+                f"require example.com/{'c' * 200} v1.2.3",
+                "require github.com/pkg/errors v0.9.1",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    read = read_manifests(tmp_path)
+    assert read.unpinned == 3
+    found = {(item.ecosystem, item.name, item.version) for item in read.packages}
+    assert found == {
+        ("npm", "left-pad", "1.3.0"),
+        ("Go", "github.com/pkg/errors", "0.9.1"),
+    }
+
+
 def test_a_dockerfile_without_a_manifest_is_not_a_scan(tmp_path) -> None:
     (tmp_path / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
     read = read_manifests(tmp_path)

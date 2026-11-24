@@ -14,6 +14,7 @@ from app.services.manifest_packages import PackageQuery
 _SEVERITY = {"CRITICAL": "critical", "HIGH": "high", "MODERATE": "medium", "MEDIUM": "medium", "LOW": "low"}
 _RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
 _MAX_FINDINGS = 30
+_DETAIL_CONCURRENCY = 5
 
 
 class AdvisorySource(Protocol):
@@ -50,14 +51,22 @@ class OsvAdvisorySource:
             )
             response.raise_for_status()
             pairs = advisory_ids_from_batch(response.json(), packages)
-            details = await asyncio.gather(
-                *(client.get(f"/v1/vulns/{quote(advisory_id, safe='')}") for _, advisory_id in pairs)
-            )
+            details = await _advisory_details(client, [advisory_id for _, advisory_id in pairs])
         findings: list[SecurityFinding] = []
         for (package_name, _), detail in zip(pairs, details, strict=True):
             detail.raise_for_status()
             findings.append(finding_from_advisory(package_name, detail.json()))
         return sorted(findings, key=lambda item: _RANK[item.severity])
+
+
+async def _advisory_details(client: httpx.AsyncClient, advisory_ids: list[str]) -> list[httpx.Response]:
+    semaphore = asyncio.Semaphore(_DETAIL_CONCURRENCY)
+
+    async def load(advisory_id: str) -> httpx.Response:
+        async with semaphore:
+            return await client.get(f"/v1/vulns/{quote(advisory_id, safe='')}")
+
+    return list(await asyncio.gather(*(load(advisory_id) for advisory_id in advisory_ids)))
 
 
 def advisory_ids_from_batch(body: object, packages: list[PackageQuery]) -> list[tuple[str, str]]:
