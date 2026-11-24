@@ -105,3 +105,27 @@ async def test_advisory_detail_fetches_stay_bounded() -> None:
     findings = await OsvAdvisorySource(transport=httpx.MockTransport(handler)).query(_PACKAGES)
     assert len(findings) == 6
     assert peak == 5
+
+
+async def test_a_later_critical_advisory_is_kept_ahead_of_earlier_lows() -> None:
+    low_ids = [f"LOW-{index}" for index in range(30)]
+    critical_id = "CRIT-1"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/querybatch":
+            vulns = [{"id": advisory_id, "modified": "2021-01-01T00:00:00Z"} for advisory_id in [*low_ids, critical_id]]
+            return httpx.Response(200, json={"results": [{"vulns": vulns}]})
+        if request.url.path.startswith("/v1/vulns/"):
+            advisory_id = request.url.path.rsplit("/", 1)[-1]
+            severity = "CRITICAL" if advisory_id == critical_id else "LOW"
+            return httpx.Response(
+                200,
+                json={"id": advisory_id, "summary": "A public advisory.", "database_specific": {"severity": severity}},
+            )
+        return httpx.Response(404)
+
+    findings = await OsvAdvisorySource(transport=httpx.MockTransport(handler)).query(_PACKAGES)
+    assert len(findings) == 30
+    assert findings[0].advisory_id == critical_id
+    assert findings[0].severity == "critical"
+    assert low_ids[-1] not in {item.advisory_id for item in findings}

@@ -13,7 +13,9 @@ from app.services.manifest_packages import PackageQuery
 
 _SEVERITY = {"CRITICAL": "critical", "HIGH": "high", "MODERATE": "medium", "MEDIUM": "medium", "LOW": "low"}
 _RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
-_MAX_FINDINGS = 30
+_MAX_STORED_FINDINGS = 30
+# Severity is only on the detail record, so the stored page is chosen after those fetches.
+_MAX_DETAIL_IDS = 120
 _DETAIL_CONCURRENCY = 5
 
 
@@ -56,7 +58,8 @@ class OsvAdvisorySource:
         for (package_name, _), detail in zip(pairs, details, strict=True):
             detail.raise_for_status()
             findings.append(finding_from_advisory(package_name, detail.json()))
-        return sorted(findings, key=lambda item: _RANK[item.severity])
+        ranked = sorted(findings, key=lambda item: _RANK[item.severity])
+        return ranked[:_MAX_STORED_FINDINGS]
 
 
 async def _advisory_details(client: httpx.AsyncClient, advisory_ids: list[str]) -> list[httpx.Response]:
@@ -95,7 +98,7 @@ def advisory_ids_from_batch(body: object, packages: list[PackageQuery]) -> list[
                 continue
             seen.add(key)
             found.append((package.name[:200], advisory_id.strip()))
-            if len(found) >= _MAX_FINDINGS:
+            if len(found) >= _MAX_DETAIL_IDS:
                 return found
     return found
 
