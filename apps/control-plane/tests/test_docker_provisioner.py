@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from app.core.config import Settings
-from app.services.docker_routes import lookup_enabled_route_hostname
 from app.services.docker_provisioner import (
     CommandResult,
     DockerProvisioner,
@@ -105,7 +103,6 @@ def _make_provisioner(
     release_command_timeout_seconds: int = 300,
     health_checker: HealthChecker | None = None,
     route_registrar: RouteRegistrar | None = None,
-    route_hostname_lookup: Callable[..., str | None] | None = None,
 ) -> DockerProvisioner:
     return DockerProvisioner(
         docker_bin="docker",
@@ -128,7 +125,6 @@ def _make_provisioner(
         port_allocator=lambda _h, _s, _e: port,
         health_checker=health_checker or (lambda _h, _p, _t: True),
         route_registrar=route_registrar,
-        route_hostname_lookup=route_hostname_lookup or (lambda **_kw: None),
     )
 
 
@@ -437,77 +433,11 @@ def test_provision_registers_traefik_route_after_health_check() -> None:
     )
 
 
-def test_redeploy_keeps_the_stored_hostname_and_refreshes_its_backend() -> None:
-    old = "payments-dev.dev.app.aero-deck.app"
-    runner = FakeCommandRunner(create_dockerfile=True)
-    registered: list[tuple[str, str, int]] = []
-    provisioner = _make_provisioner(
-        runner,
-        port=10555,
-        route_base_domain="dev.aerodeckcloud.com",
-        route_registrar=lambda **kw: registered.append((kw["hostname"], kw["backend_host"], kw["backend_port"])),
-        route_hostname_lookup=lambda **_kw: old,
-    )
-
-    outcome = provisioner.provision(
-        project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
-        environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
-        project_slug="payments",
-        environment_slug="dev",
-        repo_url="https://github.com/mangatohjunior/demo-app",
-    )
-
-    assert registered == [(old, "10.41.0.2", 10555)]
-    assert f"https://{old}" in outcome.detail
-    assert "dev.aerodeckcloud.com" not in outcome.detail
-    assert any(f"AERODECK_PUBLIC_URL=https://{old}" in text for text in runner.env_files)
-
-
 def test_select_provisioner_respects_backend_setting() -> None:
     base_kwargs = {"auth_signing_key": "a" * 32}
     assert select_provisioner(Settings(**base_kwargs)) is None
     docker_prov = select_provisioner(Settings(**base_kwargs, provisioner_backend="docker"))
     assert isinstance(docker_prov, DockerProvisioner)
-    assert docker_prov.route_hostname_lookup is lookup_enabled_route_hostname
-
-
-def test_from_settings_accepts_an_injected_route_hostname_lookup() -> None:
-    stub = lambda **_kw: "payments-dev.dev.app.aero-deck.app"
-    provisioner = DockerProvisioner.from_settings(
-        Settings(auth_signing_key="a" * 32, provisioner_backend="docker"),
-        route_hostname_lookup=stub,
-    )
-    assert provisioner.route_hostname_lookup is stub
-
-
-def test_register_fails_closed_when_the_stored_hostname_changes() -> None:
-    runner = FakeCommandRunner(create_dockerfile=True)
-    registered: list[tuple[str, str, int]] = []
-    seen = {"n": 0}
-
-    def drifting_lookup(**_kw: object) -> str | None:
-        seen["n"] += 1
-        return "payments-dev.dev.app.aero-deck.app" if seen["n"] == 1 else "other-dev.dev.aerodeckcloud.com"
-
-    provisioner = _make_provisioner(
-        runner,
-        port=10555,
-        route_base_domain="dev.aerodeckcloud.com",
-        route_registrar=lambda **kw: registered.append((kw["hostname"], kw["backend_host"], kw["backend_port"])),
-        route_hostname_lookup=drifting_lookup,
-    )
-
-    with pytest.raises(PermanentJobError, match="hostname changed"):
-        provisioner.provision(
-            project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
-            environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
-            project_slug="payments",
-            environment_slug="dev",
-            repo_url="https://github.com/mangatohjunior/demo-app",
-        )
-
-    assert registered == []
-    assert any(c[:2] == ["docker", "rm"] for c in runner.calls)
 
 
 def test_provision_rejects_host_network_and_forbidden_dockerfile_directives() -> None:

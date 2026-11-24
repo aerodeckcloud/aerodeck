@@ -123,7 +123,7 @@ no address and does not serve the console. `dev.aerodeckcloud.com` serves
 the console after [dashboard-console.md](dashboard-console.md) §4 runs
 `publish-console-route.py`.
 
-New tenant hostnames are `<project>-<env>.dev.aerodeckcloud.com`. The API publishes their CNAME to `edge.aerodeckcloud.com`. Startup does not rewrite stored route rows. Redeploying an app that already has a route keeps that hostname, including `*.dev.app.aero-deck.app`, and points it at the new container. A second hostname is not created. Port 8000 stays VPC-only.
+New tenant hostnames are `<project>-<env>.dev.aerodeckcloud.com`. The API publishes their CNAME to `edge.aerodeckcloud.com`. Delete any leftover test apps that still use `*.dev.app.aero-deck.app` and deploy again on the product zone. Port 8000 stays VPC-only.
 
 ## Public DNS records
 

@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Sequence
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
     get_acme_issuer,
@@ -16,7 +14,7 @@ from app.api.deps import (
     get_dns_record_publisher,
 )
 from app.core.config import get_settings
-from app.core.db import SessionLocal, create_engine
+from app.core.db import SessionLocal
 from app.core.logging import get_logger
 from app.models.certificate import Certificate, CertificateStatus
 from app.models.dns_record import DnsRecordStatus, DnsRecordType
@@ -77,60 +75,6 @@ async def _ensure_dns_and_tls(session: AsyncSession, route: Route, cert: Certifi
         logger.warning("auto TLS issuance skipped for %s: %s", route.hostname, type(exc).__name__)
 
 
-def primary_enabled_route(routes: Sequence[Route]) -> Route | None:
-    """Oldest enabled route wins. Callers must pass ``list_for_environment`` order."""
-    for route in routes:
-        if route.enabled:
-            return route
-    return None
-
-
-async def _select_environment_route(
-    routes: RouteRepository,
-    *,
-    project_id: uuid.UUID,
-    environment_id: uuid.UUID,
-    hostname: str,
-    backend_host: str,
-    backend_port: int,
-) -> Route:
-    """Keep a hostname that already serves this environment and point every live route at the new container.
-
-    A base-domain change must not open a second hostname or leave the previous
-    backend port attached to a container that was just removed.
-    """
-    owned = list(await routes.list_for_environment(project_id, environment_id))
-    enabled = [route for route in owned if route.enabled]
-    matched = await routes.get_by_hostname(hostname)
-    if matched is not None and (matched.project_id != project_id or matched.environment_id != environment_id):
-        raise PermanentJobError(f"Hostname {hostname!r} is already routed by another environment")
-    if matched is not None:
-        primary = matched
-        primary.enabled = True
-    else:
-        primary = primary_enabled_route(owned)
-        if primary is None:
-            primary = await routes.add(
-                Route(
-                    project_id=project_id,
-                    environment_id=environment_id,
-                    hostname=hostname,
-                    path_prefix="/",
-                    backend_host=backend_host,
-                    backend_port=backend_port,
-                    entrypoint="web",
-                    enabled=True,
-                )
-            )
-    primary.backend_host = backend_host
-    primary.backend_port = backend_port
-    for route in enabled:
-        if route.id != primary.id:
-            route.backend_host = backend_host
-            route.backend_port = backend_port
-    return primary
-
-
 async def upsert_environment_route(
     *,
     project_id: uuid.UUID,
@@ -139,68 +83,53 @@ async def upsert_environment_route(
     backend_host: str,
     backend_port: int,
 ) -> Route:
-    """Point this environment's live route at the new container.
-
-    The first publish uses ``hostname``. A later publish keeps the stored
-    hostname, including one created under a previous base domain.
-    """
+    """Create or update the Traefik ``Route`` pointing ``hostname`` to the new container."""
     if SessionLocal.kw.get("bind") is None:
         raise PermanentJobError("Database is not configured; cannot register Traefik route")
 
     async with SessionLocal() as session:
         routes = RouteRepository(session)
         certs = CertificateRepository(session)
-        route = await _select_environment_route(
-            routes,
-            project_id=project_id,
-            environment_id=environment_id,
-            hostname=hostname,
-            backend_host=backend_host,
-            backend_port=backend_port,
-        )
-        cert = await certs.get_for_route(route.id)
-        if cert is None:
-            cert = await certs.add(
-                Certificate(route_id=route.id, hostname=route.hostname, status=CertificateStatus.pending)
+        existing = await routes.get_by_hostname(hostname)
+        if existing is not None:
+            if existing.project_id != project_id or existing.environment_id != environment_id:
+                raise PermanentJobError(
+                    f"Hostname {hostname!r} is already routed by another environment"
+                )
+            existing.backend_host = backend_host
+            existing.backend_port = backend_port
+            existing.enabled = True
+            cert = await certs.get_for_route(existing.id)
+            if cert is None:
+                cert = await certs.add(
+                    Certificate(route_id=existing.id, hostname=existing.hostname, status=CertificateStatus.pending)
+                )
+            await _ensure_dns_and_tls(session, existing, cert)
+            await session.commit()
+            return existing
+
+        route = await routes.add(
+            Route(
+                project_id=project_id,
+                environment_id=environment_id,
+                hostname=hostname,
+                path_prefix="/",
+                backend_host=backend_host,
+                backend_port=backend_port,
+                entrypoint="web",
+                enabled=True,
             )
+        )
+        cert = await certs.add(
+            Certificate(
+                route_id=route.id,
+                hostname=route.hostname,
+                status=CertificateStatus.pending,
+            )
+        )
         await _ensure_dns_and_tls(session, route, cert)
         await session.commit()
         return route
-
-
-async def _enabled_route_hostname(
-    database_url: str, project_id: uuid.UUID, environment_id: uuid.UUID
-) -> str | None:
-    engine = create_engine(database_url, poolclass=NullPool)
-    sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
-    try:
-        async with sessions() as session:
-            rows = await RouteRepository(session).list_for_environment(project_id, environment_id)
-            primary = primary_enabled_route(rows)
-            return primary.hostname if primary is not None else None
-    finally:
-        await engine.dispose()
-
-
-def lookup_enabled_route_hostname(*, project_id: uuid.UUID, environment_id: uuid.UUID) -> str | None:
-    """Return the hostname already serving this environment.
-
-    Uses a private engine so the check does not share a loop with the later
-    route write. An empty database URL means nothing is stored yet.
-    """
-    database_url = get_settings().database_url
-    if not database_url:
-        return None
-    try:
-        return asyncio.run(_enabled_route_hostname(database_url, project_id, environment_id))
-    except Exception as exc:
-        logger.warning(
-            "event=route_hostname_lookup_failed project=%s environment=%s error_type=%s",
-            project_id,
-            environment_id,
-            type(exc).__name__,
-        )
-        raise PermanentJobError("Could not read existing routes before choosing a hostname") from exc
 
 
 def upsert_environment_route_sync(
