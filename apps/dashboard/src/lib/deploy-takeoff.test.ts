@@ -9,11 +9,12 @@ describe("launch takeoff", () => {
     assert.equal(shouldPlayTakeoff(true), false);
   });
 
-  it("does not wait on the animation timeline when motion is reduced", () => {
-    assert.equal(takeoffHoldMs(0, true), 0);
-    assert.equal(takeoffHoldMs(TAKEOFF_MS, true), 0);
-    assert.equal(takeoffHoldMs(0, false), TAKEOFF_MS);
+  it("does not wait on the animation timeline when takeoff is not playing", () => {
+    assert.equal(takeoffHoldMs(0, shouldPlayTakeoff(true)), 0);
+    assert.equal(takeoffHoldMs(0, false), 0);
     assert.equal(takeoffHoldMs(TAKEOFF_MS, false), 0);
-    assert.equal(takeoffHoldMs(400, false), TAKEOFF_MS - 400);
+    assert.equal(takeoffHoldMs(0, true), TAKEOFF_MS);
+    assert.equal(takeoffHoldMs(TAKEOFF_MS, true), 0);
+    assert.equal(takeoffHoldMs(400, true), TAKEOFF_MS - 400);
   });
 });

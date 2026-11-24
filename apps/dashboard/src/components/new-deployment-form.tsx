@@ -2,7 +2,7 @@
 
 import { Loader2, Rocket, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
   DeploymentBlueprintFields,
@@ -135,6 +135,22 @@ export function NewDeploymentForm({
   const [enqueueBlocked, setEnqueueBlocked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [takingOff, setTakingOff] = useState(false);
+  const mountedRef = useRef(true);
+  const holdTimerRef = useRef<number | null>(null);
+  const holdSettleRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (holdTimerRef.current !== null) {
+        window.clearTimeout(holdTimerRef.current);
+        holdTimerRef.current = null;
+      }
+      holdSettleRef.current?.();
+      holdSettleRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isControlPlane) {
@@ -454,14 +470,27 @@ export function NewDeploymentForm({
           : isControlPlane && target
             ? await createDeployment(repoUrl, true, target)
             : await createDeployment(repoUrl, false);
-      const hold = takeoffHoldMs(Date.now() - started, !playTakeoff);
+      const hold = takeoffHoldMs(Date.now() - started, playTakeoff);
       if (hold > 0) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, hold);
+        await new Promise<void>((resolve) => {
+          holdSettleRef.current = () => {
+            holdSettleRef.current = null;
+            resolve();
+          };
+          holdTimerRef.current = window.setTimeout(() => {
+            holdTimerRef.current = null;
+            holdSettleRef.current?.();
+          }, hold);
         });
+      }
+      if (!mountedRef.current) {
+        return;
       }
       router.push(`/deployments/${deployment.id}`);
     } catch (cause) {
+      if (!mountedRef.current) {
+        return;
+      }
       setTakingOff(false);
       const message = cause instanceof Error ? cause.message : "Deploy failed.";
       if (isControlPlane && draftId) {
@@ -475,7 +504,9 @@ export function NewDeploymentForm({
       }
       setError(message);
     } finally {
-      setSubmitting(false);
+      if (mountedRef.current) {
+        setSubmitting(false);
+      }
     }
   }
 

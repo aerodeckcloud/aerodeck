@@ -7,8 +7,8 @@ export function shouldPlayTakeoff(reducedMotion: boolean): boolean {
 }
 
 /** Remaining time to hold a successful launch so navigation waits for the takeoff. */
-export function takeoffHoldMs(elapsedMs: number, reducedMotion: boolean): number {
-  if (!shouldPlayTakeoff(reducedMotion)) {
+export function takeoffHoldMs(elapsedMs: number, playTakeoff: boolean): number {
+  if (!playTakeoff) {
     return 0;
   }
   const elapsed = Math.max(0, elapsedMs);
