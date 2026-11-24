@@ -164,6 +164,7 @@ def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> N
     assert "pnpm install --frozen-lockfile --prod" in pnpm.contents
     assert "npm install --omit=dev" not in pnpm.contents
     assert "pnpm prune" not in pnpm.contents
+    assert pnpm.contents.index("COPY package.json pnpm-lock.yaml ./") < pnpm.contents.index("pnpm install")
 
     pnpm_build = tmp_path / "pnpm_build"
     pnpm_build.mkdir()
@@ -199,6 +200,7 @@ def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> N
     assert berry is not None
     assert "yarn install --immutable" in berry.contents
     assert "workspaces focus" not in berry.contents
+    assert berry.contents.index("COPY package.json yarn.lock ./") < berry.contents.index("yarn install --immutable")
 
     berry_build = tmp_path / "berry_build"
     berry_build.mkdir()
@@ -243,6 +245,57 @@ def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> N
         "yarn workspaces focus --all --production"
     )
     assert "workspaces focus --production" not in built.contents.split("RUN yarn run build", 1)[0]
+
+    pnpm_workspace = tmp_path / "pnpm_workspace"
+    pnpm_workspace.mkdir()
+    (pnpm_workspace / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    (pnpm_workspace / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+    (pnpm_workspace / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n", encoding="utf-8")
+    pnpm_tree = detect_dockerfile_template(pnpm_workspace)
+    assert pnpm_tree is not None
+    assert pnpm_tree.contents.index("COPY . .") < pnpm_tree.contents.index("pnpm install --frozen-lockfile --prod")
+    assert pnpm_tree.contents.count("COPY . .") == 1
+    assert "COPY package.json pnpm-lock.yaml" not in pnpm_tree.contents
+
+    classic_workspace = tmp_path / "classic_workspace"
+    classic_workspace.mkdir()
+    (classic_workspace / "package.json").write_text(
+        '{"workspaces":["packages/*"],"scripts":{"start":"node index.js"}}', encoding="utf-8"
+    )
+    (classic_workspace / "yarn.lock").write_text("# yarn lockfile v1\n", encoding="utf-8")
+    classic_tree = detect_dockerfile_template(classic_workspace)
+    assert classic_tree is not None
+    assert classic_tree.contents.index("COPY . .") < classic_tree.contents.index(
+        "yarn install --frozen-lockfile --production"
+    )
+    assert classic_tree.contents.count("COPY . .") == 1
+    assert "COPY package.json yarn.lock" not in classic_tree.contents
+
+    berry_config = tmp_path / "berry_config"
+    berry_config.mkdir()
+    (berry_config / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    (berry_config / "yarn.lock").write_text("__metadata:\n  version: 8\n", encoding="utf-8")
+    (berry_config / ".yarnrc.yml").write_text("nodeLinker: node-modules\n", encoding="utf-8")
+    (berry_config / ".yarn").mkdir()
+    configured = detect_dockerfile_template(berry_config)
+    assert configured is not None
+    assert configured.contents.index("COPY . .") < configured.contents.index(
+        "NODE_ENV=production yarn install --immutable"
+    )
+    assert configured.contents.count("COPY . .") == 1
+    assert "COPY package.json yarn.lock" not in configured.contents
+    assert "workspaces focus" not in configured.contents
+
+    npm_workspace = tmp_path / "npm_workspace"
+    npm_workspace.mkdir()
+    (npm_workspace / "package.json").write_text(
+        '{"workspaces":["packages/*"],"scripts":{"start":"node index.js"}}', encoding="utf-8"
+    )
+    npm_tree = detect_dockerfile_template(npm_workspace)
+    assert npm_tree is not None
+    assert npm_tree.contents.index("COPY . .") < npm_tree.contents.index("npm install --omit=dev")
+    assert npm_tree.contents.count("COPY . .") == 1
+    assert "COPY package*.json" not in npm_tree.contents
 
 
 def test_yarn_classic_probe_stops_after_four_kibibytes(tmp_path: Path) -> None:

@@ -81,6 +81,16 @@ def _regular_file(checkout: Path, name: str) -> bool:
     return path.is_file() and not path.is_symlink()
 
 
+def _real_dir(checkout: Path, name: str) -> bool:
+    path = checkout / name
+    return path.is_dir() and not path.is_symlink()
+
+
+def _berry_project_files(checkout: Path) -> bool:
+    """Yarn Berry reads project settings and the release from the checkout, not just the lockfile."""
+    return _regular_file(checkout, ".yarnrc.yml") or _real_dir(checkout, ".yarn")
+
+
 def _yarn_classic(checkout: Path) -> bool:
     """Classic lockfiles announce themselves in the first line; do not read the rest."""
     with (checkout / "yarn.lock").open("rb") as handle:
@@ -104,7 +114,12 @@ def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
     lines = ["FROM node:22-alpine", "WORKDIR /app"]
     if _regular_file(checkout, "pnpm-lock.yaml"):
         lines.append(f"RUN npm install -g pnpm@{_PNPM_VERSION}")
-        lines.append("COPY package.json pnpm-lock.yaml ./")
+        # Workspace package.json files and pnpm-workspace.yaml must exist before install.
+        if _regular_file(checkout, "pnpm-workspace.yaml") or _yarn_workspaces(package):
+            lines.append("COPY . .")
+            copy_source_later = False
+        else:
+            lines.append("COPY package.json pnpm-lock.yaml ./")
         install = "pnpm install --frozen-lockfile" if build else "pnpm install --frozen-lockfile --prod"
         lines.append(f"RUN {install}")
         build_line = "RUN pnpm run build"
@@ -114,15 +129,23 @@ def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
         classic = _yarn_classic(checkout)
         if classic:
             lines.append(f"RUN npm install -g yarn@{_YARN_CLASSIC_VERSION}")
+            if _yarn_workspaces(package):
+                lines.append("COPY . .")
+                copy_source_later = False
+            else:
+                lines.append("COPY package.json yarn.lock ./")
             install = "yarn install --frozen-lockfile" if build else "yarn install --frozen-lockfile --production"
             prune = "yarn install --frozen-lockfile --production"
         else:
             lines.append(f"RUN corepack enable && corepack prepare yarn@{_YARN_BERRY_VERSION} --activate")
             # focus requires a workspaces field. A single package uses an immutable install.
-            # Workspace manifests must be present before that install, so the tree is copied once here.
-            if _yarn_workspaces(package):
+            # Workspace manifests, .yarnrc.yml, and .yarn must be present before that install.
+            if _yarn_workspaces(package) or _berry_project_files(checkout):
                 lines.append("COPY . .")
                 copy_source_later = False
+            else:
+                lines.append("COPY package.json yarn.lock ./")
+            if _yarn_workspaces(package):
                 install = (
                     "yarn install --immutable"
                     if build
@@ -130,16 +153,17 @@ def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
                 )
                 prune = "yarn plugin import workspace-tools && yarn workspaces focus --all --production"
             else:
-                lines.append("COPY package.json yarn.lock ./")
                 install = "yarn install --immutable" if build else "NODE_ENV=production yarn install --immutable"
                 prune = "rm -rf node_modules && NODE_ENV=production yarn install --immutable"
-        if classic:
-            lines.append("COPY package.json yarn.lock ./")
         lines.append(f"RUN {install}")
         build_line = "RUN yarn run build"
         start = 'CMD ["yarn", "start"]'
     else:
-        lines.append("COPY package*.json ./")
+        if _yarn_workspaces(package):
+            lines.append("COPY . .")
+            copy_source_later = False
+        else:
+            lines.append("COPY package*.json ./")
         install = "npm install --no-audit --no-fund" if build else "npm install --omit=dev --no-audit --no-fund"
         lines.append(f"RUN {install}")
         build_line = "RUN npm run build"
