@@ -1,5 +1,6 @@
 """A deployment the operator can leave and reopen. Provision stays on launch (#343)."""
 
+import asyncio
 import json
 import uuid
 from datetime import UTC, datetime
@@ -33,6 +34,8 @@ logger = get_logger("services.deployment_draft")
 
 _PLAN_TOO_LARGE = "Draft plan is too large."
 _MAX_PLAN_CHARS = 64_000
+# Covers the batch query and the detail fan-out. A stall becomes an incomplete scan.
+_ADVISORY_DEADLINE_SECONDS = 30
 
 
 def mask_plan(plan: DeploymentDraftPlan) -> DeploymentDraftPlan:
@@ -207,12 +210,24 @@ class DeploymentDraftService:
     async def scan_security(
         self, deployment_id: uuid.UUID, actor_user_id: uuid.UUID | None
     ) -> DraftSecurityRecord:
+        _stored, record = await self._rescan(deployment_id, actor_user_id)
+        return record
+
+    async def _rescan(
+        self, deployment_id: uuid.UUID, actor_user_id: uuid.UUID | None
+    ) -> tuple[Deployment, DraftSecurityRecord]:
+        """Read, release the connection, scan, then write. The pool stays free during clone and OSV."""
         stored = await self._deployments.get(deployment_id)
         self.require_owner(stored, actor_user_id)
+        repo_url = stored.repo_url
         previous = _load_security(stored)
-        record = _keep_acknowledgement(previous, await self._scan_record(stored.repo_url))
+        await self._deployments.commit()
+        record = _keep_acknowledgement(previous, await self._scan_record(repo_url))
+        stored = await self._deployments.get(deployment_id)
+        self.require_owner(stored, actor_user_id)
         stored.draft_security = record.model_dump_json()
-        return record
+        await self._deployments.commit()
+        return stored, record
 
     async def acknowledge_security(
         self,
@@ -254,7 +269,10 @@ class DeploymentDraftService:
         if not read.packages:
             return DraftSecurityRecord(outcome="incomplete" if read.unpinned else "clear")
         try:
-            findings = await self._advisories.query(list(read.packages))
+            findings = await asyncio.wait_for(
+                self._advisories.query(list(read.packages)),
+                timeout=_ADVISORY_DEADLINE_SECONDS,
+            )
         except Exception as exc:
             logger.warning(
                 "event=dependency_scan_incomplete stage=advisory error_type=%s",
@@ -276,8 +294,7 @@ class DeploymentDraftService:
         merged = merge_plan(self.open(stored.draft_plan), body.plan)
         if merged.step != "launch":
             raise UnprocessableError("Confirm the launch step before deploying.")
-        record = _keep_acknowledgement(_load_security(stored), await self._scan_record(stored.repo_url))
-        stored.draft_security = record.model_dump_json()
+        stored, record = await self._rescan(deployment_id, actor_user_id)
         if record.outcome == "findings" and record.acknowledgement != "findings":
             raise UnprocessableError("Acknowledge the dependency findings before deploying.")
         if record.outcome == "incomplete" and record.acknowledgement != "incomplete":
