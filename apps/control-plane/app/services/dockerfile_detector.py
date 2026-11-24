@@ -102,7 +102,12 @@ def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
             install = "yarn install --frozen-lockfile" if build else "yarn install --frozen-lockfile --production"
         else:
             lines.append(f"RUN corepack enable && corepack prepare yarn@{_YARN_BERRY_VERSION} --activate")
-            install = "yarn install --immutable"
+            # Berry has no --production install. workspaces focus is the supported production set.
+            install = (
+                "yarn install --immutable"
+                if build
+                else "yarn plugin import workspace-tools && yarn workspaces focus --production"
+            )
         lines.append("COPY package.json yarn.lock ./")
         lines.append(f"RUN {install}")
         build_line = "RUN yarn run build"

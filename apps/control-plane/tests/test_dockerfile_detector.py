@@ -176,6 +176,16 @@ def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> N
     assert "--production" not in yarn.contents
     assert "RUN yarn run build" in yarn.contents
 
+    berry_dir = tmp_path / "berry"
+    berry_dir.mkdir()
+    (berry_dir / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    (berry_dir / "yarn.lock").write_text("__metadata:\n  version: 8\n", encoding="utf-8")
+    berry = detect_dockerfile_template(berry_dir)
+    assert berry is not None
+    assert "yarn plugin import workspace-tools" in berry.contents
+    assert "yarn workspaces focus --production" in berry.contents
+    assert "yarn install --immutable" not in berry.contents
+
 
 def test_root_dockerfile_is_not_replaced_by_a_node_generator(tmp_path: Path) -> None:
     original = "FROM node:22-alpine\nUSER node\n"
