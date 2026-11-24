@@ -1618,17 +1618,17 @@ export type ControlPlaneDraft = {
   plan: import("@/lib/deploy-draft").DeployDraftPlan;
 };
 
+function isDraftStep(value: unknown): value is "build" | "resources" | "variables" | "launch" {
+  return value === "build" || value === "resources" || value === "variables" || value === "launch";
+}
+
 function parseControlPlaneDraft(value: unknown): ControlPlaneDraft {
   if (!value || typeof value !== "object") {
     throw new ControlPlaneError("control plane draft response was not a draft");
   }
   const row = value as Record<string, unknown>;
   const plan = row.plan;
-  if (!plan || typeof plan !== "object") {
-    throw new ControlPlaneError("control plane draft response was not a draft");
-  }
-  const step = (plan as { step?: unknown }).step;
-  if (step !== "build" && step !== "resources" && step !== "launch") {
+  if (!plan || typeof plan !== "object" || !isDraftStep((plan as { step?: unknown }).step)) {
     throw new ControlPlaneError("control plane draft response was not a draft");
   }
   return { deployment: parseDeployment(row.deployment), plan: plan as ControlPlaneDraft["plan"] };
@@ -3173,9 +3173,7 @@ function parseDeployment(value: unknown): Deployment {
     ...(approvalRequiredAt !== undefined ? { approval_required_at: approvalRequiredAt } : {}),
     ...(approvedAt !== undefined ? { approved_at: approvedAt } : {}),
     status: row.status as DeploymentStatus,
-    ...(row.draft_step === "build" || row.draft_step === "resources" || row.draft_step === "launch"
-      ? { draft_step: row.draft_step }
-      : {}),
+    ...(isDraftStep(row.draft_step) ? { draft_step: row.draft_step } : {}),
     ...(snapshotNames !== undefined ? { snapshot_variable_names: snapshotNames } : {}),
     ...(variablesRestored !== undefined ? { variables_restored: variablesRestored } : {}),
   };

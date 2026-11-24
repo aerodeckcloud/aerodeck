@@ -321,3 +321,18 @@ async def test_draft_requires_a_known_user(client: AsyncClient, auth: dict[str, 
         headers={**auth, "X-AeroDeck-User-Id": str(uuid4())},
     )
     assert missing.status_code == 422
+
+
+async def test_variables_step_is_a_saved_draft_page(client: AsyncClient, auth: dict[str, str]) -> None:
+    owner = await _user(client, auth, "draft-variables@aerodeck.test")
+    created = await client.post(
+        f"{DEPLOYMENTS}/draft", json={"repo_url": REPO, "plan": _plan()}, headers=owner
+    )
+    assert created.status_code == 201, created.text
+    draft_id = created.json()["deployment"]["id"]
+    updated = await client.put(
+        f"{DEPLOYMENTS}/{draft_id}/draft", json={"plan": _plan(step="variables")}, headers=owner
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["deployment"]["draft_step"] == "variables"
+    assert updated.json()["plan"]["step"] == "variables"

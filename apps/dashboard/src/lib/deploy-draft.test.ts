@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { deployStepPath, deploymentHref } from "./deploy-draft";
+import { deployStepPath, deploymentHref, stepAfterResources, stepBeforeLaunch } from "./deploy-draft";
 
 describe("deploy draft routes", () => {
   it("gives each confirmed step its own page", () => {
     assert.equal(deployStepPath("draft-1", "build"), "/deploy/draft-1/build");
     assert.equal(deployStepPath("draft-1", "resources"), "/deploy/draft-1/databases");
+    assert.equal(deployStepPath("draft-1", "variables"), "/deploy/draft-1/variables");
     assert.equal(deployStepPath("draft-1", "launch"), "/deploy/draft-1/launch");
+  });
+
+  it("skips the variables page when the scan found no env keys", () => {
+    assert.equal(stepAfterResources(2), "variables");
+    assert.equal(stepAfterResources(0), "launch");
+    assert.equal(stepBeforeLaunch(2), "variables");
+    assert.equal(stepBeforeLaunch(0), "resources");
   });
 
   it("sends a draft back to its page and a launched row to the deployment", () => {
