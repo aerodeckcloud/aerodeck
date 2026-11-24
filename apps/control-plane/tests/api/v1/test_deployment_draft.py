@@ -532,3 +532,95 @@ async def test_launch_rescans_so_a_stored_clear_result_cannot_go_stale(
     finally:
         app.dependency_overrides[get_package_source] = lambda: _NoManifest()
         app.dependency_overrides[get_advisory_source] = lambda: _QuietAdvisories()
+
+
+async def test_a_repository_with_no_manifest_can_launch_without_acknowledgement(
+    client: AsyncClient, app: FastAPI
+) -> None:
+    app.dependency_overrides[get_package_source] = lambda: _NoManifest()
+    app.dependency_overrides[get_advisory_source] = lambda: _QuietAdvisories()
+    app.dependency_overrides[get_job_dispatcher] = _eager_dispatcher
+    try:
+        token = await obtain_token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        owner = await _user(client, headers, "draft-security-none@aerodeck.test")
+        project = await client.post(PROJECTS, json={"slug": "plain", "name": "Plain"}, headers=headers)
+        assert project.status_code == 201, project.text
+        environment = await client.post(
+            f"{PROJECTS}/{project.json()['id']}/environments",
+            json={"slug": "dev", "name": "Dev", "kind": "dev"},
+            headers=headers,
+        )
+        assert environment.status_code == 201, environment.text
+        created = await client.post(
+            f"{DEPLOYMENTS}/draft", json={"repo_url": REPO, "plan": _plan()}, headers=owner
+        )
+        assert created.status_code == 201, created.text
+        draft_id = created.json()["deployment"]["id"]
+        scanned = await client.post(f"{DEPLOYMENTS}/{draft_id}/security/scan", headers=owner)
+        assert scanned.status_code == 200, scanned.text
+        assert scanned.json()["outcome"] == "no_manifest"
+        assert scanned.json()["acknowledgement"] is None
+        launched = await client.post(
+            f"{DEPLOYMENTS}/{draft_id}/launch",
+            json={
+                "plan": _plan(step="launch", secret="", redacted=True),
+                "project_id": project.json()["id"],
+                "environment_id": environment.json()["id"],
+            },
+            headers=owner,
+        )
+        assert launched.status_code == 202, launched.text
+    finally:
+        app.dependency_overrides[get_package_source] = lambda: _NoManifest()
+        app.dependency_overrides[get_advisory_source] = lambda: _QuietAdvisories()
+        app.dependency_overrides.pop(get_job_dispatcher, None)
+
+
+async def test_an_incomplete_scan_can_launch_after_it_is_acknowledged(
+    client: AsyncClient, app: FastAPI
+) -> None:
+    app.dependency_overrides[get_package_source] = lambda: _LodashManifest()
+    app.dependency_overrides[get_advisory_source] = lambda: _AdvisoryDown()
+    app.dependency_overrides[get_job_dispatcher] = _eager_dispatcher
+    try:
+        token = await obtain_token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        owner = await _user(client, headers, "draft-security-acked@aerodeck.test")
+        project = await client.post(PROJECTS, json={"slug": "acked", "name": "Acked"}, headers=headers)
+        assert project.status_code == 201, project.text
+        environment = await client.post(
+            f"{PROJECTS}/{project.json()['id']}/environments",
+            json={"slug": "dev", "name": "Dev", "kind": "dev"},
+            headers=headers,
+        )
+        assert environment.status_code == 201, environment.text
+        created = await client.post(
+            f"{DEPLOYMENTS}/draft", json={"repo_url": REPO, "plan": _plan()}, headers=owner
+        )
+        assert created.status_code == 201, created.text
+        draft_id = created.json()["deployment"]["id"]
+        scanned = await client.post(f"{DEPLOYMENTS}/{draft_id}/security/scan", headers=owner)
+        assert scanned.status_code == 200, scanned.text
+        assert scanned.json()["outcome"] == "incomplete"
+        acknowledged = await client.post(
+            f"{DEPLOYMENTS}/{draft_id}/security/acknowledge",
+            json={"acknowledgement": "incomplete"},
+            headers=owner,
+        )
+        assert acknowledged.status_code == 200, acknowledged.text
+        assert acknowledged.json()["acknowledgement"] == "incomplete"
+        launched = await client.post(
+            f"{DEPLOYMENTS}/{draft_id}/launch",
+            json={
+                "plan": _plan(step="launch", secret="", redacted=True),
+                "project_id": project.json()["id"],
+                "environment_id": environment.json()["id"],
+            },
+            headers=owner,
+        )
+        assert launched.status_code == 202, launched.text
+    finally:
+        app.dependency_overrides[get_package_source] = lambda: _NoManifest()
+        app.dependency_overrides[get_advisory_source] = lambda: _QuietAdvisories()
+        app.dependency_overrides.pop(get_job_dispatcher, None)
