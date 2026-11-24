@@ -335,7 +335,13 @@ class DeploymentService:
             # Nothing has run yet, so there is no outcome to record. Without this
             # a console that reported one would close the row and it would never start.
             raise ConflictError(NOT_STARTED_DETAIL)
-        if current is not None and current.status is DeploymentStatus.draft:
+        if (
+            current is not None
+            and current.status is DeploymentStatus.draft
+            and status is not DeploymentStatus.failed
+        ):
+            # A refused launch may mark the row failed while it is still a draft.
+            # The sealed plan stays so that failure does not drop the saved secrets.
             raise ConflictError("Deployment is still a draft and has not started.")
         if current is not None and is_awaiting_approval(current):
             raise ConflictError("Deployment is waiting for owner approval and has not started.")

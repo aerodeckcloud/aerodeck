@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from cryptography.fernet import InvalidToken
 from pydantic import ValidationError
 
-from app.core.errors import ConflictError, NotFoundError, UnprocessableError
+from app.core.errors import AppError, ConflictError, NotFoundError, QueueUnavailableError, UnprocessableError
 from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
 from app.schemas.deployment import DeploymentCreate, deployment_to_read
 from app.schemas.deployment_draft import (
@@ -149,18 +149,21 @@ class DeploymentDraftService:
         environment = await self._environments.get(body.project_id, body.environment_id)
         stored.project_id = body.project_id
         stored.environment_id = body.environment_id
-        # Leave draft before the broker call. A refused enqueue marks the row
-        # failed, and that path rejects a row that is still a draft.
+        try:
+            await self._approval.enqueue_or_defer(
+                environment,
+                actor_user_id,
+                stored.id,
+                env_vars=plain_values(merged) or None,
+                addons=list(merged.selected_addons) or None,
+                port=merged.blueprint.build.port,
+                service=merged.blueprint.build.service or None,
+            )
+        except AppError:
+            raise
+        except Exception as exc:
+            raise QueueUnavailableError("Provision could not be queued.") from exc
         self.finish(stored)
-        await self._approval.enqueue_or_defer(
-            environment,
-            actor_user_id,
-            stored.id,
-            env_vars=plain_values(merged) or None,
-            addons=list(merged.selected_addons) or None,
-            port=merged.blueprint.build.port,
-            service=merged.blueprint.build.service or None,
-        )
         return stored
 
     def seal(self, plan: DeploymentDraftPlan) -> str:
@@ -190,7 +193,7 @@ class DeploymentDraftService:
         deployment.draft_plan = self.seal(plan)
 
     def finish(self, deployment: Deployment) -> None:
-        """Leave draft before provision is queued."""
+        """Leave draft only after provision was queued or held for approval."""
         if deployment.status is DeploymentStatus.draft:
             deployment.status = DeploymentStatus.running
         deployment.draft_step = None

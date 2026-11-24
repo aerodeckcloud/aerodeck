@@ -264,20 +264,22 @@ async def test_launch_broker_failure_marks_the_row_failed(app: FastAPI) -> None:
             )
             assert created.status_code == 201, created.text
             draft_id = created.json()["deployment"]["id"]
-            with pytest.raises(ConnectionError, match="broker down"):
-                await client.post(
-                    f"{DEPLOYMENTS}/{draft_id}/launch",
-                    json={
-                        "plan": _plan(step="launch"),
-                        "project_id": project.json()["id"],
-                        "environment_id": environment.json()["id"],
-                    },
-                    headers=owner,
-                )
+            launched = await client.post(
+                f"{DEPLOYMENTS}/{draft_id}/launch",
+                json={
+                    "plan": _plan(step="launch"),
+                    "project_id": project.json()["id"],
+                    "environment_id": environment.json()["id"],
+                },
+                headers=owner,
+            )
+            assert launched.status_code == 503, launched.text
+            assert launched.json()["code"] == "queue_unavailable"
             stored = await client.get(f"{DEPLOYMENTS}/{draft_id}", headers=owner)
             assert stored.status_code == 200, stored.text
             assert stored.json()["status"] == "failed"
-            assert stored.json()["draft_step"] is None
+            sealed = await _stored_plan(app, draft_id)
+            assert sealed.variables[0].value == "super-secret"
     finally:
         app.dependency_overrides.pop(get_job_dispatcher, None)
 

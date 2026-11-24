@@ -1781,7 +1781,11 @@ export async function launchControlPlaneDraft(
     },
   );
   if (!response.ok) {
-    throw new ControlPlaneError(`control plane draft launch failed (${response.status})`, response.status);
+    throw new ControlPlaneError(
+      `control plane draft launch failed (${response.status})`,
+      response.status,
+      draftId,
+    );
   }
   return parseDeployment(await response.json());
 }

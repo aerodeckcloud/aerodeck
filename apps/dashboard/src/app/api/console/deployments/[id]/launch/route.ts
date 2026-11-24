@@ -39,14 +39,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     );
     return NextResponse.json(deployment, { status: 202 });
   } catch (cause) {
-    if (cause instanceof ControlPlaneError && (cause.status === 503 || cause.status === 502)) {
+    if (cause instanceof ControlPlaneError && cause.status !== undefined && cause.status >= 500) {
       return NextResponse.json(
         {
           detail: "Deployment was created but provision could not be queued.",
           code: PROVISION_ENQUEUE_FAILED,
-          deployment_id: id,
+          deployment_id: cause.deploymentId ?? id,
         },
-        { status: cause.status },
+        { status: cause.status === 503 ? 503 : 502 },
       );
     }
     if (cause instanceof ControlPlaneError && cause.status === 404) {
