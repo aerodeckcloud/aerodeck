@@ -2,7 +2,10 @@ import type { AddonType, DeploymentBlueprint, DeploymentStatus } from "@/lib/typ
 
 export type DeployRouteStep = "repository" | "build" | "security" | "resources" | "variables" | "target" | "launch";
 
-export type SecurityOutcome = "clear" | "findings" | "incomplete" | "no_manifest";
+export type SecurityOutcome = "no_advisories" | "findings" | "incomplete" | "no_manifest";
+
+export const NO_ADVISORIES_FOR_DIRECT_PINS =
+  "No advisories for pinned direct dependencies in root manifests.";
 
 export type SecurityFinding = {
   severity: "critical" | "high" | "medium" | "low" | "unknown";
@@ -39,7 +42,7 @@ export function parseSecurityReport(value: unknown): SecurityReport {
   const row = value as Record<string, unknown>;
   const outcome = row.outcome;
   if (
-    outcome !== "clear" &&
+    outcome !== "no_advisories" &&
     outcome !== "findings" &&
     outcome !== "incomplete" &&
     outcome !== "no_manifest"

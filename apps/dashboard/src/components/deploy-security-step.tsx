@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import type { SecurityReport } from "@/lib/deploy-draft";
-import { securityNeedsAcknowledgement } from "@/lib/deploy-draft";
+import { NO_ADVISORIES_FOR_DIRECT_PINS, securityNeedsAcknowledgement } from "@/lib/deploy-draft";
 
 export function DeploySecurityStep({
   report,
@@ -35,8 +35,8 @@ export function DeploySecurityStep({
       <p className="text-sm text-muted-foreground">There was no dependency manifest to scan.</p>
     );
   }
-  if (report.outcome === "clear") {
-    return <p className="text-sm text-muted-foreground">The dependency scan is clear.</p>;
+  if (report.outcome === "no_advisories") {
+    return <p className="text-sm text-muted-foreground">{NO_ADVISORIES_FOR_DIRECT_PINS}</p>;
   }
   if (report.outcome === "incomplete") {
     return (

@@ -32,7 +32,7 @@ class ManifestRead:
 
 
 def read_manifests(checkout: Path) -> ManifestRead:
-    """Root manifests only. The repository's install scripts are not executed."""
+    """Exact direct pins in root manifests. Lockfiles and transitive packages are not read."""
     packages: list[PackageQuery] = []
     unpinned = 0
     found = False

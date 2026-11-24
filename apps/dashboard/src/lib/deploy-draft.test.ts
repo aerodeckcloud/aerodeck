@@ -8,6 +8,7 @@ import {
   launchReview,
   parseSecurityReport,
   launchReturnsToSecurity,
+  NO_ADVISORIES_FOR_DIRECT_PINS,
   securityNeedsAcknowledgement,
   stepAfterResources,
   stepBeforeTarget,
@@ -24,7 +25,19 @@ describe("deploy draft routes", () => {
   });
 
   it("asks for an acknowledgement only when the scan found findings or did not finish", () => {
-    assert.equal(securityNeedsAcknowledgement("clear"), false);
+    assert.equal(securityNeedsAcknowledgement("no_advisories"), false);
+    assert.equal(
+      NO_ADVISORIES_FOR_DIRECT_PINS,
+      "No advisories for pinned direct dependencies in root manifests.",
+    );
+    assert.equal(
+      parseSecurityReport({ outcome: "no_advisories", acknowledgement: null, findings: [] }).outcome,
+      "no_advisories",
+    );
+    assert.throws(
+      () => parseSecurityReport({ outcome: "clear", acknowledgement: null, findings: [] }),
+      /did not complete/,
+    );
     assert.equal(securityNeedsAcknowledgement("no_manifest"), false);
     assert.equal(securityNeedsAcknowledgement("findings"), true);
     assert.equal(securityNeedsAcknowledgement("incomplete"), true);

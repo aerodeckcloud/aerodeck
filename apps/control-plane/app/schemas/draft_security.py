@@ -8,7 +8,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SecurityOutcome = Literal["clear", "findings", "incomplete", "no_manifest"]
+# no_advisories covers exact direct pins in root manifests only. Lockfiles and
+# transitive packages are outside this result, so it is not a clear scan.
+SecurityOutcome = Literal["no_advisories", "findings", "incomplete", "no_manifest"]
 SecurityAcknowledgement = Literal["findings", "incomplete"]
 
 

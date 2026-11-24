@@ -285,7 +285,7 @@ class DeploymentDraftService:
         if not read.found:
             return DraftSecurityRecord(outcome="no_manifest")
         if not read.packages:
-            return DraftSecurityRecord(outcome="incomplete" if read.unpinned else "clear")
+            return DraftSecurityRecord(outcome="incomplete" if read.unpinned else "no_advisories")
         try:
             findings = await asyncio.wait_for(
                 self._advisories.query(list(read.packages)),
@@ -302,7 +302,7 @@ class DeploymentDraftService:
             return DraftSecurityRecord(outcome="findings", findings=findings)
         if read.unpinned:
             return DraftSecurityRecord(outcome="incomplete")
-        return DraftSecurityRecord(outcome="clear")
+        return DraftSecurityRecord(outcome="no_advisories")
 
     async def launch(
         self, deployment_id: uuid.UUID, body: DeploymentDraftLaunch, actor_user_id: uuid.UUID | None

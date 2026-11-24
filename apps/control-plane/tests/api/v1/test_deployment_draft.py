@@ -547,7 +547,7 @@ async def test_launch_reuses_a_fresh_scan_and_rejects_a_stale_one(
         assert missing.json()["detail"] == "Run the dependency scan before deploying."
         scanned = await client.post(f"{DEPLOYMENTS}/{draft_id}/security/scan", headers=owner)
         assert scanned.status_code == 200, scanned.text
-        assert scanned.json()["outcome"] == "clear"
+        assert scanned.json()["outcome"] == "no_advisories"
         app.dependency_overrides[get_package_source] = lambda: _MustNotRead()
         app.dependency_overrides[get_advisory_source] = lambda: _MustNotQuery()
         launched = await client.post(
