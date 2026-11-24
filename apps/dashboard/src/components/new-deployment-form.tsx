@@ -35,12 +35,61 @@ import {
   upsertEnvironmentVars,
 } from "@/lib/api";
 import { knownDetectedAddons } from "@/lib/deploy-addons";
-import { deployStepPath, stepAfterResources, stepBeforeLaunch, type DeployDraftPlan, type DeployRouteStep } from "@/lib/deploy-draft";
+import {
+  countLaunchVariables,
+  deployStepPath,
+  launchReview,
+  stepAfterResources,
+  stepBeforeTarget,
+  type DeployDraftPlan,
+  type DeployRouteStep,
+} from "@/lib/deploy-draft";
 import { applyBuildConfirmation, launchBuildFields } from "@/lib/deploy-build";
 import { environmentOptionKey } from "@/lib/environment-option";
 import { parseGithubRepo } from "@/lib/github";
 import type { AddonType, DeploymentBlueprint } from "@/lib/types";
 import { useDeployEnvironments } from "@/lib/use-deploy-environments";
+
+function deployStepCopy(step: DeployRouteStep, controlPlane: boolean): { title: string; description: string } {
+  switch (step) {
+    case "build":
+      return {
+        title: "Build",
+        description:
+          "Detected from the scan. Change the port, and the Compose service when this repository has one.",
+      };
+    case "resources":
+      return {
+        title: "Databases",
+        description:
+          "Databases from the scan. A scan that found none still lets you add Postgres, Redis, or MongoDB.",
+      };
+    case "variables":
+      return {
+        title: "Variables",
+        description: "One field for each key the scan found. A required value that is still empty blocks launch.",
+      };
+    case "target":
+      return {
+        title: "Target",
+        description: "Choose the environment. Production approval and saved variables follow this choice.",
+      };
+    case "launch":
+      return {
+        title: "Deploy",
+        description: controlPlane
+          ? "Review the scan and the choices above, then deploy."
+          : "HTTPS GitHub URL. Validated in the browser, then POSTed to /api/mock/v1/deployments.",
+      };
+    case "repository":
+      return {
+        title: "Repository",
+        description: controlPlane
+          ? "The GitHub repository to scan. A successful scan opens the build before anything else."
+          : "HTTPS GitHub URL. Validated in the browser, then POSTed to /api/mock/v1/deployments.",
+      };
+  }
+}
 
 export function NewDeploymentForm({
   controlPlane = false,
@@ -157,6 +206,11 @@ export function NewDeploymentForm({
         }
         setFieldValues(fields);
         setRedactedKeys(redacted);
+        const projectId = saved.deployment.project_id;
+        const environmentId = saved.deployment.environment_id;
+        if (projectId && environmentId) {
+          setEnvironmentKey(environmentOptionKey({ project_id: projectId, id: environmentId }));
+        }
         setDraftReady(true);
       })
       .catch((cause: unknown) => {
@@ -285,7 +339,30 @@ export function NewDeploymentForm({
     if (isControlPlane && blueprint && step === "variables") {
       if (draftId) {
         try {
-          await updateDeployDraft(draftId, planFor("launch", blueprint));
+          await updateDeployDraft(draftId, planFor("target", blueprint));
+          router.push(deployStepPath(draftId, "target"));
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Could not save this step.");
+        }
+        return;
+      }
+      setStep("target");
+      return;
+    }
+
+    if (isControlPlane && blueprint && step === "target") {
+      const selected = environments.find((row) => environmentOptionKey(row) === environmentKey);
+      if (!selected) {
+        setEnvironmentRequired(true);
+        setError("Select an environment to provision.");
+        return;
+      }
+      if (draftId) {
+        try {
+          await updateDeployDraft(draftId, planFor("launch", blueprint), {
+            projectId: selected.project_id,
+            environmentId: selected.id,
+          });
           router.push(deployStepPath(draftId, "launch"));
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "Could not save this step.");
@@ -388,6 +465,27 @@ export function NewDeploymentForm({
     !enqueueBlocked &&
     repoUrl.trim().length > 0 &&
     (!isControlPlane || (environmentKey.length > 0 && !loadingEnvironments));
+  const copy = deployStepCopy(step, isControlPlane);
+  const selectedEnvironment =
+    environments.find((row) => environmentOptionKey(row) === environmentKey) ?? null;
+  const review =
+    blueprint && step === "launch"
+      ? launchReview({
+          repository: blueprint.repo_url,
+          source: blueprint.source,
+          service: blueprint.build.service,
+          port: blueprint.build.port,
+          selectedAddons,
+          variableCount: countLaunchVariables(
+            fieldValues,
+            redactedKeys,
+            Object.keys(parseDotenvText(envVarsText)),
+          ),
+          environmentLabel: selectedEnvironment
+            ? `${selectedEnvironment.project_slug}/${selectedEnvironment.slug} (${selectedEnvironment.kind}, ${selectedEnvironment.region})`
+            : null,
+        })
+      : null;
 
   if (draftId && !draftReady) {
     return <p className="text-sm text-muted-foreground">Loading draft…</p>;
@@ -397,24 +495,8 @@ export function NewDeploymentForm({
     <Card className="overflow-hidden ring-primary/15">
       <div className="h-1 bg-gradient-to-r from-primary via-runway to-primary/40" />
       <CardHeader className="border-b">
-        <CardTitle>
-          {step === "build" ? "Build" : step === "resources" ? "Databases" : step === "variables" ? "Variables" : step === "launch" ? "Deploy" : "Repository"}
-        </CardTitle>
-        <CardDescription>
-          {step === "build"
-            ? "Detected from the scan. Change the port, and the Compose service when this repository has one."
-            : step === "resources"
-              ? "Databases from the scan. A scan that found none still lets you add Postgres, Redis, or MongoDB."
-              : step === "variables"
-                ? "One field for each key the scan found. A required value that is still empty blocks launch."
-              : step === "launch"
-              ? blueprint && blueprint.env.length > 0
-                ? "Choose the environment. The variables you entered are saved on this draft."
-                : "Environment and variables follow the databases you confirmed."
-              : isControlPlane
-                ? "The GitHub repository to scan. A successful scan opens the build before anything else."
-                : "HTTPS GitHub URL. Validated in the browser, then POSTed to /api/mock/v1/deployments."}
-        </CardDescription>
+        <CardTitle>{copy.title}</CardTitle>
+        <CardDescription>{copy.description}</CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>
         <CardContent className="flex flex-col gap-4 pt-4">
@@ -475,7 +557,7 @@ export function NewDeploymentForm({
               onServiceChange={setServiceDraft}
               portInvalid={portInvalid}
               disabled={submitting || inspecting || enqueueBlocked}
-              confirmed={step === "resources" || step === "variables" || step === "launch"}
+              confirmed={step === "resources" || step === "variables" || step === "target" || step === "launch"}
             />
           ) : null}
           {isControlPlane && blueprint && step === "resources" ? (
@@ -499,7 +581,7 @@ export function NewDeploymentForm({
               disabled={submitting || enqueueBlocked}
             />
           ) : null}
-          {isControlPlane && blueprint && step === "launch" ? (
+          {isControlPlane && blueprint && step === "target" ? (
             <>
               <EnvironmentSelect
                 environments={environments}
@@ -543,6 +625,25 @@ export function NewDeploymentForm({
                 Save entered variables encrypted to this environment for future redeploys
               </label>
             </>
+          ) : null}
+          {review ? (
+            <dl className="grid gap-2 rounded-lg border border-border/80 p-3 text-sm">
+              {(
+                [
+                  ["Repository", review.repository],
+                  ["Build", review.buildSource],
+                  ["Databases", review.addons],
+                  ["Variables", String(review.variableCount)],
+                  ["Environment", review.environment],
+                  ["Save variables", persistEnvVars ? "On this environment" : "This deploy only"],
+                ] as const
+              ).map(([label, value]) => (
+                <div key={label} className="flex items-start justify-between gap-4">
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd className="text-right font-mono text-xs">{value}</dd>
+                </div>
+              ))}
+            </dl>
           ) : null}
           {error ? (
             <p className="text-sm text-destructive" role="alert">
@@ -591,17 +692,13 @@ export function NewDeploymentForm({
               Change databases
             </Button>
           ) : null}
-          {step === "launch" ? (
+          {step === "target" && blueprint ? (
             <Button
               type="button"
               variant="outline"
               size="lg"
               onClick={() => {
-                if (!blueprint) {
-                  setStep("resources");
-                  return;
-                }
-                const previous = stepBeforeLaunch(blueprint.env.length);
+                const previous = stepBeforeTarget(blueprint.env.length);
                 if (draftId) {
                   void updateDeployDraft(draftId, planFor(previous, blueprint))
                     .then(() => {
@@ -615,7 +712,29 @@ export function NewDeploymentForm({
                 setStep(previous);
               }}
             >
-              {blueprint && blueprint.env.length > 0 ? "Change variables" : "Change databases"}
+              {blueprint.env.length > 0 ? "Change variables" : "Change databases"}
+            </Button>
+          ) : null}
+          {step === "launch" ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={() => {
+                if (draftId && blueprint) {
+                  void updateDeployDraft(draftId, planFor("target", blueprint))
+                    .then(() => {
+                      router.push(deployStepPath(draftId, "target"));
+                    })
+                    .catch((cause: unknown) => {
+                      setError(cause instanceof Error ? cause.message : "Could not save this step.");
+                    });
+                  return;
+                }
+                setStep("target");
+              }}
+            >
+              Change target
             </Button>
           ) : null}
           {isControlPlane && !blueprint ? (
@@ -627,7 +746,7 @@ export function NewDeploymentForm({
               {inspecting ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Search data-icon="inline-start" />}
               {inspecting ? "Scanning…" : "Scan repository"}
             </Button>
-          ) : isControlPlane && (step === "build" || step === "resources" || step === "variables") ? (
+          ) : isControlPlane && (step === "build" || step === "resources" || step === "variables" || step === "target") ? (
             <Button type="submit" size="lg" disabled={submitting || inspecting || enqueueBlocked}>
               Continue
             </Button>
