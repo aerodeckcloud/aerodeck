@@ -182,9 +182,19 @@ def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> N
     (berry_dir / "yarn.lock").write_text("__metadata:\n  version: 8\n", encoding="utf-8")
     berry = detect_dockerfile_template(berry_dir)
     assert berry is not None
-    assert "yarn plugin import workspace-tools" in berry.contents
-    assert "yarn workspaces focus --production" in berry.contents
-    assert "yarn install --immutable" not in berry.contents
+    assert "yarn install --immutable" in berry.contents
+    assert "workspaces focus" not in berry.contents
+
+    workspace_dir = tmp_path / "workspaces"
+    workspace_dir.mkdir()
+    (workspace_dir / "package.json").write_text(
+        '{"workspaces":["packages/*"],"scripts":{"start":"node index.js"}}', encoding="utf-8"
+    )
+    (workspace_dir / "yarn.lock").write_text("__metadata:\n  version: 8\n", encoding="utf-8")
+    workspace = detect_dockerfile_template(workspace_dir)
+    assert workspace is not None
+    assert "yarn workspaces focus --production" in workspace.contents
+    assert "yarn install --immutable" not in workspace.contents
 
 
 def test_root_dockerfile_is_not_replaced_by_a_node_generator(tmp_path: Path) -> None:

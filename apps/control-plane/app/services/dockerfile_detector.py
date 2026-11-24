@@ -85,6 +85,16 @@ def _yarn_classic(checkout: Path) -> bool:
     return "yarn lockfile v1" in text
 
 
+def _yarn_workspaces(package: dict[str, Any]) -> bool:
+    workspaces = package.get("workspaces")
+    if isinstance(workspaces, list):
+        return any(isinstance(item, str) and item.strip() for item in workspaces)
+    if isinstance(workspaces, dict):
+        packages = workspaces.get("packages")
+        return isinstance(packages, list) and any(isinstance(item, str) and item.strip() for item in packages)
+    return False
+
+
 def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
     """Install with the lockfile's package manager, then run start as the node user."""
     build = _script(package, "build") is not None
@@ -102,12 +112,11 @@ def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
             install = "yarn install --frozen-lockfile" if build else "yarn install --frozen-lockfile --production"
         else:
             lines.append(f"RUN corepack enable && corepack prepare yarn@{_YARN_BERRY_VERSION} --activate")
-            # Berry has no --production install. workspaces focus is the supported production set.
-            install = (
-                "yarn install --immutable"
-                if build
-                else "yarn plugin import workspace-tools && yarn workspaces focus --production"
-            )
+            # focus --production requires a workspaces field. A single package uses an immutable install.
+            if build or not _yarn_workspaces(package):
+                install = "yarn install --immutable" if build else "NODE_ENV=production yarn install --immutable"
+            else:
+                install = "yarn plugin import workspace-tools && yarn workspaces focus --production"
         lines.append("COPY package.json yarn.lock ./")
         lines.append(f"RUN {install}")
         build_line = "RUN yarn run build"
