@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings
-from app.core.db import SessionLocal
+from app.core.db import SessionLocal, create_engine
 from app.models.certificate import Certificate, CertificateStatus
 from app.models.dns_record import DnsRecord, DnsRecordStatus, DnsRecordType
 from app.models.project import Environment, EnvironmentKind, Project
@@ -23,7 +26,8 @@ from app.services.container_logs import (
 from app.services.docker_policy import CommandResult, LogSink
 from app.repositories.routes import RouteRepository
 from app.services.dns_records import MemoryDnsRecords
-from app.services.docker_routes import _ensure_dns_and_tls, upsert_environment_route
+from app.services.docker_routes import _ensure_dns_and_tls, lookup_enabled_route_hostname, upsert_environment_route
+from app.services.provisioning import PermanentJobError
 
 
 class FakeLogsRunner:
@@ -229,6 +233,70 @@ async def test_redeploy_keeps_the_old_hostname_and_refreshes_its_backend(
     assert rows[0].enabled is True
     assert set(publisher.published) == {old}
     assert publisher.published[old].data == "edge.aerodeckcloud.com"
+
+
+def test_lookup_enabled_route_hostname_returns_the_live_hostname(
+    app: object, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ = app
+    hostname = "portal-dev.dev.app.aero-deck.app"
+
+    async def seed() -> tuple[uuid.UUID, uuid.UUID]:
+        assert settings.database_url is not None
+        engine = create_engine(settings.database_url, poolclass=NullPool)
+        sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+        try:
+            async with sessions() as session:
+                project = Project(slug="portal-lookup", name="Portal")
+                session.add(project)
+                await session.flush()
+                env = Environment(
+                    project_id=project.id, slug="dev", name="Dev", kind=EnvironmentKind.dev, region="ams3"
+                )
+                session.add(env)
+                await session.flush()
+                session.add(
+                    Route(
+                        project_id=project.id,
+                        environment_id=env.id,
+                        hostname=hostname,
+                        path_prefix="/",
+                        backend_host="10.41.0.2",
+                        backend_port=10000,
+                        entrypoint="web",
+                        enabled=True,
+                    )
+                )
+                await session.commit()
+                return project.id, env.id
+        finally:
+            await engine.dispose()
+
+    project_id, environment_id = asyncio.run(seed())
+    monkeypatch.setattr("app.services.docker_routes.get_settings", lambda: settings)
+
+    assert lookup_enabled_route_hostname(project_id=project_id, environment_id=environment_id) == hostname
+
+
+def test_lookup_enabled_route_hostname_fails_closed_when_the_engine_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.docker_routes.get_settings",
+        lambda: Settings(
+            _env_file=None,
+            auth_signing_key="a" * 32,
+            database_url="postgresql+asyncpg://unused",
+        ),
+    )
+
+    def broken(_url: str, *, poolclass: object = None) -> object:
+        _ = poolclass
+        raise RuntimeError("engine down")
+
+    monkeypatch.setattr("app.services.docker_routes.create_engine", broken)
+    with pytest.raises(PermanentJobError, match="Could not read existing routes"):
+        lookup_enabled_route_hostname(project_id=uuid.uuid4(), environment_id=uuid.uuid4())
 
 
 @pytest.mark.asyncio

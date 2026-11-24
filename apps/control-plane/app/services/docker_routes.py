@@ -167,10 +167,10 @@ async def _enabled_route_hostname(
     try:
         async with sessions() as session:
             rows = await RouteRepository(session).list_for_environment(project_id, environment_id)
+            enabled = [row.hostname for row in rows if row.enabled]
+            return enabled[0] if enabled else None
     finally:
         await engine.dispose()
-    enabled = [row for row in rows if row.enabled]
-    return enabled[0].hostname if enabled else None
 
 
 def lookup_enabled_route_hostname(*, project_id: uuid.UUID, environment_id: uuid.UUID) -> str | None:

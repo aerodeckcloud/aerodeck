@@ -56,11 +56,6 @@ class RouteHostnameLookup(Protocol):
     def __call__(self, *, project_id: uuid.UUID, environment_id: uuid.UUID) -> str | None: ...
 
 
-def _no_stored_route(*, project_id: uuid.UUID, environment_id: uuid.UUID) -> str | None:
-    _ = (project_id, environment_id)
-    return None
-
-
 @dataclass(frozen=True, slots=True)
 class DockerProvisioner:
     docker_bin: str
@@ -84,7 +79,7 @@ class DockerProvisioner:
     port_allocator: PortAllocator = find_available_port
     health_checker: HealthChecker = wait_for_tcp_health
     route_registrar: RouteRegistrar | None = upsert_environment_route_sync
-    route_hostname_lookup: RouteHostnameLookup = _no_stored_route
+    route_hostname_lookup: RouteHostnameLookup = lookup_enabled_route_hostname
 
     @classmethod
     def from_settings(
