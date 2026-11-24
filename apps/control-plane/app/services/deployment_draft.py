@@ -237,12 +237,12 @@ class DeploymentDraftService:
         stored = await self._deployments.get(deployment_id)
         self.require_owner(stored, actor_user_id)
         repo_url = stored.repo_url
-        previous = _load_security(stored)
         await self._deployments.commit()
-        record = _keep_acknowledgement(previous, await self._scan_record(repo_url))
-        record = record.model_copy(update={"scanned_at": datetime.now(UTC)})
+        scanned = await self._scan_record(repo_url)
         stored = await self._deployments.get(deployment_id)
         self.require_owner(stored, actor_user_id)
+        record = _keep_acknowledgement(_load_security(stored), scanned)
+        record = record.model_copy(update={"scanned_at": datetime.now(UTC)})
         stored.draft_security = record.model_dump_json()
         await self._deployments.commit()
         return stored, record

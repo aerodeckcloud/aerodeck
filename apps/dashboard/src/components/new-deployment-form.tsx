@@ -150,6 +150,8 @@ export function NewDeploymentForm({
   const [securityLoading, setSecurityLoading] = useState(step === "security" && Boolean(draftId));
   const [securityAck, setSecurityAck] = useState(false);
   const [securityAttempt, setSecurityAttempt] = useState(0);
+  const securityScanGeneration = useRef(0);
+  const securityScanInFlight = useRef(false);
   const mountedRef = useRef(true);
   const holdTimerRef = useRef<number | null>(null);
   const holdSettleRef = useRef<(() => void) | null>(null);
@@ -262,27 +264,31 @@ export function NewDeploymentForm({
     if (step !== "security" || !draftId) {
       return;
     }
-    let cancelled = false;
+    const generation = ++securityScanGeneration.current;
+    securityScanInFlight.current = true;
     void scanDeploySecurity(draftId)
       .then((report) => {
-        if (cancelled) {
+        if (!mountedRef.current || generation !== securityScanGeneration.current) {
           return;
         }
         setSecurityReport(report);
         setSecurityAck(report.acknowledgement !== null);
         setSecurityLoading(false);
         setError(null);
+        securityScanInFlight.current = false;
       })
       .catch((cause: unknown) => {
-        if (cancelled) {
+        if (!mountedRef.current || generation !== securityScanGeneration.current) {
           return;
         }
         setSecurityReport(null);
         setSecurityLoading(false);
         setError(cause instanceof Error ? cause.message : "The dependency scan did not complete.");
+        securityScanInFlight.current = false;
       });
     return () => {
-      cancelled = true;
+      securityScanGeneration.current += 1;
+      securityScanInFlight.current = false;
     };
   }, [step, draftId, securityAttempt]);
 
@@ -398,6 +404,11 @@ export function NewDeploymentForm({
         return;
       }
       if (draftId) {
+        if (securityScanInFlight.current) {
+          return;
+        }
+        securityScanGeneration.current += 1;
+        setSubmitting(true);
         try {
           if (needsAck && !securityReport.acknowledgement) {
             await acknowledgeDeploySecurity(
@@ -409,6 +420,10 @@ export function NewDeploymentForm({
           router.push(deployStepPath(draftId, "resources"));
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "Could not save this step.");
+        } finally {
+          if (mountedRef.current) {
+            setSubmitting(false);
+          }
         }
         return;
       }
@@ -700,10 +715,13 @@ export function NewDeploymentForm({
               acknowledge={securityAck}
               onAcknowledge={setSecurityAck}
               onRetry={() => {
+                if (submitting || securityScanInFlight.current) {
+                  return;
+                }
                 setSecurityLoading(true);
                 setSecurityAttempt((attempt) => attempt + 1);
               }}
-              disabled={submitting || enqueueBlocked}
+              disabled={submitting || enqueueBlocked || securityLoading}
             />
           ) : null}
           {isControlPlane && blueprint && step === "resources" ? (

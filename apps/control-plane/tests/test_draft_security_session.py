@@ -2,9 +2,11 @@
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from app.models.deployment import DeploymentStatus
+from app.schemas.draft_security import DraftSecurityRecord, SecurityFinding
 from app.services import deployment_draft as draft_module
 from app.services.deployment_draft import DeploymentDraftService
 from app.services.manifest_packages import ManifestRead, PackageQuery
@@ -58,6 +60,43 @@ async def test_the_scan_releases_the_session_before_reading_the_repository() -> 
     assert record.outcome == "no_manifest"
     assert deployments.events == ["get", "commit", "read", "get", "commit"]
     assert deployments.row.draft_security is not None
+
+
+async def test_a_rescan_keeps_an_acknowledgement_saved_while_it_ran() -> None:
+    deployments = _Deployments()
+    finding = SecurityFinding(
+        severity="high",
+        package="lodash",
+        advisory_id="GHSA-test",
+        summary="Prototype pollution in lodash",
+    )
+
+    class _AckDuringRead:
+        def read(self, repo_url: str) -> ManifestRead:
+            saved = DraftSecurityRecord(
+                outcome="findings",
+                findings=[finding],
+                acknowledgement="findings",
+                acknowledged_at=datetime.now(UTC),
+                acknowledged_by=_ACTOR,
+                scanned_at=datetime.now(UTC),
+            )
+            deployments.row.draft_security = saved.model_dump_json()
+            return ManifestRead(
+                found=True,
+                packages=(PackageQuery("npm", "lodash", "4.17.21"),),
+                unpinned=0,
+            )
+
+    class _SameFinding:
+        async def query(self, packages: list[PackageQuery]) -> list[SecurityFinding]:
+            return [finding]
+
+    service = _service(deployments, _AckDuringRead(), _SameFinding())
+    record = await service.scan_security(deployments.row.id, _ACTOR)
+    assert record.outcome == "findings"
+    assert record.acknowledgement == "findings"
+    assert record.acknowledged_by == _ACTOR
 
 
 async def test_an_advisory_deadline_is_an_incomplete_scan(monkeypatch) -> None:
