@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Protocol
 
 _MAX_BYTES = 512 * 1024
-_VERSION = re.compile(r"(\d+\.\d+\.\d+)")
+_EXACT_VERSION = re.compile(r"^v?(\d+\.\d+\.\d+)$", re.IGNORECASE)
+_EXACT_EQUAL = re.compile(r"^==\s*(\d+\.\d+\.\d+)$")
 _PY_NAME = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.-]*)")
 _SKIP_VERSION = ("workspace:", "file:", "git+", "git:", "github:", "http://", "https://", "link:")
 
@@ -83,10 +84,14 @@ def _dedupe(packages: list[PackageQuery]) -> list[PackageQuery]:
 
 
 def _pinned_version(raw: str) -> str | None:
+    """An exact release, such as ``4.17.21``, ``==4.2.1``, or Go ``v1.2.3``.
+
+    A range (``^``, ``~``, ``>=``, and the rest) is not the version that will be installed.
+    """
     text = raw.strip()
     if not text or any(token in text for token in _SKIP_VERSION):
         return None
-    match = _VERSION.search(text)
+    match = _EXACT_VERSION.match(text) or _EXACT_EQUAL.match(text)
     return match.group(1) if match else None
 
 
