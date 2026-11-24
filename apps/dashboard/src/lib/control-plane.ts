@@ -1618,8 +1618,14 @@ export type ControlPlaneDraft = {
   plan: import("@/lib/deploy-draft").DeployDraftPlan;
 };
 
-function isDraftStep(value: unknown): value is "build" | "resources" | "variables" | "launch" {
-  return value === "build" || value === "resources" || value === "variables" || value === "launch";
+function isDraftStep(value: unknown): value is "build" | "resources" | "variables" | "target" | "launch" {
+  return (
+    value === "build" ||
+    value === "resources" ||
+    value === "variables" ||
+    value === "target" ||
+    value === "launch"
+  );
 }
 
 function parseControlPlaneDraft(value: unknown): ControlPlaneDraft {

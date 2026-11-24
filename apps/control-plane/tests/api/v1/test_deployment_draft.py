@@ -336,3 +336,18 @@ async def test_variables_step_is_a_saved_draft_page(client: AsyncClient, auth: d
     assert updated.status_code == 200, updated.text
     assert updated.json()["deployment"]["draft_step"] == "variables"
     assert updated.json()["plan"]["step"] == "variables"
+
+
+async def test_target_step_is_a_saved_draft_page(client: AsyncClient, auth: dict[str, str]) -> None:
+    owner = await _user(client, auth, "draft-target@aerodeck.test")
+    created = await client.post(
+        f"{DEPLOYMENTS}/draft", json={"repo_url": REPO, "plan": _plan()}, headers=owner
+    )
+    assert created.status_code == 201, created.text
+    draft_id = created.json()["deployment"]["id"]
+    updated = await client.put(
+        f"{DEPLOYMENTS}/{draft_id}/draft", json={"plan": _plan(step="target")}, headers=owner
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["deployment"]["draft_step"] == "target"
+    assert updated.json()["plan"]["step"] == "target"

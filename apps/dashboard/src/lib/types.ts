@@ -65,7 +65,7 @@ export type Deployment = {
   approved_at?: string | null;
   status: DeploymentStatus;
   /** Last confirmed deploy step while status is draft (#343). */
-  draft_step?: "build" | "resources" | "variables" | "launch" | null;
+  draft_step?: "build" | "resources" | "variables" | "target" | "launch" | null;
   /** Sorted names from the encrypted release snapshot. Null when none (#273). */
   snapshot_variable_names?: string[] | null;
   /** Set on rollback responses: true when the snapshot was applied (#273). */

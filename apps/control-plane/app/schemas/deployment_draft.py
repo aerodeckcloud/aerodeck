@@ -9,7 +9,7 @@ from app.core.github import parse_github_repo
 from app.schemas.blueprint import AddonType, DeploymentBlueprint
 from app.schemas.deployment import DeploymentRead
 
-DraftStep = Literal["build", "resources", "variables", "launch"]
+DraftStep = Literal["build", "resources", "variables", "target", "launch"]
 _ENV_KEY = r"^[A-Za-z_][A-Za-z0-9_]{0,127}$"
 
 
