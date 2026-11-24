@@ -98,6 +98,7 @@ def _yarn_workspaces(package: dict[str, Any]) -> bool:
 def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
     """Install with the lockfile's package manager, then run start as the node user."""
     build = _script(package, "build") is not None
+    copy_source_later = True
     lines = ["FROM node:22-alpine", "WORKDIR /app"]
     if _regular_file(checkout, "pnpm-lock.yaml"):
         lines.append(f"RUN npm install -g pnpm@{_PNPM_VERSION}")
@@ -113,11 +114,20 @@ def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
         else:
             lines.append(f"RUN corepack enable && corepack prepare yarn@{_YARN_BERRY_VERSION} --activate")
             # focus --production requires a workspaces field. A single package uses an immutable install.
-            if build or not _yarn_workspaces(package):
-                install = "yarn install --immutable" if build else "NODE_ENV=production yarn install --immutable"
+            # Workspace manifests must be present before that install, so the tree is copied once here.
+            if _yarn_workspaces(package):
+                lines.append("COPY . .")
+                copy_source_later = False
+                install = (
+                    "yarn install --immutable"
+                    if build
+                    else "yarn plugin import workspace-tools && yarn workspaces focus --production"
+                )
             else:
-                install = "yarn plugin import workspace-tools && yarn workspaces focus --production"
-        lines.append("COPY package.json yarn.lock ./")
+                lines.append("COPY package.json yarn.lock ./")
+                install = "yarn install --immutable" if build else "NODE_ENV=production yarn install --immutable"
+        if _yarn_classic(checkout):
+            lines.append("COPY package.json yarn.lock ./")
         lines.append(f"RUN {install}")
         build_line = "RUN yarn run build"
         start = 'CMD ["yarn", "start"]'
@@ -127,7 +137,8 @@ def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
         lines.append(f"RUN {install}")
         build_line = "RUN npm run build"
         start = 'CMD ["npm", "start"]'
-    lines.append("COPY . .")
+    if copy_source_later:
+        lines.append("COPY . .")
     if build:
         lines.append(build_line)
     lines.extend(

@@ -193,8 +193,22 @@ def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> N
     (workspace_dir / "yarn.lock").write_text("__metadata:\n  version: 8\n", encoding="utf-8")
     workspace = detect_dockerfile_template(workspace_dir)
     assert workspace is not None
-    assert "yarn workspaces focus --production" in workspace.contents
+    assert workspace.contents.index("COPY . .") < workspace.contents.index("yarn workspaces focus --production")
+    assert workspace.contents.count("COPY . .") == 1
     assert "yarn install --immutable" not in workspace.contents
+
+    built_dir = tmp_path / "workspace_build"
+    built_dir.mkdir()
+    (built_dir / "package.json").write_text(
+        '{"workspaces":["packages/*"],"scripts":{"build":"tsc","start":"node index.js"}}',
+        encoding="utf-8",
+    )
+    (built_dir / "yarn.lock").write_text("__metadata:\n  version: 8\n", encoding="utf-8")
+    built = detect_dockerfile_template(built_dir)
+    assert built is not None
+    assert built.contents.index("COPY . .") < built.contents.index("yarn install --immutable")
+    assert built.contents.count("COPY . .") == 1
+    assert built.contents.index("yarn install --immutable") < built.contents.index("RUN yarn run build")
 
 
 def test_root_dockerfile_is_not_replaced_by_a_node_generator(tmp_path: Path) -> None:
