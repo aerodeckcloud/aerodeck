@@ -7,3 +7,5 @@ control_plane_image    = "registry.digitalocean.com/aerodeck/control-plane:main"
 postgres_size          = "db-s-1vcpu-1gb"
 redis_size             = "db-s-1vcpu-1gb"
 managed_cache_enabled  = false
+product_dns_zone       = ""
+# Leave empty. Dev owns edge.aerodeckcloud.com. A second environment must not replace that A record.

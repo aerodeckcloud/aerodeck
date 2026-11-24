@@ -118,4 +118,5 @@ module "edge" {
   control_plane_private_ipv4 = module.runtime.droplet_private_ipv4
   traefik_image              = var.traefik_image
   dns_zone                   = var.dns_zone
+  product_dns_zone           = var.product_dns_zone
 }

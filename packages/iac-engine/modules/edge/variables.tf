@@ -69,3 +69,19 @@ variable "dns_zone" {
   description = "DigitalOcean Domain name that already exists (aero-deck.app). Used for the edge A record."
   type        = string
 }
+
+variable "product_dns_zone" {
+  description = "Extra DigitalOcean domain that already exists. Empty skips the second edge A record."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.product_dns_zone == "" || can(regex("^[a-z0-9.-]+\\.[a-z]{2,}$", var.product_dns_zone))
+    error_message = "product_dns_zone must be empty or a DNS name such as aerodeckcloud.com."
+  }
+
+  validation {
+    condition     = var.product_dns_zone == "" || var.product_dns_zone != var.dns_zone
+    error_message = "product_dns_zone must be a different domain from dns_zone."
+  }
+}

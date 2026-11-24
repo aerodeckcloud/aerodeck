@@ -33,6 +33,7 @@ def main() -> None:
     _must(MODULE, 'port_range       = "80"', "modules/edge/main.tf")
     _must(MODULE, 'port_range       = "443"', "modules/edge/main.tf")
     _must(MODULE, 'resource "digitalocean_record" "edge"', "modules/edge/main.tf")
+    _must(MODULE, 'resource "digitalocean_record" "product_edge"', "modules/edge/main.tf")
     _must(MODULE, 'resource "digitalocean_project_resources" "edge"', "modules/edge/main.tf")
     _must(MODULE, "digitalocean_droplet.edge.urn", "modules/edge/main.tf")
     _must(MODULE, "ignore_changes = [ssh_keys]", "modules/edge/main.tf")
@@ -65,8 +66,37 @@ def main() -> None:
 
     _must(MODULE_OUTPUTS, "digitalocean_droplet.edge.ipv4_address", "modules/edge/outputs.tf")
     _must(VARS, "dns_zone", "variables.tf")
+    _must(VARS, "product_dns_zone", "variables.tf")
     _must(VARS, "traefik_image", "variables.tf")
     _must(VARS, "aero-deck.app", "variables.tf")
+    _must(MAIN, "product_dns_zone           = var.product_dns_zone", "main.tf")
+
+    edge_record = MODULE.split('resource "digitalocean_record" "edge"')[1].split("resource ")[0]
+    product_record = MODULE.split('resource "digitalocean_record" "product_edge"')[1].split("resource ")[0]
+    if "var.dns_zone" not in edge_record:
+        raise SystemExit("the aero-deck.app edge record must stay on var.dns_zone")
+    if "var.dns_zone" in product_record:
+        raise SystemExit("the product edge record must not use the aero-deck.app zone")
+    if "digitalocean_domain" in MODULE:
+        raise SystemExit("do not create aerodeckcloud.com; the zone already exists")
+    if 'name   = "edge"' not in product_record:
+        raise SystemExit("the product record must be the edge name")
+    if 'name   = "@"' in product_record:
+        raise SystemExit("do not publish an apex address for the product zone")
+    _must(product_record, "for_each = toset(compact([var.product_dns_zone]))", "modules/edge/main.tf")
+
+    distinct_zone = 'var.product_dns_zone == "" || var.product_dns_zone != var.dns_zone'
+    _must(VARS, distinct_zone, "variables.tf")
+    _must(CHILD, distinct_zone, "modules/edge")
+
+    dev_tfvars = (ROOT / "envs" / "dev.tfvars").read_text(encoding="utf-8")
+    staging_tfvars = (ROOT / "envs" / "staging.tfvars").read_text(encoding="utf-8")
+    prod_tfvars = (ROOT / "envs" / "prod.tfvars").read_text(encoding="utf-8")
+    zone_assignment = re.compile(r'product_dns_zone\s*=\s*"aerodeckcloud.com"')
+    if zone_assignment.search(dev_tfvars) is None:
+        raise SystemExit("envs/dev.tfvars must set product_dns_zone to aerodeckcloud.com")
+    if zone_assignment.search(staging_tfvars) or zone_assignment.search(prod_tfvars):
+        raise SystemExit("only dev may own edge.aerodeckcloud.com")
     print("edge module shape looks right")
 
 

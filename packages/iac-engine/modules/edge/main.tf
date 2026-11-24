@@ -88,6 +88,19 @@ resource "digitalocean_record" "edge" {
   ttl    = 300
 }
 
+# Second zone, owned by whichever environment sets product_dns_zone (dev).
+# The domain itself already exists. Do not create it here, and do not publish
+# an apex address: dev.aerodeckcloud.com and the apex are not the console yet.
+resource "digitalocean_record" "product_edge" {
+  for_each = toset(compact([var.product_dns_zone]))
+
+  domain = each.value
+  type   = "A"
+  name   = "edge"
+  value  = digitalocean_droplet.edge.ipv4_address
+  ttl    = 300
+}
+
 resource "digitalocean_project_resources" "edge" {
   project   = var.project_id
   resources = [digitalocean_droplet.edge.urn]

@@ -274,6 +274,22 @@ variable "dns_zone" {
   }
 }
 
+variable "product_dns_zone" {
+  description = "Extra DigitalOcean domain that already exists, such as aerodeckcloud.com. Empty skips it. Terraform adds edge.<zone> A beside dns_zone and does not replace that record. Set this on one environment only."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.product_dns_zone == "" || can(regex("^[a-z0-9.-]+\\.[a-z]{2,}$", var.product_dns_zone))
+    error_message = "product_dns_zone must be empty or a DNS name such as aerodeckcloud.com."
+  }
+
+  validation {
+    condition     = var.product_dns_zone == "" || var.product_dns_zone != var.dns_zone
+    error_message = "product_dns_zone must be a different domain from dns_zone."
+  }
+}
+
 variable "traefik_image" {
   description = "Pinned Traefik v3 image for the edge Droplet. Never latest."
   type        = string
