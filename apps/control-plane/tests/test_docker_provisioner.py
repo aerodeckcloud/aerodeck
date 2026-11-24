@@ -471,6 +471,45 @@ def test_select_provisioner_respects_backend_setting() -> None:
     assert docker_prov.route_hostname_lookup is lookup_enabled_route_hostname
 
 
+def test_from_settings_accepts_an_injected_route_hostname_lookup() -> None:
+    stub = lambda **_kw: "payments-dev.dev.app.aero-deck.app"
+    provisioner = DockerProvisioner.from_settings(
+        Settings(auth_signing_key="a" * 32, provisioner_backend="docker"),
+        route_hostname_lookup=stub,
+    )
+    assert provisioner.route_hostname_lookup is stub
+
+
+def test_register_fails_closed_when_the_stored_hostname_changes() -> None:
+    runner = FakeCommandRunner(create_dockerfile=True)
+    registered: list[tuple[str, str, int]] = []
+    seen = {"n": 0}
+
+    def drifting_lookup(**_kw: object) -> str | None:
+        seen["n"] += 1
+        return "payments-dev.dev.app.aero-deck.app" if seen["n"] == 1 else "other-dev.dev.aerodeckcloud.com"
+
+    provisioner = _make_provisioner(
+        runner,
+        port=10555,
+        route_base_domain="dev.aerodeckcloud.com",
+        route_registrar=lambda **kw: registered.append((kw["hostname"], kw["backend_host"], kw["backend_port"])),
+        route_hostname_lookup=drifting_lookup,
+    )
+
+    with pytest.raises(PermanentJobError, match="hostname changed"):
+        provisioner.provision(
+            project_id="f27ee337-a7d0-4d4d-8180-22579d6a2983",
+            environment_id="bacbb040-41fa-4623-8e4b-02be2f7abf7b",
+            project_slug="payments",
+            environment_slug="dev",
+            repo_url="https://github.com/mangatohjunior/demo-app",
+        )
+
+    assert registered == []
+    assert any(c[:2] == ["docker", "rm"] for c in runner.calls)
+
+
 def test_provision_rejects_host_network_and_forbidden_dockerfile_directives() -> None:
     base_kwargs = {"auth_signing_key": "a" * 32}
     with pytest.raises(PermanentJobError, match="host networking is forbidden"):

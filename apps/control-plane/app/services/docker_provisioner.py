@@ -85,6 +85,7 @@ class DockerProvisioner:
     def from_settings(
         cls, settings: Settings, runner: CommandRunner | None = None, port_allocator: PortAllocator | None = None,
         health_checker: HealthChecker | None = None, route_registrar: RouteRegistrar | None = upsert_environment_route_sync,
+        route_hostname_lookup: RouteHostnameLookup | None = None,
     ) -> DockerProvisioner:
         return cls(
             docker_bin=validate_binary(settings.docker_bin, "docker_bin"), git_bin=validate_binary(settings.git_bin, "git_bin"),
@@ -100,7 +101,7 @@ class DockerProvisioner:
             route_base_domain=settings.docker_route_base_domain,
             port_allocator=port_allocator or find_available_port, health_checker=health_checker or wait_for_tcp_health,
             route_registrar=route_registrar,
-            route_hostname_lookup=lookup_enabled_route_hostname,
+            route_hostname_lookup=route_hostname_lookup or lookup_enabled_route_hostname,
         )
 
     def _docker_env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -113,7 +114,13 @@ class DockerProvisioner:
     def _route_hostname(
         self, project_slug: str, environment_slug: str, project_id: uuid.UUID, environment_id: uuid.UUID,
     ) -> str | None:
-        """Use the hostname already serving this environment, otherwise the current base domain."""
+        """Use the hostname already serving this environment, otherwise the current base domain.
+
+        Deploys for one environment run one at a time (wait / override queue). The
+        hostname is fixed here for ``AERODECK_PUBLIC_URL`` and checked again before
+        route registration so a concurrent mutation cannot leave the container on
+        a different name than Traefik.
+        """
         if not self.route_base_domain or self.route_registrar is None:
             return None
         desired = route_hostname_for(
@@ -121,6 +128,15 @@ class DockerProvisioner:
         )
         existing = self.route_hostname_lookup(project_id=project_id, environment_id=environment_id)
         return existing or desired
+
+    def _confirm_route_hostname(self, *, project_id: uuid.UUID, environment_id: uuid.UUID, hostname: str) -> None:
+        """Fail closed when the stored hostname changed after ``AERODECK_PUBLIC_URL`` was written."""
+        current = self.route_hostname_lookup(project_id=project_id, environment_id=environment_id)
+        if current is not None and current != hostname:
+            raise PermanentJobError(
+                f"environment hostname changed to {current!r} while deploying {hostname!r}; "
+                "redeploy after the other job finishes"
+            )
 
     def provision(
         self, *, project_id: str, environment_id: str, project_slug: str = "", environment_slug: str = "",
@@ -304,6 +320,7 @@ class DockerProvisioner:
         if route_hostname and self.route_registrar is not None:
             emit(f"Registering Traefik route https://{route_hostname} -> {self.bind_host}:{host_port}...")
             try:
+                self._confirm_route_hostname(project_id=p_uuid, environment_id=e_uuid, hostname=route_hostname)
                 self.route_registrar(project_id=p_uuid, environment_id=e_uuid, hostname=route_hostname, backend_host=self.bind_host, backend_port=host_port)
             except Exception:
                 self.runner.run([docker_bin, "rm", "-f", candidate], env=docker_env, timeout=30)

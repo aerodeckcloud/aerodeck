@@ -26,7 +26,12 @@ from app.services.container_logs import (
 from app.services.docker_policy import CommandResult, LogSink
 from app.repositories.routes import RouteRepository
 from app.services.dns_records import MemoryDnsRecords
-from app.services.docker_routes import _ensure_dns_and_tls, lookup_enabled_route_hostname, upsert_environment_route
+from app.services.docker_routes import (
+    _ensure_dns_and_tls,
+    lookup_enabled_route_hostname,
+    primary_enabled_route,
+    upsert_environment_route,
+)
 from app.services.provisioning import PermanentJobError
 
 
@@ -233,6 +238,41 @@ async def test_redeploy_keeps_the_old_hostname_and_refreshes_its_backend(
     assert rows[0].enabled is True
     assert set(publisher.published) == {old}
     assert publisher.published[old].data == "edge.aerodeckcloud.com"
+
+
+def test_primary_enabled_route_keeps_the_oldest_enabled_hostname() -> None:
+    older = Route(
+        project_id=uuid.uuid4(),
+        environment_id=uuid.uuid4(),
+        hostname="older.dev.app.aero-deck.app",
+        path_prefix="/",
+        backend_host="10.41.0.2",
+        backend_port=10000,
+        entrypoint="web",
+        enabled=True,
+    )
+    newer = Route(
+        project_id=older.project_id,
+        environment_id=older.environment_id,
+        hostname="newer.dev.aerodeckcloud.com",
+        path_prefix="/",
+        backend_host="10.41.0.2",
+        backend_port=10001,
+        entrypoint="web",
+        enabled=True,
+    )
+    disabled = Route(
+        project_id=older.project_id,
+        environment_id=older.environment_id,
+        hostname="disabled.dev.aerodeckcloud.com",
+        path_prefix="/",
+        backend_host="10.41.0.2",
+        backend_port=10002,
+        entrypoint="web",
+        enabled=False,
+    )
+    assert primary_enabled_route([disabled, older, newer]) is older
+    assert primary_enabled_route([disabled]) is None
 
 
 def test_lookup_enabled_route_hostname_returns_the_live_hostname(

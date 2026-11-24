@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool
@@ -76,6 +77,14 @@ async def _ensure_dns_and_tls(session: AsyncSession, route: Route, cert: Certifi
         logger.warning("auto TLS issuance skipped for %s: %s", route.hostname, type(exc).__name__)
 
 
+def primary_enabled_route(routes: Sequence[Route]) -> Route | None:
+    """Oldest enabled route wins. Callers must pass ``list_for_environment`` order."""
+    for route in routes:
+        if route.enabled:
+            return route
+    return None
+
+
 async def _select_environment_route(
     routes: RouteRepository,
     *,
@@ -98,21 +107,21 @@ async def _select_environment_route(
     if matched is not None:
         primary = matched
         primary.enabled = True
-    elif enabled:
-        primary = enabled[0]
     else:
-        primary = await routes.add(
-            Route(
-                project_id=project_id,
-                environment_id=environment_id,
-                hostname=hostname,
-                path_prefix="/",
-                backend_host=backend_host,
-                backend_port=backend_port,
-                entrypoint="web",
-                enabled=True,
+        primary = primary_enabled_route(owned)
+        if primary is None:
+            primary = await routes.add(
+                Route(
+                    project_id=project_id,
+                    environment_id=environment_id,
+                    hostname=hostname,
+                    path_prefix="/",
+                    backend_host=backend_host,
+                    backend_port=backend_port,
+                    entrypoint="web",
+                    enabled=True,
+                )
             )
-        )
     primary.backend_host = backend_host
     primary.backend_port = backend_port
     for route in enabled:
@@ -167,8 +176,8 @@ async def _enabled_route_hostname(
     try:
         async with sessions() as session:
             rows = await RouteRepository(session).list_for_environment(project_id, environment_id)
-            enabled = [row.hostname for row in rows if row.enabled]
-            return enabled[0] if enabled else None
+            primary = primary_enabled_route(rows)
+            return primary.hostname if primary is not None else None
     finally:
         await engine.dispose()
 
