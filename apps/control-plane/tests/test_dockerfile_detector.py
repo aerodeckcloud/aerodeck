@@ -147,9 +147,9 @@ def test_node_build_script_installs_dev_dependencies_and_runs_before_start(tmp_p
     assert detected is not None and detected.error is None
     text = detected.contents
     assert "npm install --no-audit --no-fund" in text
-    assert "--omit=dev" not in text
-    assert "RUN npm run build" in text
-    assert text.index("RUN npm run build") < text.index('CMD ["npm", "start"]')
+    assert "npm install --omit=dev" not in text
+    assert text.index("RUN npm run build") < text.index("RUN npm prune --omit=dev")
+    assert text.index("RUN npm prune --omit=dev") < text.index('CMD ["npm", "start"]')
     assert "ENV PORT=3000 HOST=0.0.0.0" in text
     assert "USER node" in text
 
@@ -163,6 +163,19 @@ def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> N
     assert pnpm is not None
     assert "pnpm install --frozen-lockfile --prod" in pnpm.contents
     assert "npm install --omit=dev" not in pnpm.contents
+    assert "pnpm prune" not in pnpm.contents
+
+    pnpm_build = tmp_path / "pnpm_build"
+    pnpm_build.mkdir()
+    (pnpm_build / "package.json").write_text(
+        '{"scripts":{"build":"tsc","start":"node dist/index.js"}}', encoding="utf-8"
+    )
+    (pnpm_build / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+    built_pnpm = detect_dockerfile_template(pnpm_build)
+    assert built_pnpm is not None
+    assert "pnpm install --frozen-lockfile --prod" not in built_pnpm.contents
+    assert built_pnpm.contents.index("pnpm install --frozen-lockfile") < built_pnpm.contents.index("RUN pnpm run build")
+    assert built_pnpm.contents.index("RUN pnpm run build") < built_pnpm.contents.index("RUN pnpm prune --prod")
 
     yarn_dir = tmp_path / "yarn"
     yarn_dir.mkdir()
@@ -172,9 +185,11 @@ def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> N
     (yarn_dir / "yarn.lock").write_text("# yarn lockfile v1\n", encoding="utf-8")
     yarn = detect_dockerfile_template(yarn_dir)
     assert yarn is not None
-    assert "yarn install --frozen-lockfile" in yarn.contents
-    assert "--production" not in yarn.contents
-    assert "RUN yarn run build" in yarn.contents
+    assert yarn.contents.index("RUN yarn install --frozen-lockfile\n") < yarn.contents.index("RUN yarn run build")
+    assert "--production" not in yarn.contents.split("RUN yarn run build", 1)[0]
+    assert yarn.contents.index("RUN yarn run build") < yarn.contents.index(
+        "RUN yarn install --frozen-lockfile --production"
+    )
 
     berry_dir = tmp_path / "berry"
     berry_dir.mkdir()
@@ -184,6 +199,20 @@ def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> N
     assert berry is not None
     assert "yarn install --immutable" in berry.contents
     assert "workspaces focus" not in berry.contents
+
+    berry_build = tmp_path / "berry_build"
+    berry_build.mkdir()
+    (berry_build / "package.json").write_text(
+        '{"scripts":{"build":"tsc","start":"node dist/index.js"}}', encoding="utf-8"
+    )
+    (berry_build / "yarn.lock").write_text("__metadata:\n  version: 8\n", encoding="utf-8")
+    built_berry = detect_dockerfile_template(berry_build)
+    assert built_berry is not None
+    assert built_berry.contents.index("yarn install --immutable") < built_berry.contents.index("RUN yarn run build")
+    assert "NODE_ENV=production" not in built_berry.contents.split("RUN yarn run build", 1)[0]
+    assert built_berry.contents.index("RUN yarn run build") < built_berry.contents.index(
+        "yarn workspaces focus --all --production"
+    )
 
     workspace_dir = tmp_path / "workspaces"
     workspace_dir.mkdir()
@@ -209,6 +238,30 @@ def test_pnpm_and_yarn_lockfiles_choose_the_package_manager(tmp_path: Path) -> N
     assert built.contents.index("COPY . .") < built.contents.index("yarn install --immutable")
     assert built.contents.count("COPY . .") == 1
     assert built.contents.index("yarn install --immutable") < built.contents.index("RUN yarn run build")
+    assert built.contents.index("RUN yarn run build") < built.contents.index(
+        "yarn workspaces focus --all --production"
+    )
+    assert "workspaces focus --production" not in built.contents.split("RUN yarn run build", 1)[0]
+
+
+def test_yarn_classic_probe_stops_after_four_kibibytes(tmp_path: Path) -> None:
+    classic = tmp_path / "classic"
+    classic.mkdir()
+    (classic / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    (classic / "yarn.lock").write_bytes(b"# yarn lockfile v1\n" + b"x" * 200_000)
+    detected_classic = detect_dockerfile_template(classic)
+    assert detected_classic is not None
+    assert "yarn@1.22.22" in detected_classic.contents
+    assert "corepack prepare" not in detected_classic.contents
+
+    late = tmp_path / "late"
+    late.mkdir()
+    (late / "package.json").write_text('{"scripts":{"start":"node index.js"}}', encoding="utf-8")
+    (late / "yarn.lock").write_bytes(b"x" * 5000 + b"yarn lockfile v1\n")
+    detected_late = detect_dockerfile_template(late)
+    assert detected_late is not None
+    assert "corepack prepare yarn@4.6.0" in detected_late.contents
+    assert "yarn@1.22.22" not in detected_late.contents
 
 
 def test_root_dockerfile_is_not_replaced_by_a_node_generator(tmp_path: Path) -> None:

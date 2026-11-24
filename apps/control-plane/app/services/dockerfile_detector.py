@@ -38,6 +38,7 @@ __all__ = [
 LogSink = Callable[[str], None]
 _EXPOSE_RE = re.compile(r"^\s*EXPOSE\s+(\d+)(?:/tcp)?\b", re.IGNORECASE | re.MULTILINE)
 _PACKAGE_JSON_BYTES = 512 * 1024
+_YARN_LOCK_PROBE_BYTES = 4096
 _PNPM_VERSION = "9.15.9"
 _YARN_CLASSIC_VERSION = "1.22.22"
 _YARN_BERRY_VERSION = "4.6.0"
@@ -81,8 +82,9 @@ def _regular_file(checkout: Path, name: str) -> bool:
 
 
 def _yarn_classic(checkout: Path) -> bool:
-    text = (checkout / "yarn.lock").read_text(encoding="utf-8", errors="replace")[:4096]
-    return "yarn lockfile v1" in text
+    """Classic lockfiles announce themselves in the first line; do not read the rest."""
+    with (checkout / "yarn.lock").open("rb") as handle:
+        return b"yarn lockfile v1" in handle.read(_YARN_LOCK_PROBE_BYTES)
 
 
 def _yarn_workspaces(package: dict[str, Any]) -> bool:
@@ -106,15 +108,19 @@ def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
         install = "pnpm install --frozen-lockfile" if build else "pnpm install --frozen-lockfile --prod"
         lines.append(f"RUN {install}")
         build_line = "RUN pnpm run build"
+        prune = "pnpm prune --prod"
         start = 'CMD ["pnpm", "start"]'
     elif _regular_file(checkout, "yarn.lock"):
-        if _yarn_classic(checkout):
+        classic = _yarn_classic(checkout)
+        if classic:
             lines.append(f"RUN npm install -g yarn@{_YARN_CLASSIC_VERSION}")
             install = "yarn install --frozen-lockfile" if build else "yarn install --frozen-lockfile --production"
+            prune = "yarn install --frozen-lockfile --production"
         else:
             lines.append(f"RUN corepack enable && corepack prepare yarn@{_YARN_BERRY_VERSION} --activate")
             # focus --production requires a workspaces field. A single package uses an immutable install.
             # Workspace manifests must be present before that install, so the tree is copied once here.
+            # After a build, focus --all --production is Yarn's replacement for install --production.
             if _yarn_workspaces(package):
                 lines.append("COPY . .")
                 copy_source_later = False
@@ -126,7 +132,8 @@ def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
             else:
                 lines.append("COPY package.json yarn.lock ./")
                 install = "yarn install --immutable" if build else "NODE_ENV=production yarn install --immutable"
-        if _yarn_classic(checkout):
+            prune = "yarn plugin import workspace-tools && yarn workspaces focus --all --production"
+        if classic:
             lines.append("COPY package.json yarn.lock ./")
         lines.append(f"RUN {install}")
         build_line = "RUN yarn run build"
@@ -136,11 +143,13 @@ def _node_dockerfile(checkout: Path, package: dict[str, Any], port: int) -> str:
         install = "npm install --no-audit --no-fund" if build else "npm install --omit=dev --no-audit --no-fund"
         lines.append(f"RUN {install}")
         build_line = "RUN npm run build"
+        prune = "npm prune --omit=dev"
         start = 'CMD ["npm", "start"]'
     if copy_source_later:
         lines.append("COPY . .")
     if build:
         lines.append(build_line)
+        lines.append(f"RUN {prune}")
     lines.extend(
         [
             "RUN chown -R node:node /app",
