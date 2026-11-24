@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Publish the dev operator console at dev.app.aero-deck.app.
+"""Publish the dev operator console at dev.aerodeckcloud.com.
+
+The previous console route at dev.app.aero-deck.app is left in place.
 
 Run on the control Droplet:
 
@@ -23,7 +25,7 @@ import urllib.request
 
 API = os.environ.get("CONTROL_PLANE_URL") or "http://127.0.0.1:8000"
 ENV_FILE = Path(os.environ.get("AERODECK_DASHBOARD_ENV") or "/etc/aerodeck/dashboard.env")
-HOSTNAME = "dev.app.aero-deck.app"
+HOSTNAME = "dev.aerodeckcloud.com"
 BACKEND_HOST = os.environ.get("AERODECK_CONTROL_PRIVATE_IP") or "10.41.0.2"
 BACKEND_PORT = 3000
 PROJECT_SLUG = "console"

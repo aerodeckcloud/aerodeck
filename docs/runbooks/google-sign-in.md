@@ -19,6 +19,7 @@ credentials → OAuth client ID → Web application.
 Authorised JavaScript origins:
 
 ```text
+https://dev.aerodeckcloud.com
 https://dev.app.aero-deck.app
 http://localhost:3000
 ```
@@ -26,6 +27,7 @@ http://localhost:3000
 Authorised redirect URIs:
 
 ```text
+https://dev.aerodeckcloud.com/api/mock/v1/auth/google/callback
 https://dev.app.aero-deck.app/api/mock/v1/auth/google/callback
 http://localhost:3000/api/mock/v1/auth/google/callback
 ```
@@ -54,7 +56,8 @@ docker run -d --name aerodeck-dashboard --network host --restart unless-stopped 
 
 `HOSTNAME=0.0.0.0` is only how the process binds the port. Google redirects
 use the host the browser sent, so the callback stays on
-`https://dev.app.aero-deck.app` instead of `0.0.0.0`.
+`https://dev.aerodeckcloud.com` or `https://dev.app.aero-deck.app` instead of
+`0.0.0.0`.
 
 `enroll-console-client.sh` keeps those two lines when it rotates the console
 API client. Copy `dashboard_env.py` into the same directory as that script
@@ -62,8 +65,9 @@ before you run it. See [dashboard-console.md](dashboard-console.md).
 
 ## 3. Check
 
-Open `https://dev.app.aero-deck.app/login` and click Continue with Google.
-The browser goes to `accounts.google.com`. A verified email signs you in.
+Open `https://dev.aerodeckcloud.com/login` or `https://dev.app.aero-deck.app/login`
+and click Continue with Google. The browser goes to `accounts.google.com`.
+A verified email signs you in on that same host.
 
 Restarting the dashboard still drops the account. That changes when console
 users are stored by the control plane.

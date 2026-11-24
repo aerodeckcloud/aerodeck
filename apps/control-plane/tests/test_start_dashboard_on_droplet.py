@@ -28,6 +28,7 @@ def test_start_dashboard_on_droplet_script_contract() -> None:
     assert "http://127.0.0.1:3000/login" in text
     assert "publish_console_route_if_present" in text
     assert "publish-console-route.py" in text
+    assert "dev.aerodeckcloud.com" in text
 
 
 def test_dashboard_workflow_uses_pull_based_cd_without_self_hosted_ssh() -> None:
