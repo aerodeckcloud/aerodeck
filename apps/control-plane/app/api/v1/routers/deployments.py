@@ -211,10 +211,26 @@ async def read_deployment_draft(
 @router.get(
     "/{deployment_id}/security",
     response_model=DraftSecurityRead,
-    summary="Scan the draft's dependency manifests for public advisories (#345)",
+    summary="Read the stored dependency scan (#345)",
     responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED,
 )
 async def read_deployment_security(
+    deployment_id: uuid.UUID,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DraftSecurityRead:
+    record = await drafts.read_security(deployment_id, await _known_actor(users, actor_user_id))
+    return security_read(record)
+
+
+@router.post(
+    "/{deployment_id}/security/scan",
+    response_model=DraftSecurityRead,
+    summary="Scan the draft's dependency manifests for public advisories (#345)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED,
+)
+async def scan_deployment_security(
     deployment_id: uuid.UUID,
     drafts: DeploymentDraftServiceDep,
     users: ConsoleUserServiceDep,

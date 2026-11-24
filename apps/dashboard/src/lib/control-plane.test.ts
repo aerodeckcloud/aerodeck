@@ -2495,12 +2495,13 @@ describe("readControlPlaneSecurity", () => {
   it("keeps the advisory summary and drops the rest of the response", async () => {
     clearControlPlaneTokenCache();
     const draftId = "33333333-3333-4333-8333-333333333333";
-    const fetchImpl: typeof fetch = async (input) => {
+    const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
       if (url.endsWith("/api/v1/auth/token")) {
         return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
       }
-      assert.match(url, /\/api\/v1\/deployments\/[^/]+\/security$/);
+      assert.equal(init?.method, "POST");
+      assert.match(url, /\/api\/v1\/deployments\/[^/]+\/security\/scan$/);
       return jsonResponse({
         outcome: "findings",
         acknowledgement: null,

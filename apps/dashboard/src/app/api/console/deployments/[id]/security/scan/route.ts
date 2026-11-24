@@ -4,7 +4,7 @@ import { ControlPlaneError, readControlPlaneConfig, readControlPlaneSecurity } f
 import { jsonError } from "@/lib/mock-http";
 import { requireSessionUser } from "@/lib/session";
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   await connection();
   const user = await requireSessionUser();
   if (user instanceof NextResponse) {

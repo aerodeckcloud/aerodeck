@@ -229,21 +229,54 @@ def _pyproject(text: str) -> tuple[list[PackageQuery], int]:
     return pinned, missed
 
 
+def _go_require(path: str, version: str) -> tuple[PackageQuery | None, int]:
+    pinned = _pinned_version(version)
+    if pinned is None:
+        return None, 1
+    return PackageQuery("Go", path, pinned), 0
+
+
 def _go_mod(text: str) -> tuple[list[PackageQuery], int]:
+    """Require lines only. toolchain, replace, exclude, and retract are not dependencies."""
     pinned: list[PackageQuery] = []
     missed = 0
+    in_require = False
+    in_other = False
     for raw_line in text.splitlines():
         line = raw_line.split("//", 1)[0].strip()
-        if not line or line.startswith(("module ", "go ")):
+        if in_other:
+            if line == ")":
+                in_other = False
+            continue
+        if not line:
+            continue
+        if in_require:
+            if line == ")":
+                in_require = False
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                missed += 1
+                continue
+            package, skipped = _go_require(parts[0], parts[1])
+            if package is not None:
+                pinned.append(package)
+            missed += skipped
+            continue
+        if line.startswith("require") and line.endswith("("):
+            in_require = True
+            continue
+        if line.endswith("("):
+            in_other = True
+            continue
+        if not line.startswith("require "):
             continue
         parts = line.removeprefix("require ").split()
-        if len(parts) < 2 or parts[0] in {"require", "(", ")"}:
-            if parts and parts[0] not in {"require", "(", ")"}:
-                missed += 1
-            continue
-        version = _pinned_version(parts[1])
-        if version is None:
+        if len(parts) < 2:
             missed += 1
             continue
-        pinned.append(PackageQuery("Go", parts[0], version))
+        package, skipped = _go_require(parts[0], parts[1])
+        if package is not None:
+            pinned.append(package)
+        missed += skipped
     return pinned, missed

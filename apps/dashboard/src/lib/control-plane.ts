@@ -1715,7 +1715,7 @@ export async function readControlPlaneDraft(
 async function securityRequest(
   config: ControlPlaneConfig,
   draftId: string,
-  method: "GET" | "POST",
+  path: "/scan" | "/acknowledge",
   body: unknown,
   options: ListOptions & { actorUserId?: string },
 ): Promise<SecurityReport> {
@@ -1725,9 +1725,9 @@ async function securityRequest(
   const fetchImpl = options.fetch ?? fetch;
   const accessToken = await accessTokenFor(config, fetchImpl, options.now ?? defaultNow);
   const response = await fetchImpl(
-    `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(draftId)}/security${method === "POST" ? "/acknowledge" : ""}`,
+    `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(draftId)}/security${path}`,
     {
-      method,
+      method: "POST",
       headers: controlPlaneHeaders(
         accessToken,
         options.actorUserId,
@@ -1754,7 +1754,7 @@ export async function readControlPlaneSecurity(
   draftId: string,
   options: ListOptions & { actorUserId?: string } = {},
 ): Promise<SecurityReport> {
-  return securityRequest(config, draftId, "GET", undefined, options);
+  return securityRequest(config, draftId, "/scan", undefined, options);
 }
 
 export async function acknowledgeControlPlaneSecurity(
@@ -1763,7 +1763,7 @@ export async function acknowledgeControlPlaneSecurity(
   acknowledgement: "findings" | "incomplete",
   options: ListOptions & { actorUserId?: string } = {},
 ): Promise<SecurityReport> {
-  return securityRequest(config, draftId, "POST", { acknowledgement }, options);
+  return securityRequest(config, draftId, "/acknowledge", { acknowledgement }, options);
 }
 
 export async function updateControlPlaneDraft(

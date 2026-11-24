@@ -404,7 +404,10 @@ async def test_findings_block_launch_until_they_are_acknowledged(
         )
         assert created.status_code == 201, created.text
         draft_id = created.json()["deployment"]["id"]
-        scanned = await client.get(f"{DEPLOYMENTS}/{draft_id}/security", headers=owner)
+        unread = await client.get(f"{DEPLOYMENTS}/{draft_id}/security", headers=owner)
+        assert unread.status_code == 404, unread.text
+        assert unread.json()["detail"] == "Dependency scan has not been run."
+        scanned = await client.post(f"{DEPLOYMENTS}/{draft_id}/security/scan", headers=owner)
         assert scanned.status_code == 200, scanned.text
         assert scanned.json()["outcome"] == "findings"
         assert scanned.json()["findings"][0]["advisory_id"] == "GHSA-test"
@@ -466,7 +469,10 @@ async def test_an_unreachable_advisory_source_is_not_a_clear_scan(
         )
         assert created.status_code == 201, created.text
         draft_id = created.json()["deployment"]["id"]
-        scanned = await client.get(f"{DEPLOYMENTS}/{draft_id}/security", headers=owner)
+        unread = await client.get(f"{DEPLOYMENTS}/{draft_id}/security", headers=owner)
+        assert unread.status_code == 404, unread.text
+        assert unread.json()["detail"] == "Dependency scan has not been run."
+        scanned = await client.post(f"{DEPLOYMENTS}/{draft_id}/security/scan", headers=owner)
         assert scanned.status_code == 200, scanned.text
         assert scanned.json()["outcome"] == "incomplete"
         assert scanned.json()["findings"] == []
@@ -505,7 +511,10 @@ async def test_launch_rescans_so_a_stored_clear_result_cannot_go_stale(
         )
         assert created.status_code == 201, created.text
         draft_id = created.json()["deployment"]["id"]
-        scanned = await client.get(f"{DEPLOYMENTS}/{draft_id}/security", headers=owner)
+        unread = await client.get(f"{DEPLOYMENTS}/{draft_id}/security", headers=owner)
+        assert unread.status_code == 404, unread.text
+        assert unread.json()["detail"] == "Dependency scan has not been run."
+        scanned = await client.post(f"{DEPLOYMENTS}/{draft_id}/security/scan", headers=owner)
         assert scanned.status_code == 200, scanned.text
         assert scanned.json()["outcome"] == "clear"
         app.dependency_overrides[get_advisory_source] = lambda: _OneFinding()

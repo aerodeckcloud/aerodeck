@@ -194,6 +194,16 @@ class DeploymentDraftService:
         stored.draft_security = None
         return stored
 
+    async def read_security(
+        self, deployment_id: uuid.UUID, actor_user_id: uuid.UUID | None
+    ) -> DraftSecurityRecord:
+        stored = await self._deployments.get(deployment_id)
+        self.require_owner(stored, actor_user_id)
+        record = _load_security(stored)
+        if record is None:
+            raise NotFoundError("Dependency scan has not been run.")
+        return record
+
     async def scan_security(
         self, deployment_id: uuid.UUID, actor_user_id: uuid.UUID | None
     ) -> DraftSecurityRecord:

@@ -68,6 +68,37 @@ def test_dev_dependency_pins_are_part_of_the_scan(tmp_path) -> None:
     }
 
 
+def test_go_mod_directives_other_than_require_are_not_unpinned(tmp_path) -> None:
+    (tmp_path / "go.mod").write_text(
+        "\n".join(
+            (
+                "module example.com/demo",
+                "",
+                "go 1.22",
+                "",
+                "toolchain go1.22.5",
+                "",
+                "require (",
+                "\tgithub.com/pkg/errors v0.9.1",
+                ")",
+                "",
+                "replace (",
+                "\tgithub.com/pkg/errors => github.com/pkg/errors v0.9.0",
+                ")",
+                "",
+                "exclude github.com/pkg/errors v0.8.0",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    read = read_manifests(tmp_path)
+    assert read.found is True
+    assert read.unpinned == 0
+    found = {(item.ecosystem, item.name, item.version) for item in read.packages}
+    assert found == {("Go", "github.com/pkg/errors", "0.9.1")}
+
+
 def test_a_dockerfile_without_a_manifest_is_not_a_scan(tmp_path) -> None:
     (tmp_path / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
     read = read_manifests(tmp_path)
