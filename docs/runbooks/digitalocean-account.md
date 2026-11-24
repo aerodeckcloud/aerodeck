@@ -192,6 +192,9 @@ stack: [iac-destroy.md](iac-destroy.md).
   apply **dev**. Leave `SSH_KEY_IDS` empty so the live Droplet is not replaced.
 - **Domain**: zone **`aero-deck.app`** is already in DigitalOcean →
   Networking → Domains. Nameservers at the registrar are DigitalOcean.
+  **`aerodeckcloud.com`** is a second zone on the same nameservers. The dev
+  apply adds `edge.aerodeckcloud.com` only. Do not point the apex or
+  `dev.aerodeckcloud.com` at the console in that apply.
   Host layout: [edge-routing.md](edge-routing.md). Traefik is story #35.
 
 ## If something already exists

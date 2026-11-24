@@ -18,6 +18,7 @@ or start the container ([control-plane-image.md](control-plane-image.md)).
 | Edge Droplet | `aerodeck-<env>-edge` | Traefik v3, public 80/443, polls control `:8000` over the VPC. |
 | Edge firewall | `aerodeck-<env>-edge-fw` | SSH like control. 80/443 from the internet. |
 | DNS | `edge.aero-deck.app` | A record to the edge public IPv4. |
+| DNS | `edge.aerodeckcloud.com` | Same address, created only when this environment sets `product_dns_zone`. Dev sets it. Staging and prod do not. |
 | PostgreSQL | `aerodeck-<env>-pg` | `engine = pg`, `private_network_uuid`. `prevent_destroy`. |
 | Valkey (Redis-compatible) | `aerodeck-<env>-redis` | `engine = valkey` (DigitalOcean no longer creates new Redis clusters). `private_network_uuid`. `prevent_destroy`. |
 | Database firewalls | (attached to each cluster) | Trusted source is the control-plane Droplet only. |

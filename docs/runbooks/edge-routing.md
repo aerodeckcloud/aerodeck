@@ -61,7 +61,7 @@ name, private VPC IP). Until DigitalOcean exists, use a local process.
 
 ## Zone: aero-deck.app
 
-The product zone is **`aero-deck.app`** (registered at Namecheap; nameservers
+The current zone is **`aero-deck.app`** (registered at Namecheap; nameservers
 are DigitalOcean `ns1`/`ns2`/`ns3.digitalocean.com`). The zone already exists
 in DigitalOcean → **Networking → Domains**. Keep records in DigitalOcean;
 **do not** add them at Namecheap.
@@ -77,7 +77,51 @@ and DNS-01 publish records. Intended names:
 | `edge.aero-deck.app` | Traefik entry (`A` to the Traefik public IPv4) |
 | `<project>.aero-deck.app` | Tenant apps; CNAME to `edge.aero-deck.app` |
 
-The API publishes those tenant records when a route is created
+## Zone: aerodeckcloud.com
+
+`aerodeckcloud.com` is the product zone. Its nameservers are already
+DigitalOcean (`ns1.digitalocean.com`, `ns2.digitalocean.com`,
+`ns3.digitalocean.com`). The domain exists in DigitalOcean. Terraform does
+not create it again.
+
+The **dev** stack owns one extra record, `edge.aerodeckcloud.com`, an A
+record to the same Traefik public IPv4 as `edge.aero-deck.app`. Staging and
+prod leave `product_dns_zone` empty so they cannot replace that record.
+`aero-deck.app` records stay as they are.
+
+This step does not publish a console:
+
+| Name | This story |
+| ---- | ---------- |
+| `edge.aerodeckcloud.com` | A record to the current edge |
+| `dev.aerodeckcloud.com` | No record. Not the console yet |
+| `aerodeckcloud.com` | No address record. Not the production console yet |
+
+Confirm before the dev apply:
+
+```bash
+nslookup -type=NS aerodeckcloud.com
+nslookup -type=A edge.aero-deck.app
+```
+
+The first must list the DigitalOcean nameservers. The second must still
+return the edge address after apply. If the domain is missing from this
+DigitalOcean team, add the empty domain under Networking → Domains and do
+not add an apex A record. Then apply **dev** from
+[iac-apply.md](iac-apply.md). Do not apply from a laptop.
+
+After apply:
+
+```bash
+nslookup -type=A edge.aerodeckcloud.com
+nslookup dev.aerodeckcloud.com
+nslookup aerodeckcloud.com
+```
+
+`edge.aerodeckcloud.com` matches `edge.aero-deck.app`. The other two names
+do not serve the console.
+
+Tenant records on `aero-deck.app` stay on that zone. The API publishes those tenant records when a route is created
 (`AERODECK_DNS_RECORDS_PROVIDER=digitalocean`,
 `AERODECK_DNS_RECORD_TARGET=edge.aero-deck.app`). Port 8000 stays VPC-only.
 
@@ -157,7 +201,9 @@ when the browser must trust the certificate.
 `packages/iac-engine/modules/edge` creates `aerodeck-<env>-edge` in the same
 VPC. Cloud-init runs pinned Traefik v3 (`--network host`) polling
 `http://<control private ipv4>:8000/api/v1/edge/traefik`. Terraform also
-creates the `edge.aero-deck.app` **A** record.
+creates the `edge.aero-deck.app` **A** record. The dev stack also creates
+`edge.aerodeckcloud.com` when `product_dns_zone` is set. It does not create
+`dev.aerodeckcloud.com` or an apex address.
 
 Apply from CI only ([iac-apply.md](iac-apply.md)). Because `traefik_provider_token`
 is marked sensitive in Terraform outputs, read it directly from `/etc/aerodeck/traefik.yml`
