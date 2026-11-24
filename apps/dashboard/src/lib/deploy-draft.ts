@@ -21,13 +21,15 @@ export function securityNeedsAcknowledgement(outcome: SecurityOutcome): boolean 
   return outcome === "findings" || outcome === "incomplete";
 }
 
+export const SECURITY_LAUNCH_REJECTION_DETAILS = new Set([
+  "Acknowledge the dependency findings before deploying.",
+  "The dependency scan did not complete.",
+  "Run the dependency scan before deploying.",
+  "The dependency scan is out of date. Run it again before deploying.",
+]);
+
 export function launchReturnsToSecurity(detail: string): boolean {
-  return (
-    detail === "Acknowledge the dependency findings before deploying." ||
-    detail === "The dependency scan did not complete." ||
-    detail === "Run the dependency scan before deploying." ||
-    detail === "The dependency scan is out of date. Run it again before deploying."
-  );
+  return SECURITY_LAUNCH_REJECTION_DETAILS.has(detail);
 }
 
 export function parseSecurityReport(value: unknown): SecurityReport {

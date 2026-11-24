@@ -35,6 +35,7 @@ describe("deploy draft routes", () => {
       launchReturnsToSecurity("The dependency scan is out of date. Run it again before deploying."),
       true,
     );
+    assert.equal(launchReturnsToSecurity("Confirm the launch step before deploying."), false);
     assert.equal(launchReturnsToSecurity("The draft could not be launched."), false);
     const report = parseSecurityReport({
       outcome: "findings",

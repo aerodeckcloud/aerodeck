@@ -2553,6 +2553,23 @@ describe("launchControlPlaneDraft", () => {
     );
 
     clearControlPlaneTokenCache();
+    const confirmStep: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse({ detail: "Confirm the launch step before deploying." }, 422);
+    };
+    await assert.rejects(
+      () => launchControlPlaneDraft(config, draftId, plan, draftId, draftId, { fetch: confirmStep }),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.equal(cause.message, "Confirm the launch step before deploying.");
+        return true;
+      },
+    );
+
+    clearControlPlaneTokenCache();
     const leaked: typeof fetch = async (input) => {
       const url = String(input);
       if (url.endsWith("/api/v1/auth/token")) {
