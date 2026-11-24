@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { PRODUCT_NAME } from "./brand.ts";
+import { PRODUCT_NAME } from "./brand";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
