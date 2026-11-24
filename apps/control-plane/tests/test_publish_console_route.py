@@ -38,10 +38,12 @@ def test_environment_variable_defaults() -> None:
 
 def test_publish_adds_the_new_host_and_leaves_the_old_route(monkeypatch) -> None:
     mod = _load_module()
+    calls: list[tuple[str, str]] = []
     posts: list[dict] = []
 
     def fake_call(method: str, path: str, body: dict | None = None, token: str | None = None):
-        _ = (path, token)
+        _ = token
+        calls.append((method, path))
         if method == "GET":
             return {
                 "items": [
@@ -60,6 +62,7 @@ def test_publish_adds_the_new_host_and_leaves_the_old_route(monkeypatch) -> None
     monkeypatch.setattr(mod, "call", fake_call)
     created = mod.ensure_route("project-1", "env-1", "token")
     assert created["hostname"] == "dev.aerodeckcloud.com"
+    assert not any(method in {"DELETE", "PATCH"} and "old-route" in path for method, path in calls)
     assert posts == [
         {
             "environment_id": "env-1",

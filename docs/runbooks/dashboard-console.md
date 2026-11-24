@@ -396,9 +396,11 @@ laptop. `--network host` is what lets the server reach the API on
 Before running `publish-console-route.py`, ensure `/etc/aerodeck/control-plane.env`
 has the DigitalOcean DNS and Let's Encrypt settings configured ([edge-routing.md](edge-routing.md)),
 otherwise the route stays in memory and issues a self-signed `AeroDeck Fake CA` certificate.
-Set `AERODECK_DNS_RECORD_TARGET=edge.aerodeckcloud.com` so the new name is a
-CNAME to the new edge. That does not rewrite the existing `dev.app.aero-deck.app`
-record. Restart the control plane after changing the env file
+Set `AERODECK_DNS_RECORD_TARGET=edge.aerodeckcloud.com`. That value is the
+control-plane-wide publish target, not a setting for this console name alone.
+Records that are already published stay as they are until something republishes
+them. After you restart the control plane, a new or updated route uses
+`edge.aerodeckcloud.com`
 ([startup-control-plane.md](startup-control-plane.md)).
 
 Operator scripts live in `/root/aerodeck` on the control Droplet.
