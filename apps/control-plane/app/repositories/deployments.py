@@ -2,10 +2,18 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import ColumnElement, func, select, update
+from sqlalchemy import ColumnElement, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.deployment import Deployment, DeploymentStatus
+
+
+def drafts_visible_to(actor_user_id: uuid.UUID | None) -> ColumnElement[bool]:
+    """Drafts are visible only to the operator who saved them (#343)."""
+    visible = Deployment.status != DeploymentStatus.draft
+    if actor_user_id is None:
+        return visible
+    return or_(visible, Deployment.actor_user_id == actor_user_id)
 
 
 def _awaiting_approval(deployment_id: uuid.UUID) -> tuple[ColumnElement[bool], ...]:
@@ -96,10 +104,17 @@ class DeploymentRepository:
             .values(project_id=None, environment_id=None)
         )
 
-    async def list(self, *, limit: int, offset: int) -> tuple[Sequence[Deployment], int]:
-        total = await self._session.scalar(select(func.count()).select_from(Deployment))
+    async def list(
+        self, *, limit: int, offset: int, actor_user_id: uuid.UUID | None = None
+    ) -> tuple[Sequence[Deployment], int]:
+        visible = drafts_visible_to(actor_user_id)
+        total = await self._session.scalar(select(func.count()).select_from(Deployment).where(visible))
         rows = await self._session.scalars(
-            select(Deployment).order_by(Deployment.started_at.desc(), Deployment.id.desc()).limit(limit).offset(offset)
+            select(Deployment)
+            .where(visible)
+            .order_by(Deployment.started_at.desc(), Deployment.id.desc())
+            .limit(limit)
+            .offset(offset)
         )
         return rows.all(), int(total or 0)
 
@@ -110,8 +125,12 @@ class DeploymentRepository:
         environment_id: uuid.UUID | None = None,
         limit: int,
         offset: int,
+        actor_user_id: uuid.UUID | None = None,
     ) -> tuple[Sequence[Deployment], int]:
-        base = select(Deployment).where(Deployment.project_id == project_id)
+        base = select(Deployment).where(
+            Deployment.project_id == project_id,
+            drafts_visible_to(actor_user_id),
+        )
         if environment_id is not None:
             base = base.where(Deployment.environment_id == environment_id)
         total = await self._session.scalar(select(func.count()).select_from(base.subquery()))

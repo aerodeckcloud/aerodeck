@@ -30,7 +30,7 @@ export async function GET(
   }
 
   try {
-    const body = await openControlPlaneDeploymentLogs(config, id);
+    const body = await openControlPlaneDeploymentLogs(config, id, { actorUserId: user.id });
     return new Response(body, {
       headers: {
         "Content-Type": "text/event-stream; charset=utf-8",

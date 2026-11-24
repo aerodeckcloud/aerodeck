@@ -88,6 +88,9 @@ function statusBadge(status: DeploymentStatus, waiting: boolean, awaitingApprova
       </Badge>
     );
   }
+  if (status === "draft") {
+    return <Badge variant="secondary">Draft</Badge>;
+  }
   if (status === "succeeded") {
     return (
       <Badge variant="default">

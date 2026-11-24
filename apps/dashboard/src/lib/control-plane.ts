@@ -104,6 +104,22 @@ export class ControlPlaneError extends Error {
 
 const defaultNow = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
+function controlPlaneHeaders(
+  accessToken: string,
+  actorUserId?: string,
+  extras?: Record<string, string>,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${accessToken}`,
+    ...extras,
+  };
+  if (actorUserId && isControlPlaneUuid(actorUserId)) {
+    headers["x-aerodeck-user-id"] = actorUserId;
+  }
+  return headers;
+}
+
 export function clearControlPlaneTokenCache(): void {
   tokens.clear();
 }
@@ -546,7 +562,7 @@ async function throwIfSandboxResponseFailed(response: Response): Promise<void> {
 export async function openControlPlaneDeploymentLogs(
   config: ControlPlaneConfig,
   deploymentId: string,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<ReadableStream<Uint8Array>> {
   if (!isControlPlaneUuid(deploymentId)) {
     throw new ControlPlaneError("control plane deployment id was not a uuid");
@@ -554,13 +570,13 @@ export async function openControlPlaneDeploymentLogs(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId, {
+    accept: "text/event-stream",
+  });
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/logs`,
     {
-      headers: {
-        accept: "text/event-stream",
-        authorization: `Bearer ${accessToken}`,
-      },
+      headers,
       cache: "no-store",
     },
   );
@@ -587,7 +603,7 @@ export async function getControlPlaneDeploymentRuntimeLogs(
   config: ControlPlaneConfig,
   deploymentId: string,
   tail = 200,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<ContainerRuntimeLogs> {
   if (!isControlPlaneUuid(deploymentId)) {
     throw new ControlPlaneError("control plane deployment id was not a uuid");
@@ -596,13 +612,11 @@ export async function getControlPlaneDeploymentRuntimeLogs(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId);
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/runtime-logs?tail=${safeTail}`,
     {
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${accessToken}`,
-      },
+      headers,
       cache: "no-store",
     },
   );
@@ -883,7 +897,7 @@ export async function listControlPlaneProjectDeployments(
   config: ControlPlaneConfig,
   projectId: string,
   environmentId?: string,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment[]> {
   if (!isControlPlaneUuid(projectId)) {
     throw new ControlPlaneError("projectId must be a uuid");
@@ -898,10 +912,11 @@ export async function listControlPlaneProjectDeployments(
   if (environmentId) {
     query.set("environment_id", environmentId);
   }
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId);
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/projects/${encodeURIComponent(projectId)}/deployments?${query.toString()}`,
     {
-      headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+      headers,
       cache: "no-store",
     },
   );
@@ -927,13 +942,7 @@ async function triggerControlPlaneDeploymentAction(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${accessToken}`,
-  };
-  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
-    headers["x-aerodeck-user-id"] = options.actorUserId;
-  }
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId);
   if (body) {
     headers["content-type"] = "application/json";
   }
@@ -1354,7 +1363,7 @@ async function postDeploymentStatus(
   config: ControlPlaneConfig,
   deploymentId: string,
   outcome: "succeeded" | "failed",
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   if (!isControlPlaneUuid(deploymentId)) {
     throw new ControlPlaneError("control plane deployment id was not a uuid");
@@ -1362,14 +1371,12 @@ async function postDeploymentStatus(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId);
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}/${outcome}`,
     {
       method: "POST",
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${accessToken}`,
-      },
+      headers,
       cache: "no-store",
     },
   );
@@ -1385,7 +1392,7 @@ async function postDeploymentStatus(
 export function succeedControlPlaneDeployment(
   config: ControlPlaneConfig,
   deploymentId: string,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   return postDeploymentStatus(config, deploymentId, "succeeded", options);
 }
@@ -1393,7 +1400,7 @@ export function succeedControlPlaneDeployment(
 export function failControlPlaneDeployment(
   config: ControlPlaneConfig,
   deploymentId: string,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   return postDeploymentStatus(config, deploymentId, "failed", options);
 }
@@ -1511,6 +1518,7 @@ export async function revokeControlPlaneSession(
 }
 
 const DEPLOYMENT_STATUSES = new Set<DeploymentStatus>([
+  "draft",
   "queued",
   "running",
   "succeeded",
@@ -1520,7 +1528,7 @@ const DEPLOYMENT_STATUSES = new Set<DeploymentStatus>([
 
 export async function listControlPlaneDeployments(
   config: ControlPlaneConfig,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment[]> {
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
@@ -1529,13 +1537,11 @@ export async function listControlPlaneDeployments(
   let offset = 0;
   let total = 0;
   for (let page = 0; page < PAGE_CAP; page += 1) {
+    const headers = controlPlaneHeaders(accessToken, options.actorUserId);
     const response = await fetchImpl(
       `${config.baseUrl}/api/v1/deployments?limit=${PAGE_LIMIT}&offset=${offset}`,
       {
-        headers: {
-          accept: "application/json",
-          authorization: `Bearer ${accessToken}`,
-        },
+        headers,
         cache: "no-store",
       },
     );
@@ -1603,6 +1609,155 @@ export async function createControlPlaneDeployment(
   }
   if (!response.ok) {
     throw new ControlPlaneError(`control plane deployment request failed (${response.status})`, response.status);
+  }
+  return parseDeployment(await response.json());
+}
+
+export type ControlPlaneDraft = {
+  deployment: Deployment;
+  plan: import("@/lib/deploy-draft").DeployDraftPlan;
+};
+
+function parseControlPlaneDraft(value: unknown): ControlPlaneDraft {
+  if (!value || typeof value !== "object") {
+    throw new ControlPlaneError("control plane draft response was not a draft");
+  }
+  const row = value as Record<string, unknown>;
+  const plan = row.plan;
+  if (!plan || typeof plan !== "object") {
+    throw new ControlPlaneError("control plane draft response was not a draft");
+  }
+  const step = (plan as { step?: unknown }).step;
+  if (step !== "build" && step !== "resources" && step !== "launch") {
+    throw new ControlPlaneError("control plane draft response was not a draft");
+  }
+  return { deployment: parseDeployment(row.deployment), plan: plan as ControlPlaneDraft["plan"] };
+}
+
+async function draftRequest(
+  config: ControlPlaneConfig,
+  path: string,
+  method: "GET" | "POST" | "PUT",
+  actorUserId: string | undefined,
+  body: unknown,
+  options: ListOptions,
+): Promise<ControlPlaneDraft> {
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers = controlPlaneHeaders(
+    accessToken,
+    actorUserId,
+    body === undefined ? undefined : { "content-type": "application/json" },
+  );
+  const response = await fetchImpl(`${config.baseUrl}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store",
+  });
+  if (response.status === 404) {
+    throw new ControlPlaneError("control plane draft was not found", 404);
+  }
+  if (response.status === 422) {
+    throw new ControlPlaneError("control plane draft was rejected", 422);
+  }
+  if (!response.ok) {
+    throw new ControlPlaneError(`control plane draft request failed (${response.status})`, response.status);
+  }
+  return parseControlPlaneDraft(await response.json());
+}
+
+export async function createControlPlaneDraft(
+  config: ControlPlaneConfig,
+  repoUrl: string,
+  plan: ControlPlaneDraft["plan"],
+  options: ListOptions & { actorUserId?: string } = {},
+): Promise<ControlPlaneDraft> {
+  return draftRequest(
+    config,
+    "/api/v1/deployments/draft",
+    "POST",
+    options.actorUserId,
+    { repo_url: repoUrl, plan },
+    options,
+  );
+}
+
+export async function readControlPlaneDraft(
+  config: ControlPlaneConfig,
+  draftId: string,
+  options: ListOptions & { actorUserId?: string } = {},
+): Promise<ControlPlaneDraft> {
+  if (!isControlPlaneUuid(draftId)) {
+    throw new ControlPlaneError("control plane draft id was not a uuid");
+  }
+  return draftRequest(
+    config,
+    `/api/v1/deployments/${encodeURIComponent(draftId)}/draft`,
+    "GET",
+    options.actorUserId,
+    undefined,
+    options,
+  );
+}
+
+export async function updateControlPlaneDraft(
+  config: ControlPlaneConfig,
+  draftId: string,
+  plan: ControlPlaneDraft["plan"],
+  options: ListOptions & { actorUserId?: string; projectId?: string; environmentId?: string } = {},
+): Promise<ControlPlaneDraft> {
+  if (!isControlPlaneUuid(draftId)) {
+    throw new ControlPlaneError("control plane draft id was not a uuid");
+  }
+  const body: Record<string, unknown> = { plan };
+  if (options.projectId && options.environmentId) {
+    body.project_id = options.projectId;
+    body.environment_id = options.environmentId;
+  }
+  return draftRequest(
+    config,
+    `/api/v1/deployments/${encodeURIComponent(draftId)}/draft`,
+    "PUT",
+    options.actorUserId,
+    body,
+    options,
+  );
+}
+
+export async function launchControlPlaneDraft(
+  config: ControlPlaneConfig,
+  draftId: string,
+  plan: ControlPlaneDraft["plan"],
+  projectId: string,
+  environmentId: string,
+  options: ListOptions & { actorUserId?: string } = {},
+): Promise<Deployment> {
+  if (!isControlPlaneUuid(draftId) || !isControlPlaneUuid(projectId) || !isControlPlaneUuid(environmentId)) {
+    throw new ControlPlaneError("control plane draft launch ids were not uuids");
+  }
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? defaultNow;
+  const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId, {
+    "content-type": "application/json",
+  });
+  const response = await fetchImpl(
+    `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(draftId)}/launch`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ plan, project_id: projectId, environment_id: environmentId }),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new ControlPlaneError(
+      `control plane draft launch failed (${response.status})`,
+      response.status,
+      draftId,
+    );
   }
   return parseDeployment(await response.json());
 }
@@ -1954,13 +2109,7 @@ async function controlPlaneRequest<T>(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${accessToken}`,
-  };
-  if (options.actorUserId && isControlPlaneUuid(options.actorUserId)) {
-    headers["x-aerodeck-user-id"] = options.actorUserId;
-  }
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId);
   let body: string | undefined;
   if (spec.body !== undefined) {
     headers["content-type"] = "application/json";
@@ -2321,7 +2470,7 @@ export async function createControlPlaneDeploymentAndProvision(
 export async function getControlPlaneDeployment(
   config: ControlPlaneConfig,
   deploymentId: string,
-  options: ListOptions = {},
+  options: ListOptions & { actorUserId?: string } = {},
 ): Promise<Deployment> {
   if (!isControlPlaneUuid(deploymentId)) {
     throw new ControlPlaneError("control plane deployment id was not a uuid");
@@ -2329,13 +2478,11 @@ export async function getControlPlaneDeployment(
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? defaultNow;
   const accessToken = await accessTokenFor(config, fetchImpl, now);
+  const headers = controlPlaneHeaders(accessToken, options.actorUserId);
   const response = await fetchImpl(
     `${config.baseUrl}/api/v1/deployments/${encodeURIComponent(deploymentId)}`,
     {
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${accessToken}`,
-      },
+      headers,
       cache: "no-store",
     },
   );
@@ -3026,6 +3173,9 @@ function parseDeployment(value: unknown): Deployment {
     ...(approvalRequiredAt !== undefined ? { approval_required_at: approvalRequiredAt } : {}),
     ...(approvedAt !== undefined ? { approved_at: approvedAt } : {}),
     status: row.status as DeploymentStatus,
+    ...(row.draft_step === "build" || row.draft_step === "resources" || row.draft_step === "launch"
+      ? { draft_step: row.draft_step }
+      : {}),
     ...(snapshotNames !== undefined ? { snapshot_variable_names: snapshotNames } : {}),
     ...(variablesRestored !== undefined ? { variables_restored: variablesRestored } : {}),
   };

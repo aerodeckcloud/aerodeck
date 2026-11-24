@@ -34,7 +34,9 @@ export async function GET(
   const tail = Number.isFinite(rawTail) ? Math.max(1, Math.min(rawTail, 500)) : 200;
 
   try {
-    const logs = await getControlPlaneDeploymentRuntimeLogs(config, id, tail);
+    const logs = await getControlPlaneDeploymentRuntimeLogs(config, id, tail, {
+      actorUserId: user.id,
+    });
     return NextResponse.json(logs);
   } catch (cause) {
     return jsonControlPlaneError(cause, "console_deployment_runtime_logs_failed");

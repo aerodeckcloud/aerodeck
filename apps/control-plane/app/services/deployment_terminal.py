@@ -55,6 +55,11 @@ class DeploymentTerminalService:
                 deployment.status.value,
             )
             return deployment
+        if deployment.status is DeploymentStatus.draft:
+            # Queue failure must not close a draft. Launch and discard still apply,
+            # and the sealed plan stays until one of those succeeds.
+            logger.info("deployment %s is still a draft; leave it for launch or discard", deployment_id)
+            return deployment
         deployment.status = status
         # A finished row never starts, so what it kept for a later start goes too (#271).
         deployment.provision_replay_json = None

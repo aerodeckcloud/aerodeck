@@ -1,4 +1,5 @@
 import { MOCK_API_PREFIX } from "@/lib/catalog";
+import type { DeployDraftPlan } from "@/lib/deploy-draft";
 import {
   PROVISION_ENQUEUE_FAILED,
   type AcceptedJob,
@@ -747,6 +748,68 @@ export async function createDeployment(
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
     body: JSON.stringify(body),
+  });
+  return readCreateDeploymentResponse(response);
+}
+
+export type DeployDraftRecord = {
+  deployment: Deployment;
+  plan: DeployDraftPlan;
+};
+
+async function readDraft(response: Response): Promise<DeployDraftRecord> {
+  return readJson(response);
+}
+
+export async function createDeployDraft(repoUrl: string, plan: DeployDraftPlan): Promise<DeployDraftRecord> {
+  const response = await fetch("/api/console/deployments/draft", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ repo_url: repoUrl, plan }),
+  });
+  return readDraft(response);
+}
+
+export async function readDeployDraft(draftId: string): Promise<DeployDraftRecord> {
+  const response = await fetch(`/api/console/deployments/${encodeURIComponent(draftId)}/draft`, {
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  return readDraft(response);
+}
+
+export async function updateDeployDraft(
+  draftId: string,
+  plan: DeployDraftPlan,
+  target?: { projectId: string; environmentId: string },
+): Promise<DeployDraftRecord> {
+  const response = await fetch(`/api/console/deployments/${encodeURIComponent(draftId)}/draft`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({
+      plan,
+      ...(target ? { project_id: target.projectId, environment_id: target.environmentId } : {}),
+    }),
+  });
+  return readDraft(response);
+}
+
+export async function launchDeployDraft(
+  draftId: string,
+  plan: DeployDraftPlan,
+  target: { projectId: string; environmentId: string },
+): Promise<Deployment> {
+  const response = await fetch(`/api/console/deployments/${encodeURIComponent(draftId)}/launch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({
+      plan,
+      project_id: target.projectId,
+      environment_id: target.environmentId,
+    }),
   });
   return readCreateDeploymentResponse(response);
 }

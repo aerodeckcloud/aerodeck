@@ -30,7 +30,7 @@ export async function GET(
   }
 
   try {
-    const deployment = await getControlPlaneDeployment(config, id);
+    const deployment = await getControlPlaneDeployment(config, id, { actorUserId: user.id });
     return NextResponse.json(deployment);
   } catch (cause) {
     return jsonControlPlaneError(cause, "console_deployment_read_failed");

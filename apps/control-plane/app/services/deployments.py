@@ -6,7 +6,7 @@ from typing import Protocol
 
 from sqlalchemy.exc import IntegrityError
 
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, NotFoundError, UnprocessableError
 from app.core.github import canonical_github_repo_url, parse_github_repo
 from app.core.logging import get_logger
 from app.models.deployment import (
@@ -124,6 +124,7 @@ class DeploymentService:
         actor_user_id: uuid.UUID | None = None,
         git_sha: str | None = None,
         git_ref: str | None = None,
+        draft: bool = False,
     ) -> Deployment:
         """Store a deployment request.
 
@@ -135,6 +136,8 @@ class DeploymentService:
         if parsed is None:
             raise ValueError("repo_url must be a GitHub repository URL")
         owner, repo = parsed
+        if draft and actor_user_id is None:
+            raise UnprocessableError("A draft deployment needs a signed-in user.")
         project_id = data.project_id
         environment_id = data.environment_id
         if project_id is not None and environment_id is not None:
@@ -147,7 +150,7 @@ class DeploymentService:
                     repo=repo,
                     project_id=project_id,
                     environment_id=environment_id,
-                    status=DeploymentStatus.running,
+                    status=DeploymentStatus.draft if draft else DeploymentStatus.running,
                     started_at=datetime.now(UTC),
                     trigger=trigger.value if trigger is not None else None,
                     actor_user_id=actor_user_id,
@@ -175,8 +178,10 @@ class DeploymentService:
             raise NotFoundError(f"Deployment {deployment_id} not found")
         return deployment
 
-    async def list(self, *, limit: int, offset: int) -> tuple[Sequence[Deployment], int]:
-        return await self._deployments.list(limit=limit, offset=offset)
+    async def list(
+        self, *, limit: int, offset: int, actor_user_id: uuid.UUID | None = None
+    ) -> tuple[Sequence[Deployment], int]:
+        return await self._deployments.list(limit=limit, offset=offset, actor_user_id=actor_user_id)
 
     async def list_for_project(
         self,
@@ -185,9 +190,14 @@ class DeploymentService:
         environment_id: uuid.UUID | None = None,
         limit: int,
         offset: int,
+        actor_user_id: uuid.UUID | None = None,
     ) -> tuple[Sequence[Deployment], int]:
         return await self._deployments.list_for_project(
-            project_id, environment_id=environment_id, limit=limit, offset=offset
+            project_id,
+            environment_id=environment_id,
+            limit=limit,
+            offset=offset,
+            actor_user_id=actor_user_id,
         )
 
     async def mark_succeeded(self, deployment_id: uuid.UUID) -> Deployment:
@@ -325,6 +335,8 @@ class DeploymentService:
             # Nothing has run yet, so there is no outcome to record. Without this
             # a console that reported one would close the row and it would never start.
             raise ConflictError(NOT_STARTED_DETAIL)
+        if current is not None and current.status is DeploymentStatus.draft:
+            raise ConflictError("Deployment is still a draft and has not started.")
         if current is not None and is_awaiting_approval(current):
             raise ConflictError("Deployment is waiting for owner approval and has not started.")
         was_terminal = current is not None and current.status in (

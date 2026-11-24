@@ -9,6 +9,7 @@ import { LinkButton } from "@/components/link-button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { fetchDeployments, fetchLogSource } from "@/lib/api";
+import { deploymentHref } from "@/lib/deploy-draft";
 import { formatInstant } from "@/lib/format";
 import { useEnvironmentCatalog } from "@/lib/use-environment-catalog";
 import type { Deployment } from "@/lib/types";
@@ -85,7 +86,7 @@ export function DeploymentsList({ controlPlane = false }: { controlPlane?: boole
                   <li key={row.id} className="flex flex-wrap items-center gap-3 py-3">
                     <div className="min-w-0 flex-1">
                       <Link
-                        href={`/deployments/${row.id}`}
+                        href={deploymentHref(row)}
                         className="font-medium text-primary hover:underline"
                       >
                         {row.owner}/{row.repo}

@@ -12,6 +12,7 @@ DEPLOYMENT_ENVIRONMENT_FK = "fk_deployments_project_environment"
 
 
 class DeploymentStatus(enum.StrEnum):
+    draft = "draft"
     queued = "queued"
     running = "running"
     succeeded = "succeeded"
@@ -79,6 +80,10 @@ class Deployment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Set while a production deploy is waiting for an owner. Status stays queued (#276).
     approval_required_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Last confirmed step. Plaintext so a resume link does not decrypt variables (#343).
+    draft_step: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Encrypted blueprint, addon selection, and variable values. Cleared once the row leaves draft.
+    draft_plan: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[DeploymentStatus] = mapped_column(
         Enum(DeploymentStatus, name="deployment_status", native_enum=False, length=16),
         nullable=False,

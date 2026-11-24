@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from app.api.deps import (
     ActorUserIdDep,
     AuditLogServiceDep,
+    ConsoleUserServiceDep,
     DeploymentServiceDep,
     NotificationServiceDep,
     PaginationDep,
@@ -125,14 +126,21 @@ async def list_project_deployments(
     page: PaginationDep,
     projects: ProjectServiceDep,
     deployments: DeploymentServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
     environment_id: uuid.UUID | None = Query(default=None),
 ) -> Page[DeploymentRead]:
     await projects.get(project_id)
+    known = None
+    if actor_user_id is not None:
+        user = await users.get(actor_user_id)
+        known = user.id if user is not None else None
     items, total = await deployments.list_for_project(
         project_id,
         environment_id=environment_id,
         limit=page.limit,
         offset=page.offset,
+        actor_user_id=known,
     )
     return Page(
         items=[deployment_to_read(row) for row in items],

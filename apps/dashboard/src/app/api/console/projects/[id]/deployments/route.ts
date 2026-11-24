@@ -30,7 +30,7 @@ export async function GET(
     return jsonError(400, "environment_id must be a UUID.", "invalid_environment_id");
   }
   try {
-    const items = await listControlPlaneProjectDeployments(config, id, envId);
+    const items = await listControlPlaneProjectDeployments(config, id, envId, { actorUserId: user.id });
     return NextResponse.json(items);
   } catch (cause) {
     return jsonControlPlaneError(cause, "console_project_deployments_failed");

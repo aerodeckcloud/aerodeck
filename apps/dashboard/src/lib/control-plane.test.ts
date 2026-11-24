@@ -16,6 +16,7 @@ import {
   cancelControlPlaneDeployment,
   createControlPlaneDeployment,
   createControlPlaneDeploymentAndProvision,
+  launchControlPlaneDraft,
   provisionControlPlaneEnvironment,
   deployLatestControlPlaneDeployment,
   promoteControlPlaneDeployment,
@@ -2334,5 +2335,57 @@ describe("console sessions", () => {
     };
     await revokeControlPlaneSession(config, sessionToken, { fetch: revoker });
     assert.equal(revoked, true);
+  });
+});
+
+describe("launchControlPlaneDraft", () => {
+  it("attaches the draft id when launch returns a server error", async () => {
+    clearControlPlaneTokenCache();
+    const draftId = "33333333-3333-4333-8333-333333333333";
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse({ detail: "broker down" }, 500);
+    };
+    await assert.rejects(
+      () =>
+        launchControlPlaneDraft(
+          config,
+          draftId,
+          {
+            step: "launch",
+            blueprint: {
+              version: 1,
+              name: "demo",
+              repo_url: "https://github.com/acme/demo",
+              source: "dockerfile",
+              build: {
+                strategy: "dockerfile",
+                dockerfile: "Dockerfile",
+                compose_file: null,
+                service: null,
+                port: 8000,
+              },
+              addons: [],
+              env: [],
+            },
+            detected_addons: [],
+            selected_addons: [],
+            variables: [],
+            extra_env: "",
+          },
+          draftId,
+          draftId,
+          { fetch: fetchImpl },
+        ),
+      (cause: unknown) => {
+        assert.ok(cause instanceof ControlPlaneError);
+        assert.equal(cause.status, 500);
+        assert.equal(cause.deploymentId, draftId);
+        return true;
+      },
+    );
   });
 });

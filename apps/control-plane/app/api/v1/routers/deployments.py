@@ -20,6 +20,7 @@ from app.api.deps import (
     ClientDep,
     ConsoleUserServiceDep,
     DeployApprovalServiceDep,
+    DeploymentDraftServiceDep,
     DeploymentServiceDep,
     EnvironmentServiceDep,
     ImageRetentionServiceDep,
@@ -30,7 +31,7 @@ from app.api.deps import (
     RollbackServiceDep,
     SettingsDep,
 )
-from app.models.deployment import DeploymentStatus, DeploymentTrigger
+from app.models.deployment import DeploymentTrigger
 from app.services.console_users import ConsoleUserService
 from app.schemas.auth import ErrorResponse
 from app.schemas.blueprint import DeploymentBlueprint, DeploymentInspectRequest
@@ -42,6 +43,13 @@ from app.schemas.deployment import (
     DeploymentRollback,
     deployment_to_read,
 )
+from app.schemas.deployment_draft import (
+    DeploymentDraftCreate,
+    DeploymentDraftLaunch,
+    DeploymentDraftRead,
+    DeploymentDraftWrite,
+)
+from app.services.deployment_draft import draft_read
 from app.services.blueprint_inspector import inspect_github_repository_sync
 from app.services.docker_policy import normalize_git_sha
 from app.services.container_logs import ContainerLogsRead, dispatch_container_logs
@@ -80,8 +88,18 @@ async def _as_sse(lines: AsyncIterator[str]) -> AsyncIterator[bytes]:
 
 
 @router.get("", response_model=Page[DeploymentRead], summary="List deployments")
-async def list_deployments(page: PaginationDep, deployments: DeploymentServiceDep) -> Page[DeploymentRead]:
-    items, total = await deployments.list(limit=page.limit, offset=page.offset)
+async def list_deployments(
+    page: PaginationDep,
+    deployments: DeploymentServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> Page[DeploymentRead]:
+    # Another operator's draft is omitted. Their own draft stays so they can resume (#343).
+    items, total = await deployments.list(
+        limit=page.limit,
+        offset=page.offset,
+        actor_user_id=await _known_actor(users, actor_user_id),
+    )
     return Page(
         items=[deployment_to_read(row) for row in items],
         total=total,
@@ -156,14 +174,104 @@ async def create_deployment(
     return payload
 
 
+@router.post(
+    "/draft",
+    response_model=DeploymentDraftRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Save a deployment draft without queueing provision (#343)",
+    responses=_UNAUTHENTICATED | _UNPROCESSABLE,
+)
+async def create_deployment_draft(
+    body: DeploymentDraftCreate,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentDraftRead:
+    stored, plan = await drafts.create(body, await _known_actor(users, actor_user_id))
+    return draft_read(stored, plan)
+
+
+@router.get(
+    "/{deployment_id}/draft",
+    response_model=DeploymentDraftRead,
+    summary="Read the caller's deployment draft (#343)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED,
+)
+async def read_deployment_draft(
+    deployment_id: uuid.UUID,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentDraftRead:
+    stored, plan = await drafts.read(deployment_id, await _known_actor(users, actor_user_id))
+    return draft_read(stored, plan)
+
+
+@router.put(
+    "/{deployment_id}/draft",
+    response_model=DeploymentDraftRead,
+    summary="Update the caller's deployment draft (#343)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED | _UNPROCESSABLE,
+)
+async def update_deployment_draft(
+    deployment_id: uuid.UUID,
+    body: DeploymentDraftWrite,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentDraftRead:
+    stored, plan = await drafts.update(deployment_id, body, await _known_actor(users, actor_user_id))
+    return draft_read(stored, plan)
+
+
+@router.post(
+    "/{deployment_id}/discard",
+    response_model=DeploymentRead,
+    summary="Discard a draft without queueing provision (#343)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED,
+)
+async def discard_deployment_draft(
+    deployment_id: uuid.UUID,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentRead:
+    stored = await drafts.discard(deployment_id, await _known_actor(users, actor_user_id))
+    return deployment_to_read(stored)
+
+
+@router.post(
+    "/{deployment_id}/launch",
+    response_model=DeploymentRead,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Leave draft and queue provision on the existing path (#343)",
+    responses=_NOT_FOUND | _UNAUTHENTICATED | _NOT_STARTED | _UNPROCESSABLE | _UNAVAILABLE,
+)
+async def launch_deployment_draft(
+    deployment_id: uuid.UUID,
+    body: DeploymentDraftLaunch,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentRead:
+    stored = await drafts.launch(deployment_id, body, await _known_actor(users, actor_user_id))
+    return deployment_to_read(stored)
+
+
 @router.get(
     "/{deployment_id}",
     response_model=DeploymentRead,
     summary="Get a deployment",
     responses=_NOT_FOUND,
 )
-async def get_deployment(deployment_id: uuid.UUID, deployments: DeploymentServiceDep) -> DeploymentRead:
-    return deployment_to_read(await deployments.get(deployment_id))
+async def get_deployment(
+    deployment_id: uuid.UUID,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
+) -> DeploymentRead:
+    stored = await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
+    return deployment_to_read(stored)
 
 
 @router.post(
@@ -176,9 +284,13 @@ async def get_deployment(deployment_id: uuid.UUID, deployments: DeploymentServic
 async def succeed_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
     jobs: ReleaseJobServiceDep,
     retention: ImageRetentionServiceDep,
 ) -> DeploymentRead:
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     stored = await deployments.mark_succeeded(deployment_id)
     if jobs is not None:
         await jobs.release_waiting(stored)
@@ -199,8 +311,12 @@ async def succeed_deployment(
 async def fail_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
     jobs: ReleaseJobServiceDep,
 ) -> DeploymentRead:
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     stored = await deployments.mark_failed(deployment_id)
     if jobs is not None:
         await jobs.release_waiting(stored)
@@ -216,11 +332,13 @@ async def fail_deployment(
 )
 async def stream_deployment_logs(
     deployment_id: uuid.UUID,
-    deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
     settings: SettingsDep,
 ) -> StreamingResponse:
     """Stream published lines when present; otherwise the stub for a stored deployment."""
-    await deployments.get(deployment_id)
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     await ensure_log_store_ready(settings.redis_url)
     return StreamingResponse(
         _as_sse(
@@ -248,11 +366,13 @@ async def stream_deployment_logs(
 )
 async def get_deployment_runtime_logs(
     deployment_id: uuid.UUID,
-    deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
     settings: SettingsDep,
     tail: int = Query(default=200, ge=1, le=500),
 ) -> ContainerLogsRead:
-    deployment = await deployments.get(deployment_id)
+    deployment = await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     if deployment.project_id is None or deployment.environment_id is None:
         return ContainerLogsRead(
             container="",
@@ -316,11 +436,13 @@ async def _enqueue_copy(
 async def redeploy_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
     users: ConsoleUserServiceDep,
     environments: EnvironmentServiceDep,
     approval: DeployApprovalServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     source = await deployments.get(deployment_id)
     _require_linked(source)
     sha = normalize_git_sha(source.git_sha)
@@ -350,11 +472,13 @@ async def redeploy_deployment(
 async def deploy_latest_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
     users: ConsoleUserServiceDep,
     environments: EnvironmentServiceDep,
     approval: DeployApprovalServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     source = await deployments.get(deployment_id)
     return await _enqueue_copy(
         source,
@@ -377,9 +501,13 @@ async def deploy_latest_deployment(
 async def cancel_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
+    users: ConsoleUserServiceDep,
+    actor_user_id: ActorUserIdDep,
     jobs: JobServiceDep,
     release: ReleaseJobServiceDep,
 ) -> DeploymentRead:
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     stored = await deployments.cancel(deployment_id)
     await jobs.revoke_quietly(stored.provision_job_id)
     # Same rule as the outcome routes: without a queue the waiter stays queued.
@@ -435,11 +563,13 @@ async def reject_deployment(
 async def promote_deployment(
     deployment_id: uuid.UUID,
     body: DeploymentPromote,
+    drafts: DeploymentDraftServiceDep,
     promotions: PromotionServiceDep,
     users: ConsoleUserServiceDep,
     actor_user_id: ActorUserIdDep,
 ) -> DeploymentRead:
     """The target's overlap setting applies: the new row may come back waiting."""
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     promoted = await promotions.promote(
         deployment_id,
         body.environment_id,
@@ -459,12 +589,14 @@ async def promote_deployment(
 async def rollback_deployment(
     deployment_id: uuid.UUID,
     deployments: DeploymentServiceDep,
+    drafts: DeploymentDraftServiceDep,
     rollbacks: RollbackServiceDep,
     users: ConsoleUserServiceDep,
     actor_user_id: ActorUserIdDep,
     body: DeploymentRollback | None = None,
 ) -> DeploymentRead:
     """Restore the release variables when a snapshot exists, then retag the image (#273)."""
+    await drafts.visible(deployment_id, await _known_actor(users, actor_user_id))
     request = body or DeploymentRollback()
     stored, variables_restored = await rollbacks.rollback(
         deployment_id,
