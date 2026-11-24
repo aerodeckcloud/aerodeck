@@ -2,7 +2,7 @@
 
 import { Loader2, Rocket, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
   DeploymentBlueprintFields,
@@ -10,6 +10,7 @@ import {
 } from "@/components/deployment-blueprint-fields";
 import { DeployBuildStep } from "@/components/deploy-build-step";
 import { DeployResourcesStep } from "@/components/deploy-resources-step";
+import { LaunchTakeoff } from "@/components/launch-takeoff";
 import { EnvironmentSelect } from "@/components/environment-select";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,6 +45,7 @@ import {
   type DeployDraftPlan,
   type DeployRouteStep,
 } from "@/lib/deploy-draft";
+import { shouldPlayTakeoff, takeoffHoldMs } from "@/lib/deploy-takeoff";
 import { applyBuildConfirmation, launchBuildFields } from "@/lib/deploy-build";
 import { environmentOptionKey } from "@/lib/environment-option";
 import { parseGithubRepo } from "@/lib/github";
@@ -132,6 +134,23 @@ export function NewDeploymentForm({
   const [environmentRequired, setEnvironmentRequired] = useState(false);
   const [enqueueBlocked, setEnqueueBlocked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [takingOff, setTakingOff] = useState(false);
+  const mountedRef = useRef(true);
+  const holdTimerRef = useRef<number | null>(null);
+  const holdSettleRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (holdTimerRef.current !== null) {
+        window.clearTimeout(holdTimerRef.current);
+        holdTimerRef.current = null;
+      }
+      holdSettleRef.current?.();
+      holdSettleRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isControlPlane) {
@@ -420,7 +439,17 @@ export function NewDeploymentForm({
       };
     }
 
+    const playTakeoff =
+      isControlPlane &&
+      step === "launch" &&
+      shouldPlayTakeoff(
+        typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      );
     setSubmitting(true);
+    if (playTakeoff) {
+      setTakingOff(true);
+    }
+    const started = Date.now();
     try {
       if (isControlPlane && target && persistEnvVars && target.envVars) {
         const items = Object.entries(target.envVars).map(([key, value]) => ({
@@ -441,8 +470,28 @@ export function NewDeploymentForm({
           : isControlPlane && target
             ? await createDeployment(repoUrl, true, target)
             : await createDeployment(repoUrl, false);
+      const hold = takeoffHoldMs(Date.now() - started, playTakeoff);
+      if (hold > 0) {
+        await new Promise<void>((resolve) => {
+          holdSettleRef.current = () => {
+            holdSettleRef.current = null;
+            resolve();
+          };
+          holdTimerRef.current = window.setTimeout(() => {
+            holdTimerRef.current = null;
+            holdSettleRef.current?.();
+          }, hold);
+        });
+      }
+      if (!mountedRef.current) {
+        return;
+      }
       router.push(`/deployments/${deployment.id}`);
     } catch (cause) {
+      if (!mountedRef.current) {
+        return;
+      }
+      setTakingOff(false);
       const message = cause instanceof Error ? cause.message : "Deploy failed.";
       if (isControlPlane && draftId) {
         setError(message);
@@ -455,7 +504,9 @@ export function NewDeploymentForm({
       }
       setError(message);
     } finally {
-      setSubmitting(false);
+      if (mountedRef.current) {
+        setSubmitting(false);
+      }
     }
   }
 
@@ -626,6 +677,7 @@ export function NewDeploymentForm({
               </label>
             </>
           ) : null}
+          {step === "launch" ? <LaunchTakeoff active={takingOff} /> : null}
           {review ? (
             <dl className="grid gap-2 rounded-lg border border-border/80 p-3 text-sm">
               {(
