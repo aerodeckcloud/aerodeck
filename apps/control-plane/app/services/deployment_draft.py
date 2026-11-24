@@ -7,9 +7,12 @@ from datetime import UTC, datetime
 from cryptography.fernet import InvalidToken
 from pydantic import ValidationError
 
+from starlette.concurrency import run_in_threadpool
+
 from app.core.errors import AppError, ConflictError, NotFoundError, QueueUnavailableError, UnprocessableError
 from app.models.deployment import Deployment, DeploymentStatus, DeploymentTrigger
 from app.schemas.deployment import DeploymentCreate, deployment_to_read
+from app.schemas.draft_security import DraftSecurityRead, DraftSecurityRecord, SecurityAcknowledgement
 from app.schemas.deployment_draft import (
     DeploymentDraftCreate,
     DeploymentDraftLaunch,
@@ -18,9 +21,11 @@ from app.schemas.deployment_draft import (
     DeploymentDraftWrite,
     DraftVariable,
 )
+from app.services.advisory_source import AdvisorySource
 from app.services.deploy_approval import DeployApprovalService
 from app.services.deployments import DeploymentService
 from app.services.environment_vars import decrypt_env_value, encrypt_env_value
+from app.services.manifest_packages import PackageSource
 from app.services.environments import EnvironmentService
 
 _PLAN_TOO_LARGE = "Draft plan is too large."
@@ -59,6 +64,43 @@ def merge_plan(stored: DeploymentDraftPlan, incoming: DeploymentDraftPlan) -> De
     return incoming.model_copy(update={"variables": merged, "extra_env": extra_env})
 
 
+def security_read(record: DraftSecurityRecord) -> DraftSecurityRead:
+    return DraftSecurityRead(
+        outcome=record.outcome,
+        findings=record.findings,
+        acknowledgement=record.acknowledgement,
+    )
+
+
+def _load_security(deployment: Deployment) -> DraftSecurityRecord | None:
+    if not deployment.draft_security:
+        return None
+    try:
+        return DraftSecurityRecord.model_validate_json(deployment.draft_security)
+    except ValidationError:
+        return None
+
+
+def _keep_acknowledgement(
+    previous: DraftSecurityRecord | None, record: DraftSecurityRecord
+) -> DraftSecurityRecord:
+    if previous is None or previous.acknowledgement is None:
+        return record
+    same_findings = previous.outcome == "findings" and record.outcome == "findings" and {
+        item.advisory_id for item in previous.findings
+    } == {item.advisory_id for item in record.findings}
+    same_incomplete = previous.acknowledgement == "incomplete" and record.outcome == "incomplete"
+    if previous.acknowledgement == "findings" and same_findings or same_incomplete:
+        return record.model_copy(
+            update={
+                "acknowledgement": previous.acknowledgement,
+                "acknowledged_at": previous.acknowledged_at,
+                "acknowledged_by": previous.acknowledged_by,
+            }
+        )
+    return record
+
+
 def draft_read(deployment: Deployment, plan: DeploymentDraftPlan) -> DeploymentDraftRead:
     return DeploymentDraftRead(deployment=deployment_to_read(deployment), plan=mask_plan(plan))
 
@@ -88,11 +130,15 @@ class DeploymentDraftService:
         deployments: DeploymentService,
         environments: EnvironmentService,
         approval: DeployApprovalService,
+        packages: PackageSource,
+        advisories: AdvisorySource,
     ) -> None:
         self._signing_key = signing_key
         self._deployments = deployments
         self._environments = environments
         self._approval = approval
+        self._packages = packages
+        self._advisories = advisories
 
     async def create(
         self, body: DeploymentDraftCreate, actor_user_id: uuid.UUID | None
@@ -142,7 +188,62 @@ class DeploymentDraftService:
         stored.finished_at = datetime.now(UTC)
         stored.draft_step = None
         stored.draft_plan = None
+        stored.draft_security = None
         return stored
+
+    async def scan_security(
+        self, deployment_id: uuid.UUID, actor_user_id: uuid.UUID | None
+    ) -> DraftSecurityRecord:
+        stored = await self._deployments.get(deployment_id)
+        self.require_owner(stored, actor_user_id)
+        previous = _load_security(stored)
+        record = _keep_acknowledgement(previous, await self._scan_record(stored.repo_url))
+        stored.draft_security = record.model_dump_json()
+        return record
+
+    async def acknowledge_security(
+        self,
+        deployment_id: uuid.UUID,
+        acknowledgement: SecurityAcknowledgement,
+        actor_user_id: uuid.UUID | None,
+    ) -> DraftSecurityRecord:
+        stored = await self._deployments.get(deployment_id)
+        self.require_owner(stored, actor_user_id)
+        record = _load_security(stored)
+        if record is None:
+            raise UnprocessableError("Run the dependency scan before acknowledging it.")
+        if acknowledgement == "findings" and record.outcome != "findings":
+            raise UnprocessableError("There are no dependency findings to acknowledge.")
+        if acknowledgement == "incomplete" and record.outcome != "incomplete":
+            raise UnprocessableError("The dependency scan is not incomplete.")
+        updated = record.model_copy(
+            update={
+                "acknowledgement": acknowledgement,
+                "acknowledged_at": datetime.now(UTC),
+                "acknowledged_by": actor_user_id,
+            }
+        )
+        stored.draft_security = updated.model_dump_json()
+        return updated
+
+    async def _scan_record(self, repo_url: str) -> DraftSecurityRecord:
+        try:
+            read = await run_in_threadpool(self._packages.read, repo_url)
+        except Exception:
+            return DraftSecurityRecord(outcome="incomplete")
+        if not read.found:
+            return DraftSecurityRecord(outcome="no_manifest")
+        if not read.packages:
+            return DraftSecurityRecord(outcome="incomplete" if read.unpinned else "clear")
+        try:
+            findings = await self._advisories.query(list(read.packages))
+        except Exception:
+            return DraftSecurityRecord(outcome="incomplete")
+        if findings:
+            return DraftSecurityRecord(outcome="findings", findings=findings)
+        if read.unpinned:
+            return DraftSecurityRecord(outcome="incomplete")
+        return DraftSecurityRecord(outcome="clear")
 
     async def launch(
         self, deployment_id: uuid.UUID, body: DeploymentDraftLaunch, actor_user_id: uuid.UUID | None
@@ -152,6 +253,14 @@ class DeploymentDraftService:
         merged = merge_plan(self.open(stored.draft_plan), body.plan)
         if merged.step != "launch":
             raise UnprocessableError("Confirm the launch step before deploying.")
+        record = _load_security(stored)
+        if record is None:
+            record = await self._scan_record(stored.repo_url)
+            stored.draft_security = record.model_dump_json()
+        if record.outcome == "findings" and record.acknowledgement != "findings":
+            raise UnprocessableError("Acknowledge the dependency findings before deploying.")
+        if record.outcome == "incomplete" and record.acknowledgement != "incomplete":
+            raise UnprocessableError("The dependency scan did not complete.")
         environment = await self._environments.get(body.project_id, body.environment_id)
         stored.project_id = body.project_id
         stored.environment_id = body.environment_id
@@ -204,3 +313,4 @@ class DeploymentDraftService:
             deployment.status = DeploymentStatus.running
         deployment.draft_step = None
         deployment.draft_plan = None
+        deployment.draft_security = None

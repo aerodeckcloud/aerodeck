@@ -6,6 +6,8 @@ import {
   deployStepPath,
   deploymentHref,
   launchReview,
+  parseSecurityReport,
+  securityNeedsAcknowledgement,
   stepAfterResources,
   stepBeforeTarget,
 } from "./deploy-draft";
@@ -13,10 +15,32 @@ import {
 describe("deploy draft routes", () => {
   it("gives each confirmed step its own page", () => {
     assert.equal(deployStepPath("draft-1", "build"), "/deploy/draft-1/build");
+    assert.equal(deployStepPath("draft-1", "security"), "/deploy/draft-1/security");
     assert.equal(deployStepPath("draft-1", "resources"), "/deploy/draft-1/databases");
     assert.equal(deployStepPath("draft-1", "variables"), "/deploy/draft-1/variables");
     assert.equal(deployStepPath("draft-1", "target"), "/deploy/draft-1/target");
     assert.equal(deployStepPath("draft-1", "launch"), "/deploy/draft-1/launch");
+  });
+
+  it("asks for an acknowledgement only when the scan found findings or did not finish", () => {
+    assert.equal(securityNeedsAcknowledgement("clear"), false);
+    assert.equal(securityNeedsAcknowledgement("no_manifest"), false);
+    assert.equal(securityNeedsAcknowledgement("findings"), true);
+    assert.equal(securityNeedsAcknowledgement("incomplete"), true);
+    const report = parseSecurityReport({
+      outcome: "findings",
+      acknowledgement: null,
+      findings: [
+        {
+          severity: "high",
+          package: "lodash",
+          advisory_id: "GHSA-test",
+          summary: "Prototype pollution in lodash\nRequest a payload",
+        },
+      ],
+    });
+    assert.equal(report.findings[0]?.summary, "Prototype pollution in lodash Request a payload");
+    assert.equal(report.findings[0]?.summary.includes("\n"), false);
   });
 
   it("puts the target after variables, or after databases when the scan found no env keys", () => {

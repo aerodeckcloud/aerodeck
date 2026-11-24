@@ -7,11 +7,23 @@ from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from app.api.deps import get_advisory_source, get_package_source
 from app.core.config import Settings, get_settings
+from app.services.manifest_packages import ManifestRead, PackageQuery
 from app.core.security import hash_client_secret
 from app.models import Base
 from app.services.deployment_logs import clear_memory_log_lines
 from main import create_app
+
+class _NoManifests:
+    def read(self, repo_url: str) -> ManifestRead:
+        return ManifestRead(found=False, packages=(), unpinned=0)
+
+
+class _NoAdvisories:
+    async def query(self, packages: list[PackageQuery]) -> list[object]:
+        return []
+
 
 CLIENT_ID = "ci-deployer"
 CLIENT_SECRET = "a-test-secret-that-is-long-enough-to-be-realistic"
@@ -54,6 +66,8 @@ def app_factory() -> Callable[[Settings], FastAPI]:
     def build(settings: Settings) -> FastAPI:
         application = create_app(settings)
         application.dependency_overrides[get_settings] = lambda: settings
+        application.dependency_overrides[get_package_source] = lambda: _NoManifests()
+        application.dependency_overrides[get_advisory_source] = lambda: _NoAdvisories()
         return application
 
     return build

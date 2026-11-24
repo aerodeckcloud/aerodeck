@@ -10,6 +10,7 @@ import {
 } from "@/components/deployment-blueprint-fields";
 import { DeployBuildStep } from "@/components/deploy-build-step";
 import { DeployResourcesStep } from "@/components/deploy-resources-step";
+import { DeploySecurityStep } from "@/components/deploy-security-step";
 import { LaunchTakeoff } from "@/components/launch-takeoff";
 import { EnvironmentSelect } from "@/components/environment-select";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,8 @@ import {
   launchDeployDraft,
   ProvisionEnqueueFailed,
   readDeployDraft,
+  readDeploySecurity,
+  acknowledgeDeploySecurity,
   updateDeployDraft,
   upsertEnvironmentVars,
 } from "@/lib/api";
@@ -40,10 +43,12 @@ import {
   countLaunchVariables,
   deployStepPath,
   launchReview,
+  securityNeedsAcknowledgement,
   stepAfterResources,
   stepBeforeTarget,
   type DeployDraftPlan,
   type DeployRouteStep,
+  type SecurityReport,
 } from "@/lib/deploy-draft";
 import { shouldPlayTakeoff, takeoffHoldMs } from "@/lib/deploy-takeoff";
 import { applyBuildConfirmation, launchBuildFields } from "@/lib/deploy-build";
@@ -59,6 +64,11 @@ function deployStepCopy(step: DeployRouteStep, controlPlane: boolean): { title: 
         title: "Build",
         description:
           "Detected from the scan. Change the port, and the Compose service when this repository has one.",
+      };
+    case "security":
+      return {
+        title: "Security",
+        description: "Public advisories for the manifests the scan recognized. Continuing records your choice.",
       };
     case "resources":
       return {
@@ -135,6 +145,10 @@ export function NewDeploymentForm({
   const [enqueueBlocked, setEnqueueBlocked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [takingOff, setTakingOff] = useState(false);
+  const [securityReport, setSecurityReport] = useState<SecurityReport | null>(null);
+  const [securityLoading, setSecurityLoading] = useState(step === "security" && Boolean(draftId));
+  const [securityAck, setSecurityAck] = useState(false);
+  const [securityAttempt, setSecurityAttempt] = useState(0);
   const mountedRef = useRef(true);
   const holdTimerRef = useRef<number | null>(null);
   const holdSettleRef = useRef<(() => void) | null>(null);
@@ -243,6 +257,34 @@ export function NewDeploymentForm({
     };
   }, [draftId]);
 
+  useEffect(() => {
+    if (step !== "security" || !draftId) {
+      return;
+    }
+    let cancelled = false;
+    void readDeploySecurity(draftId)
+      .then((report) => {
+        if (cancelled) {
+          return;
+        }
+        setSecurityReport(report);
+        setSecurityAck(report.acknowledgement !== null);
+        setSecurityLoading(false);
+        setError(null);
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setSecurityReport(null);
+        setSecurityLoading(false);
+        setError(cause instanceof Error ? cause.message : "The dependency scan did not complete.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [step, draftId, securityAttempt]);
+
   async function handleInspect() {
     setError(null);
     setRepoInvalid(false);
@@ -329,7 +371,40 @@ export function NewDeploymentForm({
       setServiceDraft(confirmed.service ?? "");
       if (draftId) {
         try {
-          await updateDeployDraft(draftId, planFor("resources", confirmedBlueprint));
+          await updateDeployDraft(draftId, planFor("security", confirmedBlueprint));
+          router.push(deployStepPath(draftId, "security"));
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Could not save this step.");
+        }
+        return;
+      }
+      setStep("security");
+      return;
+    }
+
+    if (isControlPlane && blueprint && step === "security") {
+      if (!securityReport) {
+        setError("The dependency scan did not complete.");
+        return;
+      }
+      const needsAck = securityNeedsAcknowledgement(securityReport.outcome);
+      if (needsAck && !securityAck && !securityReport.acknowledgement) {
+        setError(
+          securityReport.outcome === "findings"
+            ? "Acknowledge the dependency findings before continuing."
+            : "Acknowledge that the dependency scan did not complete, or retry.",
+        );
+        return;
+      }
+      if (draftId) {
+        try {
+          if (needsAck && !securityReport.acknowledgement) {
+            await acknowledgeDeploySecurity(
+              draftId,
+              securityReport.outcome === "findings" ? "findings" : "incomplete",
+            );
+          }
+          await updateDeployDraft(draftId, planFor("resources", blueprint));
           router.push(deployStepPath(draftId, "resources"));
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "Could not save this step.");
@@ -608,7 +683,22 @@ export function NewDeploymentForm({
               onServiceChange={setServiceDraft}
               portInvalid={portInvalid}
               disabled={submitting || inspecting || enqueueBlocked}
-              confirmed={step === "resources" || step === "variables" || step === "target" || step === "launch"}
+              confirmed={
+                step === "security" || step === "resources" || step === "variables" || step === "target" || step === "launch"
+              }
+            />
+          ) : null}
+          {isControlPlane && blueprint && step === "security" ? (
+            <DeploySecurityStep
+              report={securityReport}
+              loading={securityLoading}
+              acknowledge={securityAck}
+              onAcknowledge={setSecurityAck}
+              onRetry={() => {
+                setSecurityLoading(true);
+                setSecurityAttempt((attempt) => attempt + 1);
+              }}
+              disabled={submitting || enqueueBlocked}
             />
           ) : null}
           {isControlPlane && blueprint && step === "resources" ? (
@@ -704,6 +794,28 @@ export function NewDeploymentForm({
           ) : null}
         </CardContent>
         <CardFooter className="justify-end gap-2">
+          {step === "security" ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={() => {
+                if (draftId && blueprint) {
+                  void updateDeployDraft(draftId, planFor("build", blueprint))
+                    .then(() => {
+                      router.push(deployStepPath(draftId, "build"));
+                    })
+                    .catch((cause: unknown) => {
+                      setError(cause instanceof Error ? cause.message : "Could not save this step.");
+                    });
+                  return;
+                }
+                setStep("build");
+              }}
+            >
+              Change build
+            </Button>
+          ) : null}
           {step === "resources" ? (
             <Button
               type="button"
@@ -711,15 +823,19 @@ export function NewDeploymentForm({
               size="lg"
               onClick={() => {
                 if (draftId && blueprint) {
-                  void updateDeployDraft(draftId, planFor("build", blueprint)).then(() => {
-                    router.push(deployStepPath(draftId, "build"));
-                  });
+                  void updateDeployDraft(draftId, planFor("security", blueprint))
+                    .then(() => {
+                      router.push(deployStepPath(draftId, "security"));
+                    })
+                    .catch((cause: unknown) => {
+                      setError(cause instanceof Error ? cause.message : "Could not save this step.");
+                    });
                   return;
                 }
-                setStep("build");
+                setStep("security");
               }}
             >
-              Change build
+              Change security
             </Button>
           ) : null}
           {step === "variables" ? (
@@ -798,8 +914,13 @@ export function NewDeploymentForm({
               {inspecting ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Search data-icon="inline-start" />}
               {inspecting ? "Scanning…" : "Scan repository"}
             </Button>
-          ) : isControlPlane && (step === "build" || step === "resources" || step === "variables" || step === "target") ? (
-            <Button type="submit" size="lg" disabled={submitting || inspecting || enqueueBlocked}>
+          ) : isControlPlane &&
+            (step === "build" || step === "security" || step === "resources" || step === "variables" || step === "target") ? (
+            <Button
+              type="submit"
+              size="lg"
+              disabled={submitting || inspecting || enqueueBlocked || (step === "security" && securityLoading)}
+            >
               Continue
             </Button>
           ) : (

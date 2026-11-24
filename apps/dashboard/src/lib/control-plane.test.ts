@@ -18,6 +18,7 @@ import {
   createControlPlaneDeploymentAndProvision,
   launchControlPlaneDraft,
   readControlPlaneDraft,
+  readControlPlaneSecurity,
   provisionControlPlaneEnvironment,
   deployLatestControlPlaneDeployment,
   promoteControlPlaneDeployment,
@@ -2487,5 +2488,89 @@ describe("launchControlPlaneDraft", () => {
         return true;
       },
     );
+  });
+});
+
+describe("readControlPlaneSecurity", () => {
+  it("keeps the advisory summary and drops the rest of the response", async () => {
+    clearControlPlaneTokenCache();
+    const draftId = "33333333-3333-4333-8333-333333333333";
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      assert.match(url, /\/api\/v1\/deployments\/[^/]+\/security$/);
+      return jsonResponse({
+        outcome: "findings",
+        acknowledgement: null,
+        acknowledged_at: "2026-11-24T00:00:00.000Z",
+        findings: [
+          {
+            severity: "high",
+            package: "lodash",
+            advisory_id: "GHSA-test",
+            summary: "Prototype pollution in lodash",
+            details: "payload example",
+            references: ["https://example.invalid/advisory"],
+          },
+        ],
+      });
+    };
+
+    const report = await readControlPlaneSecurity(config, draftId, { fetch: fetchImpl });
+    assert.equal(report.outcome, "findings");
+    assert.equal(report.findings.length, 1);
+    assert.equal(report.findings[0]?.summary, "Prototype pollution in lodash");
+    assert.equal(JSON.stringify(report).includes("payload"), false);
+    assert.equal(JSON.stringify(report).includes("example.invalid"), false);
+  });
+
+  it("parses a draft saved on the security step", async () => {
+    clearControlPlaneTokenCache();
+    const draftId = "33333333-3333-4333-8333-333333333333";
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse({
+        deployment: {
+          id: draftId,
+          repo_url: "https://github.com/acme/demo",
+          owner: "acme",
+          repo: "demo",
+          started_at: "2026-11-24T00:00:00.000Z",
+          status: "draft",
+          draft_step: "security",
+        },
+        plan: {
+          step: "security",
+          blueprint: {
+            version: 1,
+            name: "demo",
+            repo_url: "https://github.com/acme/demo",
+            source: "dockerfile",
+            build: {
+              strategy: "dockerfile",
+              dockerfile: "Dockerfile",
+              compose_file: null,
+              service: null,
+              port: 8000,
+            },
+            addons: [],
+            env: [],
+          },
+          detected_addons: [],
+          selected_addons: [],
+          variables: [],
+          extra_env: "",
+        },
+      });
+    };
+
+    const draft = await readControlPlaneDraft(config, draftId, { fetch: fetchImpl });
+    assert.equal(draft.deployment.draft_step, "security");
+    assert.equal(draft.plan.step, "security");
   });
 });

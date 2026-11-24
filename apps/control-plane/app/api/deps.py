@@ -34,7 +34,9 @@ from app.services.certificate_keys import FileCertificateKeyStore
 from app.services.certificates import CertificateService
 from app.services.console_sessions import ConsoleSessionService
 from app.services.console_users import ConsoleUserService
+from app.services.advisory_source import AdvisorySource, OsvAdvisorySource
 from app.services.deployment_draft import DeploymentDraftService
+from app.services.manifest_packages import GitPackageSource, PackageSource
 from app.services.deployment_terminal import DeploymentTerminalService
 from app.services.deploy_approval import DeployApprovalService
 from app.services.deployments import DeploymentService
@@ -426,17 +428,33 @@ def get_deploy_approval_service(
 DeployApprovalServiceDep = Annotated[DeployApprovalService, Depends(get_deploy_approval_service)]
 
 
+def get_package_source(settings: SettingsDep) -> PackageSource:
+    return GitPackageSource(settings.git_bin)
+
+
+def get_advisory_source() -> AdvisorySource:
+    return OsvAdvisorySource()
+
+
+PackageSourceDep = Annotated[PackageSource, Depends(get_package_source)]
+AdvisorySourceDep = Annotated[AdvisorySource, Depends(get_advisory_source)]
+
+
 def get_deployment_draft_service(
     settings: SettingsDep,
     deployments: DeploymentServiceDep,
     environments: EnvironmentServiceDep,
     approval: DeployApprovalServiceDep,
+    packages: PackageSourceDep,
+    advisories: AdvisorySourceDep,
 ) -> DeploymentDraftService:
     return DeploymentDraftService(
         settings.auth_signing_key.get_secret_value(),
         deployments,
         environments,
         approval,
+        packages,
+        advisories,
     )
 
 
