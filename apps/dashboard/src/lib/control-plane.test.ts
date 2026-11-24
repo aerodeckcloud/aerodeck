@@ -17,6 +17,7 @@ import {
   createControlPlaneDeployment,
   createControlPlaneDeploymentAndProvision,
   launchControlPlaneDraft,
+  readControlPlaneDraft,
   provisionControlPlaneEnvironment,
   deployLatestControlPlaneDeployment,
   promoteControlPlaneDeployment,
@@ -2335,6 +2336,57 @@ describe("console sessions", () => {
     };
     await revokeControlPlaneSession(config, sessionToken, { fetch: revoker });
     assert.equal(revoked, true);
+  });
+});
+
+describe("readControlPlaneDraft", () => {
+  it("parses a draft saved on the variables step", async () => {
+    clearControlPlaneTokenCache();
+    const draftId = "33333333-3333-4333-8333-333333333333";
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/token")) {
+        return jsonResponse({ access_token: "issued-bearer", expires_in: 900 });
+      }
+      return jsonResponse({
+        deployment: {
+          id: draftId,
+          repo_url: "https://github.com/acme/demo",
+          owner: "acme",
+          repo: "demo",
+          started_at: "2026-11-24T00:00:00.000Z",
+          status: "draft",
+          draft_step: "variables",
+        },
+        plan: {
+          step: "variables",
+          blueprint: {
+            version: 1,
+            name: "demo",
+            repo_url: "https://github.com/acme/demo",
+            source: "dockerfile",
+            build: {
+              strategy: "dockerfile",
+              dockerfile: "Dockerfile",
+              compose_file: null,
+              service: null,
+              port: 8000,
+            },
+            addons: [],
+            env: [{ key: "PORT", required: true, secret: false }],
+          },
+          detected_addons: [],
+          selected_addons: [],
+          variables: [{ key: "PORT", value: "3000", secret: false, redacted: false }],
+          extra_env: "",
+        },
+      });
+    };
+
+    const draft = await readControlPlaneDraft(config, draftId, { fetch: fetchImpl });
+    assert.equal(draft.deployment.draft_step, "variables");
+    assert.equal(draft.plan.step, "variables");
+    assert.equal(draft.plan.variables[0]?.key, "PORT");
   });
 });
 
