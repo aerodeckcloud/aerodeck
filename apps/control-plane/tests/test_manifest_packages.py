@@ -31,6 +31,43 @@ def test_exact_pins_are_read_and_ranges_stay_unpinned(tmp_path) -> None:
     }
 
 
+def test_dev_dependency_pins_are_part_of_the_scan(tmp_path) -> None:
+    (tmp_path / "package.json").write_text(
+        '{"devDependencies": {"lodash": "4.17.21"}}',
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        "\n".join(
+            (
+                "[project.optional-dependencies]",
+                'dev = ["httpx==0.27.0"]',
+                "",
+                "[dependency-groups]",
+                'lint = ["ruff==0.6.0"]',
+                "",
+                "[tool.poetry.dev-dependencies]",
+                'certifi = "==2024.2.2"',
+                "",
+                "[tool.poetry.group.dev.dependencies]",
+                'pytest = "==8.2.0"',
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    read = read_manifests(tmp_path)
+    assert read.found is True
+    assert read.unpinned == 0
+    found = {(item.ecosystem, item.name, item.version) for item in read.packages}
+    assert found == {
+        ("npm", "lodash", "4.17.21"),
+        ("PyPI", "httpx", "0.27.0"),
+        ("PyPI", "ruff", "0.6.0"),
+        ("PyPI", "certifi", "2024.2.2"),
+        ("PyPI", "pytest", "8.2.0"),
+    }
+
+
 def test_a_dockerfile_without_a_manifest_is_not_a_scan(tmp_path) -> None:
     (tmp_path / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
     read = read_manifests(tmp_path)

@@ -95,6 +95,62 @@ def _pinned_version(raw: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _version_table(
+    block: object, *, ecosystem: str, skip: frozenset[str] = frozenset()
+) -> tuple[list[PackageQuery], int]:
+    """Name-to-version tables. A missing table was not written; a present one we cannot read counts."""
+    if block is None:
+        return [], 0
+    if not isinstance(block, dict):
+        return [], 1
+    pinned: list[PackageQuery] = []
+    missed = 0
+    for name, raw in block.items():
+        if not isinstance(name, str) or name in skip:
+            continue
+        version_text = raw if isinstance(raw, str) else raw.get("version") if isinstance(raw, dict) else None
+        if not isinstance(version_text, str):
+            missed += 1
+            continue
+        version = _pinned_version(version_text)
+        if version is None:
+            missed += 1
+            continue
+        pinned.append(PackageQuery(ecosystem, name.strip(), version))
+    return pinned, missed
+
+
+def _requirement_list(items: object) -> tuple[list[PackageQuery], int]:
+    if items is None:
+        return [], 0
+    if not isinstance(items, list):
+        return [], 1
+    pinned: list[PackageQuery] = []
+    missed = 0
+    for item in items:
+        if not isinstance(item, str):
+            missed += 1
+            continue
+        added, skipped = _requirements(item)
+        pinned.extend(added)
+        missed += skipped
+    return pinned, missed
+
+
+def _requirement_groups(groups: object) -> tuple[list[PackageQuery], int]:
+    if groups is None:
+        return [], 0
+    if not isinstance(groups, dict):
+        return [], 1
+    pinned: list[PackageQuery] = []
+    missed = 0
+    for items in groups.values():
+        added, skipped = _requirement_list(items)
+        pinned.extend(added)
+        missed += skipped
+    return pinned, missed
+
+
 def _npm(text: str) -> tuple[list[PackageQuery], int]:
     try:
         data = json.loads(text)
@@ -104,19 +160,10 @@ def _npm(text: str) -> tuple[list[PackageQuery], int]:
         return [], 1
     pinned: list[PackageQuery] = []
     missed = 0
-    for field in ("dependencies", "optionalDependencies"):
-        block = data.get(field)
-        if not isinstance(block, dict):
-            continue
-        for name, raw in block.items():
-            if not isinstance(name, str) or not isinstance(raw, str):
-                missed += 1
-                continue
-            version = _pinned_version(raw)
-            if version is None:
-                missed += 1
-                continue
-            pinned.append(PackageQuery("npm", name.strip(), version))
+    for field in ("dependencies", "devDependencies", "optionalDependencies"):
+        added, skipped = _version_table(data.get(field), ecosystem="npm")
+        pinned.extend(added)
+        missed += skipped
     return pinned, missed
 
 
@@ -144,33 +191,41 @@ def _pyproject(text: str) -> tuple[list[PackageQuery], int]:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError:
         return [], 1
+    if not isinstance(data, dict):
+        return [], 1
     pinned: list[PackageQuery] = []
     missed = 0
     project = data.get("project")
-    if isinstance(project, dict) and isinstance(project.get("dependencies"), list):
-        for item in project["dependencies"]:
-            if not isinstance(item, str):
+    if isinstance(project, dict):
+        added, skipped = _requirement_list(project.get("dependencies"))
+        pinned.extend(added)
+        missed += skipped
+        added, skipped = _requirement_groups(project.get("optional-dependencies"))
+        pinned.extend(added)
+        missed += skipped
+    added, skipped = _requirement_groups(data.get("dependency-groups"))
+    pinned.extend(added)
+    missed += skipped
+    tool = data.get("tool")
+    poetry = tool.get("poetry") if isinstance(tool, dict) else None
+    if not isinstance(poetry, dict):
+        return pinned, missed
+    for field in ("dependencies", "dev-dependencies"):
+        added, skipped = _version_table(poetry.get(field), ecosystem="PyPI", skip=frozenset({"python"}))
+        pinned.extend(added)
+        missed += skipped
+    groups = poetry.get("group")
+    if isinstance(groups, dict):
+        for group in groups.values():
+            block = group.get("dependencies") if isinstance(group, dict) else None
+            if group is not None and not isinstance(group, dict):
                 missed += 1
                 continue
-            added, skipped = _requirements(item)
+            added, skipped = _version_table(block, ecosystem="PyPI", skip=frozenset({"python"}))
             pinned.extend(added)
             missed += skipped
-    poetry = data.get("tool")
-    if isinstance(poetry, dict):
-        poetry = poetry.get("poetry")
-    if isinstance(poetry, dict) and isinstance(poetry.get("dependencies"), dict):
-        for name, raw in poetry["dependencies"].items():
-            if name == "python" or not isinstance(name, str):
-                continue
-            version_text = raw if isinstance(raw, str) else raw.get("version") if isinstance(raw, dict) else None
-            if not isinstance(version_text, str):
-                missed += 1
-                continue
-            version = _pinned_version(version_text)
-            if version is None:
-                missed += 1
-                continue
-            pinned.append(PackageQuery("PyPI", name, version))
+    elif groups is not None:
+        missed += 1
     return pinned, missed
 
 
