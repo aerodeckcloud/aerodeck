@@ -22,7 +22,13 @@ PROJECTS = "/api/v1/projects"
 REPO = "https://github.com/mangatohjunior/aerodeck"
 
 
-def _plan(step: str = "build", *, secret: str = "super-secret", redacted: bool = False) -> dict:
+def _plan(
+    step: str = "build",
+    *,
+    secret: str = "super-secret",
+    redacted: bool = False,
+    extra_env: str = "",
+) -> dict:
     return {
         "step": step,
         "blueprint": {
@@ -35,6 +41,7 @@ def _plan(step: str = "build", *, secret: str = "super-secret", redacted: bool =
             {"key": "SESSION_SECRET_KEY", "value": secret, "secret": True, "redacted": redacted},
             {"key": "PUBLIC_NAME", "value": "portal", "secret": False},
         ],
+        "extra_env": extra_env,
     }
 
 
@@ -49,13 +56,18 @@ async def _user(client: AsyncClient, auth: dict[str, str], email: str) -> dict[s
 
 
 def test_redacted_write_keeps_the_stored_secret() -> None:
-    stored = DeploymentDraftPlan.model_validate(_plan())
+    stored = DeploymentDraftPlan.model_validate(_plan(extra_env="TOKEN=sekrit"))
     incoming = DeploymentDraftPlan.model_validate(_plan(secret="", redacted=True))
     merged = merge_plan(stored, incoming)
     assert merged.variables[0].value == "super-secret"
-    assert mask_plan(merged).variables[0].value == ""
-    assert mask_plan(merged).variables[0].redacted is True
-    assert mask_plan(merged).variables[1].value == "portal"
+    assert merged.extra_env == "TOKEN=sekrit"
+    masked = mask_plan(merged)
+    assert masked.variables[0].value == ""
+    assert masked.variables[0].redacted is True
+    assert masked.variables[1].value == "portal"
+    assert masked.extra_env == ""
+    replaced = merge_plan(stored, DeploymentDraftPlan.model_validate(_plan(extra_env="OTHER=1")))
+    assert replaced.extra_env == "OTHER=1"
 
 
 async def test_draft_is_private_and_does_not_queue(
@@ -64,7 +76,11 @@ async def test_draft_is_private_and_does_not_queue(
     owner = await _user(client, auth, "draft-owner@aerodeck.test")
     other = await _user(client, auth, "draft-other@aerodeck.test")
 
-    created = await client.post(f"{DEPLOYMENTS}/draft", json={"repo_url": REPO, "plan": _plan()}, headers=owner)
+    created = await client.post(
+        f"{DEPLOYMENTS}/draft",
+        json={"repo_url": REPO, "plan": _plan(extra_env="TOKEN=sekrit")},
+        headers=owner,
+    )
     assert created.status_code == 201, created.text
     body = created.json()
     draft_id = body["deployment"]["id"]
@@ -73,6 +89,7 @@ async def test_draft_is_private_and_does_not_queue(
     assert body["deployment"]["draft_step"] == "build"
     assert body["plan"]["variables"][0]["value"] == ""
     assert body["plan"]["variables"][0]["redacted"] is True
+    assert body["plan"]["extra_env"] == ""
 
     listed = await client.get(DEPLOYMENTS, headers=owner)
     assert listed.status_code == 200, listed.text
@@ -142,7 +159,11 @@ async def test_redacted_update_keeps_the_sealed_secret(
     assert environment.status_code == 201, environment.text
     environment_id = environment.json()["id"]
 
-    created = await client.post(f"{DEPLOYMENTS}/draft", json={"repo_url": REPO, "plan": _plan()}, headers=owner)
+    created = await client.post(
+        f"{DEPLOYMENTS}/draft",
+        json={"repo_url": REPO, "plan": _plan(extra_env="TOKEN=sekrit")},
+        headers=owner,
+    )
     assert created.status_code == 201, created.text
     draft_id = created.json()["deployment"]["id"]
 
@@ -161,9 +182,11 @@ async def test_redacted_update_keeps_the_sealed_secret(
     assert updated.status_code == 200, updated.text
     assert updated.json()["plan"]["variables"][1]["value"] == "renamed"
     assert updated.json()["plan"]["variables"][0]["value"] == ""
+    assert updated.json()["plan"]["extra_env"] == ""
     sealed = await _stored_plan(app, draft_id)
     assert sealed.variables[0].value == "super-secret"
     assert sealed.variables[1].value == "renamed"
+    assert sealed.extra_env == "TOKEN=sekrit"
 
     hidden = await client.get(f"{PROJECTS}/{project_id}/deployments", headers=other)
     assert hidden.status_code == 200, hidden.text
@@ -242,7 +265,7 @@ class _BrokenDispatcher:
         raise AssertionError("revoke should not be called")
 
 
-async def test_launch_broker_failure_marks_the_row_failed(app: FastAPI) -> None:
+async def test_launch_broker_failure_leaves_the_draft(app: FastAPI) -> None:
     app.dependency_overrides[get_job_dispatcher] = lambda: _BrokenDispatcher()
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -277,9 +300,16 @@ async def test_launch_broker_failure_marks_the_row_failed(app: FastAPI) -> None:
             assert launched.json()["code"] == "queue_unavailable"
             stored = await client.get(f"{DEPLOYMENTS}/{draft_id}", headers=owner)
             assert stored.status_code == 200, stored.text
-            assert stored.json()["status"] == "failed"
+            assert stored.json()["status"] == "draft"
+            assert stored.json()["draft_step"] == "build"
             sealed = await _stored_plan(app, draft_id)
             assert sealed.variables[0].value == "super-secret"
+            again = await client.get(f"{DEPLOYMENTS}/{draft_id}/draft", headers=owner)
+            assert again.status_code == 200, again.text
+            discarded = await client.post(f"{DEPLOYMENTS}/{draft_id}/discard", headers=owner)
+            assert discarded.status_code == 200, discarded.text
+            assert discarded.json()["status"] == "cancelled"
+            assert discarded.json()["draft_step"] is None
     finally:
         app.dependency_overrides.pop(get_job_dispatcher, None)
 

@@ -28,7 +28,11 @@ _MAX_PLAN_CHARS = 64_000
 
 
 def mask_plan(plan: DeploymentDraftPlan) -> DeploymentDraftPlan:
-    """Drop secret values. ``redacted`` tells the client to keep the stored secret."""
+    """Drop secret values. ``redacted`` tells the client to keep the stored secret.
+
+    ``extra_env`` is free-form and may hold secrets, so a read never returns it.
+    An empty write keeps the sealed copy.
+    """
     masked = plan.model_copy(deep=True)
     variables: list[DraftVariable] = []
     for item in masked.variables:
@@ -37,6 +41,7 @@ def mask_plan(plan: DeploymentDraftPlan) -> DeploymentDraftPlan:
         else:
             variables.append(item.model_copy(update={"redacted": False}))
     masked.variables = variables
+    masked.extra_env = ""
     return masked
 
 
@@ -50,7 +55,8 @@ def merge_plan(stored: DeploymentDraftPlan, incoming: DeploymentDraftPlan) -> De
             merged.append(kept.model_copy(update={"redacted": False}))
             continue
         merged.append(item.model_copy(update={"redacted": False}))
-    return incoming.model_copy(update={"variables": merged})
+    extra_env = incoming.extra_env if incoming.extra_env.strip() else stored.extra_env
+    return incoming.model_copy(update={"variables": merged, "extra_env": extra_env})
 
 
 def draft_read(deployment: Deployment, plan: DeploymentDraftPlan) -> DeploymentDraftRead:
