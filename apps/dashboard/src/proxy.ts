@@ -1,13 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { anonymousEntryPath } from "@/lib/public-paths";
 import { SESSION_COOKIE } from "@/lib/session-cookie";
 
 export function proxy(request: NextRequest) {
   if (!request.cookies.get(SESSION_COOKIE)?.value) {
-    const login = request.nextUrl.clone();
-    login.pathname = "/login";
-    login.search = "";
-    return NextResponse.redirect(login);
+    const entry = request.nextUrl.clone();
+    entry.pathname = anonymousEntryPath(request.nextUrl.pathname);
+    entry.search = "";
+    return NextResponse.redirect(entry);
   }
 
   return NextResponse.next();
