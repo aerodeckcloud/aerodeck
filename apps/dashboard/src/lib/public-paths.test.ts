@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
+  PUBLIC_HOME_PATH,
   PUBLIC_PATH_SEGMENTS,
+  LOGIN_PATH,
+  anonymousEntryPath,
   buildProxyMatcher,
   pathnameMatchesProxy,
 } from "@/lib/public-paths";
@@ -30,5 +33,11 @@ describe("public path proxy matcher", () => {
     assert.equal(pathnameMatchesProxy("/features", matcher), false);
     assert.equal(pathnameMatchesProxy("/", matcher), true);
     assert.equal(pathnameMatchesProxy("/projects", matcher), true);
+  });
+
+  it("sends an anonymous root visit to home and other console paths to login", () => {
+    assert.equal(anonymousEntryPath("/"), PUBLIC_HOME_PATH);
+    assert.equal(anonymousEntryPath("/projects"), LOGIN_PATH);
+    assert.equal(anonymousEntryPath("/deploy"), LOGIN_PATH);
   });
 });
