@@ -29,7 +29,10 @@ describe("public path proxy matcher", () => {
   });
 
   it("leaves /home public and still matches the console root", () => {
+    assert.ok(PUBLIC_PATH_SEGMENTS.includes("docs"));
     assert.equal(pathnameMatchesProxy("/home", matcher), false);
+    assert.equal(pathnameMatchesProxy("/docs", matcher), false);
+    assert.equal(pathnameMatchesProxy("/docs/aerodeck-blueprint-schema.md", matcher), false);
     assert.equal(pathnameMatchesProxy("/features", matcher), false);
     assert.equal(pathnameMatchesProxy("/", matcher), true);
     assert.equal(pathnameMatchesProxy("/projects", matcher), true);

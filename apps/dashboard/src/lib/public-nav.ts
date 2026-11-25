@@ -7,6 +7,7 @@ export const PUBLIC_HOME = PUBLIC_HOME_PATH;
 
 export const PUBLIC_NAV = [
   { href: PUBLIC_HOME, label: "Home" },
+  { href: "/docs", label: "Docs" },
   { href: "/about", label: "About" },
   { href: "/features", label: "Features" },
   { href: POLICY_HREF, label: "Policy" },

@@ -1,8 +1,12 @@
-# AeroDeck Application Blueprint Schema (`aerodeck.yaml` / `aerodeck.json`)
+# Aerodeck Cloud Application Blueprint Schema (`aerodeck.yaml` / `aerodeck.json`)
 
-AeroDeck supports a declarative **Application Blueprint Schema (v1)** so any GitHub repository can declare its build strategy, exposed port, required runtime environment variables, secrets, and attached database addons (`postgres`, `redis`).
+The operator Docs page publishes this schema at `/docs` and
+`/docs/aerodeck-blueprint-schema.md` so an agent can generate `aerodeck.yaml`
+from a sample repository.
 
-When an operator enters a GitHub URL on **`/deploy`**, AeroDeck inspects the repository (`POST /api/v1/deployments/inspect`) in the following priority order:
+Aerodeck Cloud supports a declarative **Application Blueprint Schema (v1)** so any GitHub repository can declare its build strategy, exposed port, required runtime environment variables, secrets, and attached database addons (`postgres`, `redis`, `mongodb`).
+
+When an operator enters a GitHub URL on **`/deploy`**, Aerodeck Cloud inspects the repository (`POST /api/v1/deployments/inspect`) in the following priority order:
 
 1. **`aerodeck.yaml` / `aerodeck.yml` / `aerodeck.json`** at the repository root (authoritative blueprint).
 2. **Automatic Fallback Synthesis** from `docker-compose.yaml` / `compose.yaml`, `Dockerfile`, `.env.example` / `.env.sample`, and `mock-secrets/` when no `aerodeck.yaml` is present.
@@ -96,10 +100,10 @@ env:
 
 ---
 
-## 3. Automatic Platform Variables Injected by AeroDeck
+## 3. Automatic Platform Variables Injected by Aerodeck Cloud
 
-On every deployment, AeroDeck automatically injects:
+On every deployment, Aerodeck Cloud automatically injects:
 - `PORT`: The detected or declared `build.port`.
 - `HOST`: `0.0.0.0`.
 - `AERODECK_PUBLIC_URL`, `PUBLIC_URL`, `PORTAL_PUBLIC_URL`: `https://<project>-<env>.dev.aerodeckcloud.com`.
-- `DATABASE_URL` / `REDIS_URL`: Automatically populated whenever the `postgres` or `redis` addon is enabled.
+- `DATABASE_URL` / `REDIS_URL` / `MONGODB_URI`: Automatically populated whenever the matching addon is enabled.
