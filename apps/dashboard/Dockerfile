@@ -1,21 +1,22 @@
 # syntax=docker/dockerfile:1.7
 #
-# Build from apps/dashboard (not on the 1 GB control Droplet):
-#   docker build -t aerodeck/dashboard:dev .
+# Build from the repository root so docs/aerodeck-blueprint-schema.md is available:
+#   docker build -f apps/dashboard/Dockerfile -t aerodeck/dashboard:dev .
 #
 # Run on the control Droplet so the server can reach the API on 127.0.0.1:8000.
 # Procedure: docs/runbooks/dashboard-console.md
 
 FROM node:22-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY apps/dashboard/package.json apps/dashboard/package-lock.json ./
 RUN npm ci
 
 FROM node:22-alpine AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+COPY apps/dashboard/ ./
+COPY docs/aerodeck-blueprint-schema.md ./content/aerodeck-blueprint-schema.md
 RUN npm run build
 
 FROM node:22-alpine AS runtime
@@ -28,6 +29,7 @@ RUN addgroup -g 10001 -S aerodeck \
 COPY --from=build --chown=10001:10001 /app/public ./public
 COPY --from=build --chown=10001:10001 /app/.next/standalone ./
 COPY --from=build --chown=10001:10001 /app/.next/static ./.next/static
+COPY --from=build --chown=10001:10001 /app/content ./content
 USER 10001
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

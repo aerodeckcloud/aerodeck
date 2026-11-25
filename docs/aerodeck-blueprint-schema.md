@@ -1,11 +1,32 @@
-# AeroDeck Application Blueprint Schema (`aerodeck.yaml` / `aerodeck.json`)
+# Aerodeck Cloud Application Blueprint Schema (`aerodeck.yaml` / `aerodeck.json`)
 
-AeroDeck supports a declarative **Application Blueprint Schema (v1)** so any GitHub repository can declare its build strategy, exposed port, required runtime environment variables, secrets, and attached database addons (`postgres`, `redis`).
+The operator Docs page publishes this schema at `/docs` and
+`/docs/aerodeck-blueprint-schema.md` so an agent can generate `aerodeck.yaml`
+from a sample repository.
 
-When an operator enters a GitHub URL on **`/deploy`**, AeroDeck inspects the repository (`POST /api/v1/deployments/inspect`) in the following priority order:
+Aerodeck Cloud supports a declarative **Application Blueprint Schema (v1)** so any GitHub repository can declare its build strategy, exposed port, required runtime environment variables, secrets, and attached database addons (`postgres`, `redis`, `mongodb`).
+
+When an operator enters a GitHub URL on **`/deploy`**, Aerodeck Cloud inspects the repository (`POST /api/v1/deployments/inspect`) in the following priority order:
 
 1. **`aerodeck.yaml` / `aerodeck.yml` / `aerodeck.json`** at the repository root (authoritative blueprint).
 2. **Automatic Fallback Synthesis** from `docker-compose.yaml` / `compose.yaml`, `Dockerfile`, `.env.example` / `.env.sample`, and `mock-secrets/` when no `aerodeck.yaml` is present.
+
+---
+
+## Agent instructions
+
+Given a sample application repository, write `aerodeck.yaml` at the repository root that validates against this schema (version `1`).
+
+Rules for the agent:
+
+- Prefer `build.strategy: dockerfile` when a root `Dockerfile` exists.
+- Prefer `build.strategy: compose` when the app is defined by `docker-compose.yaml` / `compose.yaml` and no root Dockerfile is intended.
+- Prefer `build.strategy: auto` when a project file is enough (`package.json` with `scripts.start`, `requirements.txt` / `pyproject.toml`, `go.mod`, `index.html`, and so on).
+- Set `build.port` to the port the process listens on inside the container.
+- Only declare `env` entries the app needs. Mark secrets with `secret: true`. Use `generate: hex32` only for signing keys or similar random secrets.
+- Only add `postgres`, `redis`, or `mongodb` addons the app actually uses.
+- Do not invent cloud providers other than what this schema describes.
+- Output a single `aerodeck.yaml` file and nothing else unless asked.
 
 ---
 
@@ -63,7 +84,7 @@ env:
 | `version` | `1` | Yes | Schema version (`1`). |
 | `name` | `string` | No | Human-readable application or service name. Defaults to the GitHub repository name. |
 | `build` | `BlueprintBuild` | No | Build strategy, Dockerfile/Compose path, and listening TCP port. |
-| `addons` | `BlueprintAddon[]` | No | Database addons (`postgres`, `redis`) to provision and attach. |
+| `addons` | `BlueprintAddon[]` | No | Database addons (`postgres`, `redis`, `mongodb`) to provision and attach. |
 | `env` | `BlueprintEnvVar[]` | No | Runtime environment variables and secrets prompted on `/deploy`. |
 
 ### `build` Object (`BlueprintBuild`)
@@ -96,10 +117,11 @@ env:
 
 ---
 
-## 3. Automatic Platform Variables Injected by AeroDeck
+## 3. Automatic Platform Variables Injected by Aerodeck Cloud
 
-On every deployment, AeroDeck automatically injects:
+On every deployment, Aerodeck Cloud automatically injects:
+
 - `PORT`: The detected or declared `build.port`.
 - `HOST`: `0.0.0.0`.
 - `AERODECK_PUBLIC_URL`, `PUBLIC_URL`, `PORTAL_PUBLIC_URL`: `https://<project>-<env>.dev.aerodeckcloud.com`.
-- `DATABASE_URL` / `REDIS_URL`: Automatically populated whenever the `postgres` or `redis` addon is enabled.
+- `DATABASE_URL` / `REDIS_URL` / `MONGODB_URI`: Automatically populated whenever the matching addon is enabled.

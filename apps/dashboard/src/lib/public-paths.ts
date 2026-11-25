@@ -1,6 +1,7 @@
-/** Path segments the session proxy must not gate. `home` and `features` are public pages. */
+/** Path segments the session proxy must not gate. `home`, `docs`, and `features` are public pages. */
 export const PUBLIC_PATH_SEGMENTS = [
   "about",
+  "docs",
   "features",
   "home",
   "policy",
