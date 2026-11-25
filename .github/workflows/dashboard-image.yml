@@ -11,6 +11,7 @@ on:
   pull_request:
     paths:
       - "apps/dashboard/**"
+      - "docs/aerodeck-blueprint-schema.md"
       - "apps/control-plane/scripts/prune_docr_images.py"
       - "apps/control-plane/scripts/publish-console-route.py"
       - "apps/control-plane/scripts/start-dashboard-on-droplet.sh"
@@ -20,6 +21,7 @@ on:
     branches: [main]
     paths:
       - "apps/dashboard/**"
+      - "docs/aerodeck-blueprint-schema.md"
       - "apps/control-plane/scripts/prune_docr_images.py"
       - "apps/control-plane/scripts/publish-console-route.py"
       - "apps/control-plane/scripts/start-dashboard-on-droplet.sh"
@@ -59,7 +61,7 @@ jobs:
           docker build \
             --file apps/dashboard/Dockerfile \
             --tag "aerodeck/dashboard:${GITHUB_SHA}" \
-            apps/dashboard
+            .
 
   push:
     name: push to DigitalOcean Container Registry
@@ -107,7 +109,7 @@ jobs:
             --file apps/dashboard/Dockerfile \
             --tag "${image}:dashboard-${GITHUB_SHA}" \
             --tag "${image}:dashboard-main" \
-            apps/dashboard
+            .
           echo "${token}" | docker login registry.digitalocean.com \
             --username "${token}" \
             --password-stdin

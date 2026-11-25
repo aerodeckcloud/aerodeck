@@ -6,3 +6,4 @@
 apps/control-plane/tests
 apps/control-plane/.pytest_cache
 *.md
+!docs/aerodeck-blueprint-schema.md

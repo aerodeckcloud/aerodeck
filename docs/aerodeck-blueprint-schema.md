@@ -13,6 +13,23 @@ When an operator enters a GitHub URL on **`/deploy`**, Aerodeck Cloud inspects t
 
 ---
 
+## Agent instructions
+
+Given a sample application repository, write `aerodeck.yaml` at the repository root that validates against this schema (version `1`).
+
+Rules for the agent:
+
+- Prefer `build.strategy: dockerfile` when a root `Dockerfile` exists.
+- Prefer `build.strategy: compose` when the app is defined by `docker-compose.yaml` / `compose.yaml` and no root Dockerfile is intended.
+- Prefer `build.strategy: auto` when a project file is enough (`package.json` with `scripts.start`, `requirements.txt` / `pyproject.toml`, `go.mod`, `index.html`, and so on).
+- Set `build.port` to the port the process listens on inside the container.
+- Only declare `env` entries the app needs. Mark secrets with `secret: true`. Use `generate: hex32` only for signing keys or similar random secrets.
+- Only add `postgres`, `redis`, or `mongodb` addons the app actually uses.
+- Do not invent cloud providers other than what this schema describes.
+- Output a single `aerodeck.yaml` file and nothing else unless asked.
+
+---
+
 ## 1. Full `aerodeck.yaml` Example
 
 ```yaml
@@ -67,7 +84,7 @@ env:
 | `version` | `1` | Yes | Schema version (`1`). |
 | `name` | `string` | No | Human-readable application or service name. Defaults to the GitHub repository name. |
 | `build` | `BlueprintBuild` | No | Build strategy, Dockerfile/Compose path, and listening TCP port. |
-| `addons` | `BlueprintAddon[]` | No | Database addons (`postgres`, `redis`) to provision and attach. |
+| `addons` | `BlueprintAddon[]` | No | Database addons (`postgres`, `redis`, `mongodb`) to provision and attach. |
 | `env` | `BlueprintEnvVar[]` | No | Runtime environment variables and secrets prompted on `/deploy`. |
 
 ### `build` Object (`BlueprintBuild`)
@@ -103,6 +120,7 @@ env:
 ## 3. Automatic Platform Variables Injected by Aerodeck Cloud
 
 On every deployment, Aerodeck Cloud automatically injects:
+
 - `PORT`: The detected or declared `build.port`.
 - `HOST`: `0.0.0.0`.
 - `AERODECK_PUBLIC_URL`, `PUBLIC_URL`, `PORTAL_PUBLIC_URL`: `https://<project>-<env>.dev.aerodeckcloud.com`.

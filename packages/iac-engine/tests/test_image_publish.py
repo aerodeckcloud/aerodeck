@@ -120,6 +120,16 @@ def main() -> None:
     _must(DOCKERFILE, "terraform", "Dockerfile")
     _must(WORKFLOW, "--file apps/control-plane/Dockerfile", "control-plane-image.yml")
     _must(DASHBOARD_WORKFLOW, "--file apps/dashboard/Dockerfile", "dashboard-image.yml")
+    _must(
+        DASHBOARD_DOCKERFILE,
+        "docs/aerodeck-blueprint-schema.md",
+        "dashboard Dockerfile",
+    )
+    _must(
+        DASHBOARD_WORKFLOW,
+        "docs/aerodeck-blueprint-schema.md",
+        "dashboard-image.yml",
+    )
 
     contexts = re.findall(
         r"docker build\s+\\?\s+--file apps/control-plane/Dockerfile[\s\S]*?((?:apps/control-plane)|\.)\s*$",
@@ -128,6 +138,16 @@ def main() -> None:
     )
     if not contexts or any(ctx != "." for ctx in contexts):
         raise SystemExit("docker build context must be the repository root (.) so stacks/tenant is copied")
+
+    dashboard_contexts = re.findall(
+        r"docker build\s+\\?\s+--file apps/dashboard/Dockerfile[\s\S]*?((?:apps/dashboard)|\.)\s*$",
+        DASHBOARD_WORKFLOW,
+        re.M,
+    )
+    if not dashboard_contexts or any(ctx != "." for ctx in dashboard_contexts):
+        raise SystemExit(
+            "dashboard docker build context must be the repository root (.) so docs schema is copied"
+        )
 
     _must(VARS, 'variable "control_plane_image"', "variables.tf")
     _must(VARS, "registry.digitalocean.com", "variables.tf")
